@@ -260,7 +260,7 @@ pub enum Access {
 
 | Operation | Signature | Semantics |
 |-----------|-----------|-----------|
-| `init` | `init(root: &Path, name: &str) -> Result<()>` | Create `.paperwork/` skeleton + initial profile |
+| `init` | `init(root: &Path, name: &str, model: &str) -> Result<()>` | Create `.paperwork/` skeleton + initial profile |
 | `profile_create` | `create_profile(root: &Path, p: &Profile) -> Result<()>` | Write profile .md, update contacts |
 | `profile_parse` | `parse_profile(content: &str) -> Result<Profile>` | Parse richly-marked Markdown |
 | `thread_append` | `append_msg(root: &Path, thread: &str, msg: &Message) -> Result<()>` | Atomic append (O_APPEND, single write) |
@@ -274,10 +274,12 @@ pub enum Access {
 
 ### 3.4 Atomic Append Contract
 
-- File opened with `O_APPEND` (Unix) / `FILE_APPEND_DATA` (Windows)
-- Entire serialized message written in **one** `write()` syscall
+- Advisory file lock acquired (`fs2::FileExt::lock_exclusive()`) before any thread mutation
+- Last seq determined via reverse-scan of final 64KB (O(1) regardless of file size)
+- File opened with `O_APPEND`; entire serialized message written in **one** `write()` syscall
+- Lock released after write completes
 - Message size MUST be < 64KB (hard limit; typical < 4KB)
-- No file locking; OS-level atomicity is sufficient for target concurrency
+- Same locking protocol applies to `self_edit` and notification operations
 
 ---
 

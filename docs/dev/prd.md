@@ -98,7 +98,7 @@ All achievable with filesystem semantics alone.
 | Distribution | Single static binary, no runtime deps |
 | Platform | Windows, macOS, Linux |
 | Performance | <50ms for any single subcommand |
-| Concurrency | Atomic appends (single write() syscall per message) |
+| Concurrency | Advisory file locking + O_APPEND + single write() per message (per ADR-007) |
 | Human readability | All managed files are richly-marked Markdown (per ADR-002) |
 | Interoperability | Layout is the spec; tools without CLI can interoperate |
 

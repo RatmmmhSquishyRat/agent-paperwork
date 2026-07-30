@@ -20,7 +20,7 @@ use crate::{Message, ThreadSummary};
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 
 /// Size of reverse-scan buffer for finding last seq (4KB).
-const REVERSE_SCAN_SIZE: u64 = 4096;
+const REVERSE_SCAN_SIZE: u64 = (64 * 1024 + 256) as u64; // Must exceed MAX_MESSAGE_SIZE to handle large last messages
 
 /// Regex for extracting seq from message header.
 static SEQ_RE: LazyLock<Regex> =

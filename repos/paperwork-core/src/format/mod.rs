@@ -67,24 +67,25 @@ pub fn find_message_boundaries(lines: &[&str]) -> Vec<(usize, usize)> {
     while i < lines.len() {
         if is_boundary_line(lines[i]) {
             // Look ahead within 2 lines for a valid H3 header
+            let mut found = false;
             for offset in 1..=2 {
                 if i + offset < lines.len() {
                     let candidate = lines[i + offset];
                     if parse_message_header(candidate).is_some() {
                         boundaries.push((i, i + offset));
                         // Skip past this boundary to avoid double-counting
-                        i = i + offset + 1;
+                        i += offset + 1;
+                        found = true;
                         break;
                     }
                 }
             }
-            // If no header found within 2 lines, this --- is body content
-            if boundaries.last().is_none_or(|&(b, _)| b != i) {
-                i += 1;
+            if found {
+                continue;
             }
-        } else {
-            i += 1;
+            // If no header found within 2 lines, this --- is body content
         }
+        i += 1;
     }
 
     boundaries

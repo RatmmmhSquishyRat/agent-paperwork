@@ -124,7 +124,7 @@ Phase 4 (after Role C):
 |------|------------|
 | Regex parsing fragility | Extensive edge-case fixtures; format is controlled (we define it) |
 | Windows atomic append | Dedicated Windows test; `FILE_APPEND_DATA` well-documented |
-| Seq collision under concurrency | Accept for v1; document limitation; CLI-mediated writes are serial |
+| Seq collision under concurrency | Mitigated by ADR-007 file locking (`fs2`); implemented and tested with 10-thread contention |
 | Manifest glob-vs-path ambiguity | Clear spec: path = exact or glob; regex = content anchor |
 
 ---

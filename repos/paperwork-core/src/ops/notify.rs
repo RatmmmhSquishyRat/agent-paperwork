@@ -1,7 +1,10 @@
 //! Notification operations: push, list unread, ack (move to history).
 
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::Path;
+
+use fs2::FileExt;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::notification::{parse_notifications, serialize_notifications};
@@ -20,6 +23,21 @@ pub fn push_notify(root: &Path, target: &str, notification: &Notification) -> Re
     })?;
 
     let unread_path = layout::unread_path(root, target);
+
+    // Acquire lock via sidecar file (Windows prevents write to a locked file handle)
+    let lock_path = unread_path.with_extension("lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| PaperworkError::IoContext {
+            path: lock_path.clone(),
+            source: e,
+        })?;
+    lock_file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
+        path: lock_path.clone(),
+        source: e,
+    })?;
 
     // Read existing notifications (or start empty)
     let mut notifications = if unread_path.exists() {
@@ -42,6 +60,7 @@ pub fn push_notify(root: &Path, target: &str, notification: &Notification) -> Re
         source: e,
     })?;
 
+    lock_file.unlock().ok();
     Ok(())
 }
 
@@ -79,6 +98,21 @@ pub fn ack_notify(root: &Path, agent: &str) -> Result<Vec<Notification>> {
         source: e,
     })?;
 
+    // Acquire lock via sidecar file (Windows prevents write to a locked file handle)
+    let lock_path = unread_path.with_extension("lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| PaperworkError::IoContext {
+            path: lock_path.clone(),
+            source: e,
+        })?;
+    lock_file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
+        path: lock_path.clone(),
+        source: e,
+    })?;
+
     // Read unread notifications
     let unread = if unread_path.exists() {
         let content = fs::read_to_string(&unread_path).map_err(|e| PaperworkError::IoContext {
@@ -91,6 +125,7 @@ pub fn ack_notify(root: &Path, agent: &str) -> Result<Vec<Notification>> {
     };
 
     if unread.is_empty() {
+        lock_file.unlock().ok();
         return Ok(Vec::new());
     }
 
@@ -122,6 +157,7 @@ pub fn ack_notify(root: &Path, agent: &str) -> Result<Vec<Notification>> {
         source: e,
     })?;
 
+    lock_file.unlock().ok();
     Ok(unread)
 }
 

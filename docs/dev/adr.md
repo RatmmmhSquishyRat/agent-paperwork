@@ -3,7 +3,7 @@
 ## ADR-001: Implementation Language — Rust
 
 **Status**: Accepted (owner directive: `docs/ssot/adr/初版技术选型.md`)  
-**Context**: The CLI must distribute as a single static binary with no runtime dependencies, support Windows/macOS/Linux, and perform file I/O, YAML parsing, regex matching, and SHA hashing.
+**Context**: The CLI must distribute as a single static binary with no runtime dependencies, support Windows/macOS/Linux, and perform file I/O, Markdown parsing, regex matching, and SHA hashing.
 
 **Decision**: Rust.
 
