@@ -1,0 +1,17 @@
+[package]
+name = "paperwork-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core library for Agent Paperwork - file-based agent collaboration toolkit"
+
+[dependencies]
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+glob = "0.3"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
