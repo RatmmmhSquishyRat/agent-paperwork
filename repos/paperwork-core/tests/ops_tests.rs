@@ -605,27 +605,11 @@ fn notify_push_multiple() {
 // ============================================================================
 // DM Path Helper Tests
 // ============================================================================
-
-#[test]
-fn dm_thread_path_convention() {
-    let profile = PathBuf::from("/foo/alice.md");
-    let dm = paperwork_core::ops::dm_thread_path(&profile, "bob");
-    assert_eq!(dm, PathBuf::from("/foo/alice.dm/bob.md"));
-}
-
-#[test]
-fn dm_thread_path_windows_style() {
-    let profile = PathBuf::from(r"C:\agents\alice.md");
-    let dm = paperwork_core::ops::dm_thread_path(&profile, "charlie");
-    assert_eq!(dm, PathBuf::from(r"C:\agents\alice.dm\charlie.md"));
-}
-
-// ============================================================================
-// End-to-End: Profile + DM Thread Workflow
+// End-to-End: Profile + Post Thread Workflow
 // ============================================================================
 
 #[test]
-fn e2e_profile_dm_workflow() {
+fn e2e_profile_post_workflow() {
     let dir = tempdir().expect("tempdir");
 
     // Create alice's profile
@@ -633,16 +617,10 @@ fn e2e_profile_dm_workflow() {
     profile::create_profile(&alice_profile, "alice", "gpt-4", "Alice agent")
         .expect("create alice");
 
-    // Compute DM path with bob
-    let dm_path = paperwork_core::ops::dm_thread_path(&alice_profile, "bob");
-    assert_eq!(
-        dm_path,
-        dir.path().join("alice.dm").join("bob.md")
-    );
-
-    // Send messages (auto-creates alice.dm/bob.md)
-    let seq1 = thread::thread_send(
-        &dm_path,
+    // Create a post thread
+    let post_path = dir.path().join("discussion.md");
+    thread::thread_send(
+        &post_path,
         "alice",
         &["bob".to_string()],
         "Hello Bob!",
@@ -650,10 +628,9 @@ fn e2e_profile_dm_workflow() {
         &[],
     )
     .expect("send 1");
-    assert_eq!(seq1, 1);
 
     let seq2 = thread::thread_send(
-        &dm_path,
+        &post_path,
         "bob",
         &["alice".to_string()],
         "Hi Alice!",
@@ -664,14 +641,14 @@ fn e2e_profile_dm_workflow() {
     assert_eq!(seq2, 2);
 
     // Read the thread
-    let messages = thread::thread_read(&dm_path, None, None).expect("read");
+    let messages = thread::thread_read(&post_path, None, None).expect("read");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].sender, "alice");
     assert_eq!(messages[1].sender, "bob");
     assert_eq!(messages[1].reply_to, Some(1));
 
     // Summary
-    let summary = thread::thread_summary(&dm_path).expect("summary");
+    let summary = thread::thread_summary(&post_path).expect("summary");
     assert_eq!(summary.message_count, 2);
     assert_eq!(summary.last_sender, Some("bob".to_string()));
 }

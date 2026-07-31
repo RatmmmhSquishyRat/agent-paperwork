@@ -38,11 +38,7 @@ enum Commands {
     #[command(alias = "p")]
     Profile(cmd::profile::ProfileArgs),
 
-    /// Direct message operations
-    #[command(alias = "d")]
-    Dm(cmd::dm::DmArgs),
-
-    /// Post (group thread) operations
+    /// Post (group thread) operations — also covers 1:1 conversations
     Post(cmd::post::PostArgs),
 
     /// Brief (reading list / knowledge brief) operations
@@ -76,7 +72,6 @@ fn main() {
 
     let result = match cli.command {
         Commands::Profile(args) => cmd::profile::run(&ctx, args),
-        Commands::Dm(args) => cmd::dm::run(&ctx, args),
         Commands::Post(args) => cmd::post::run(&ctx, args),
         Commands::Brief(args) => cmd::brief::run(&ctx, args),
         Commands::Contacts(args) => cmd::contacts::run(&ctx, args),
