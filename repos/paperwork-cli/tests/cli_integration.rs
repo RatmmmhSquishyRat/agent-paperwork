@@ -1,494 +1,391 @@
-//! Integration tests for paperwork-cli.
-//!
-//! Exercises the full workflow:
-//! init → invite → dm send → dm read → post create → post send →
-//! manifest create → manifest add → manifest verify → notify → who
+//! Integration tests for the stateless paperwork CLI.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-fn paperwork() -> Command {
-    Command::cargo_bin("paperwork").expect("binary exists")
+fn cmd() -> Command {
+    Command::cargo_bin("paperwork").unwrap()
 }
 
+// ─── Profile ────────────────────────────────────────────────────────────────
+
 #[test]
-fn test_full_workflow() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
+fn profile_create_and_show() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("alice.md");
 
-    // 1. Init
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice", "--model", "gpt-4o"])
+    cmd()
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "alice", "--model", "gpt-4"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("initialized"));
+        .stdout(predicate::str::contains("\u{2713}"));
 
-    // Verify .paperwork/ exists
-    assert!(tmp.path().join(".paperwork").exists());
-    assert!(tmp.path().join(".paperwork/profiles/alice.md").exists());
-    assert!(tmp.path().join(".paperwork/contacts.md").exists());
-
-    // 2. Init idempotent
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("already initialized"));
-
-    // 3. Invite bob
-    paperwork()
-        .args(["--root", root, "invite", "bob", "--model", "claude-sonnet"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("invited bob"));
-
-    // Verify bob profile and DM folder
-    assert!(tmp.path().join(".paperwork/profiles/bob.md").exists());
-    assert!(tmp.path().join(".paperwork/dm/alice--bob").exists());
-
-    // 4. Invite idempotent
-    paperwork()
-        .args(["--root", root, "invite", "bob"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("already invited"));
-
-    // 5. Contacts
-    paperwork()
-        .args(["--root", root, "contacts"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("alice"))
-        .stdout(predicate::str::contains("bob"));
-
-    // 6. DM send
-    paperwork()
-        .args(["--root", root, "dm", "bob", "send", "Hey, workspace is ready."])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sent #1"));
-
-    // 7. DM send second message
-    paperwork()
-        .args(["--root", root, "dm", "bob", "send", "Check the parser module."])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sent #2"));
-
-    // 8. DM read
-    paperwork()
-        .args(["--root", root, "dm", "bob", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Hey, workspace is ready."))
-        .stdout(predicate::str::contains("Check the parser module."));
-
-    // 9. DM read --json
-    paperwork()
-        .args(["--root", root, "--json", "dm", "bob", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"total\": 2"))
-        .stdout(predicate::str::contains("\"seq\": 1"));
-
-    // 10. DM summary
-    paperwork()
-        .args(["--root", root, "dm", "bob", "summary"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("2 messages"));
-
-    // 11. DM send with mention (triggers notification)
-    paperwork()
-        .args([
-            "--root", root, "dm", "bob", "send",
-            "@bob fixtures should cover edge cases.",
-            "--mention", "bob",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sent #3"));
-
-    // 12. Post create
-    paperwork()
-        .args([
-            "--root", root, "post", "create", "standup",
-            "--participants", "alice,bob",
-            "--title", "Daily Standup",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("post created"));
-
-    // 13. Post send
-    paperwork()
-        .args(["--root", root, "post", "standup", "send", "Shipped manifest verify."])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sent #1"));
-
-    // 14. Post read
-    paperwork()
-        .args(["--root", root, "post", "standup", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Shipped manifest verify."));
-
-    // 15. Post summary
-    paperwork()
-        .args(["--root", root, "post", "standup", "summary"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Daily Standup"))
-        .stdout(predicate::str::contains("messages: 1"));
-
-    // 16. Post list
-    paperwork()
-        .args(["--root", root, "post", "list"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("standup"));
-
-    // 17. Manifest create
-    paperwork()
-        .args([
-            "--root", root, "manifest", "create", "onboarding",
-            "--description", "How to understand this codebase",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("manifest created"));
-
-    // 18. Create a test file to add to manifest
-    std::fs::write(tmp.path().join("test_file.rs"), "pub fn hello() {}").expect("write test file");
-
-    // 19. Manifest add
-    paperwork()
-        .args([
-            "--root", root, "manifest", "onboarding", "add",
-            "--path", "test_file.rs",
-            "--note", "Entry point",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("entry added"));
-
-    // 20. Manifest read
-    paperwork()
-        .args(["--root", root, "manifest", "onboarding", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("test_file.rs"));
-
-    // 21. Manifest verify (should be fresh)
-    paperwork()
-        .args(["--root", root, "manifest", "onboarding", "verify"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("FRESH"));
-
-    // 22. Modify file → verify shows shifted
-    std::fs::write(tmp.path().join("test_file.rs"), "pub fn hello() { println!(\"hi\"); }")
-        .expect("modify test file");
-
-    paperwork()
-        .args(["--root", root, "manifest", "onboarding", "verify"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("SHIFTED"));
-
-    // 23. Manifest list
-    paperwork()
-        .args(["--root", root, "manifest", "list"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("onboarding"));
-
-    // 24. Notify view (bob has a notification from mention)
-    paperwork()
-        .args(["--root", root, "notify", "--agent", "bob"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("1 unread"));
-
-    // 25. Notify ack
-    paperwork()
-        .args(["--root", root, "notify", "--agent", "bob", "--ack"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("1 notifications acknowledged"));
-
-    // 26. Notify after ack (0 unread)
-    paperwork()
-        .args(["--root", root, "notify", "--agent", "bob"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("0 unread"));
-
-    // 27. Profile edit + who query
-    paperwork()
-        .args([
-            "--root", root, "profile", "edit", "alice",
-            "--scope-owns", "src/parser/**",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("profile updated"));
-
-    // 28. Who --owns
-    paperwork()
-        .args(["--root", root, "who", "--owns", "src/parser/**"])
+    cmd()
+        .args(["profile", "show", path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("alice"));
-
-    // 29. Profile show
-    paperwork()
-        .args(["--root", root, "profile", "show", "alice"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("alice"))
-        .stdout(predicate::str::contains("gpt-4o"));
-
-    // 30. Profile list
-    paperwork()
-        .args(["--root", root, "profile", "list"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("alice"))
-        .stdout(predicate::str::contains("bob"));
 }
 
 #[test]
-fn test_json_output() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
+fn profile_create_json() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("bob.md");
 
-    // Init with JSON
-    paperwork()
-        .args(["--root", root, "--json", "init", "--name", "alice"])
+    cmd()
+        .args(["--json", "profile", "create", path.to_str().unwrap(), "--name", "bob"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"created\""))
-        .stdout(predicate::str::contains("\"profile\""));
-
-    // Invite with JSON
-    paperwork()
-        .args(["--root", root, "--json", "invite", "bob"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"invited\""))
-        .stdout(predicate::str::contains("\"dm_folder\""));
-
-    // DM send with JSON
-    paperwork()
-        .args(["--root", root, "--json", "dm", "bob", "send", "Hello JSON"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"seq\""))
-        .stdout(predicate::str::contains("\"thread\""));
-
-    // Contacts with JSON
-    paperwork()
-        .args(["--root", root, "--json", "contacts"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"agent\""));
+        .stdout(predicate::str::contains("\"name\": \"bob\""));
 }
 
 #[test]
-fn test_error_handling() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
+fn profile_create_duplicate_fails() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("dup.md");
 
-    // Operations on uninitialized workspace should fail
-    paperwork()
-        .args(["--root", root, "contacts"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not initialized"));
-
-    // Init first
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice"])
+    cmd()
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "x"])
         .assert()
         .success();
 
-    // DM to non-invited agent should fail
-    paperwork()
-        .args(["--root", root, "dm", "charlie", "send", "Hello"])
+    cmd()
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "y"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("does not exist"));
-
-    // Profile show non-existent
-    paperwork()
-        .args(["--root", root, "profile", "show", "nobody"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not found"));
-
-    // Manifest operations on non-existent
-    paperwork()
-        .args(["--root", root, "manifest", "ghost", "read"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not found"));
+        .stderr(predicate::str::contains("\u{2717}"));
 }
 
 #[test]
-fn test_dm_edit() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
+fn profile_edit() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("edit.md");
 
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice"])
+    cmd()
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "agent"])
         .assert()
         .success();
 
-    paperwork()
-        .args(["--root", root, "invite", "bob"])
+    cmd()
+        .args(["profile", "edit", path.to_str().unwrap(), "--model", "claude-3"])
         .assert()
         .success();
 
-    // Send a message
-    paperwork()
-        .args(["--root", root, "dm", "bob", "send", "Original message"])
-        .assert()
-        .success();
-
-    // Edit own last message
-    paperwork()
-        .args(["--root", root, "dm", "bob", "edit", "1", "Edited message"])
+    cmd()
+        .args(["--json", "profile", "show", path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("edited #1"));
-
-    // Verify edit
-    paperwork()
-        .args(["--root", root, "dm", "bob", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Edited message"));
+        .stdout(predicate::str::contains("claude-3"));
 }
 
 #[test]
-fn test_manifest_remove() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
+fn profile_list() {
+    let dir = TempDir::new().unwrap();
+    let p1 = dir.path().join("a.md");
+    let p2 = dir.path().join("b.md");
 
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice"])
+    cmd().args(["profile", "create", p1.to_str().unwrap(), "--name", "a"]).assert().success();
+    cmd().args(["profile", "create", p2.to_str().unwrap(), "--name", "b"]).assert().success();
+
+    cmd()
+        .args(["--json", "profile", "list", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a.md"))
+        .stdout(predicate::str::contains("b.md"));
+}
+
+// ─── DM ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn dm_send_and_read() {
+    let dir = TempDir::new().unwrap();
+    let profile = dir.path().join("alice.md");
+
+    cmd()
+        .args(["profile", "create", profile.to_str().unwrap(), "--name", "alice"])
         .assert()
         .success();
 
-    // Create test file
-    std::fs::write(tmp.path().join("lib.rs"), "fn main() {}").expect("write");
-
-    paperwork()
-        .args(["--root", root, "manifest", "create", "test-manifest"])
-        .assert()
-        .success();
-
-    paperwork()
+    cmd()
         .args([
-            "--root", root, "manifest", "test-manifest", "add",
-            "--path", "lib.rs",
+            "dm", "send", profile.to_str().unwrap(),
+            "--to", "bob", "--from", "alice", "Hello Bob!",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\u{2713}"));
+
+    // DM thread should be at alice.dm/bob.md
+    let thread = dir.path().join("alice.dm").join("bob.md");
+    assert!(thread.exists());
+
+    cmd()
+        .args(["dm", "read", thread.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hello Bob!"));
+}
+
+#[test]
+fn dm_send_json() {
+    let dir = TempDir::new().unwrap();
+    let profile = dir.path().join("agent.md");
+
+    cmd()
+        .args(["profile", "create", profile.to_str().unwrap(), "--name", "agent"])
+        .assert()
+        .success();
+
+    cmd()
+        .args([
+            "--json", "dm", "send", profile.to_str().unwrap(),
+            "--to", "other", "--from", "agent", "Hi",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"seq\": 1"));
+}
+
+#[test]
+fn dm_summary() {
+    let dir = TempDir::new().unwrap();
+    let profile = dir.path().join("s.md");
+
+    cmd().args(["profile", "create", profile.to_str().unwrap(), "--name", "s"]).assert().success();
+    cmd().args(["dm", "send", profile.to_str().unwrap(), "--to", "t", "--from", "s", "msg1"]).assert().success();
+    cmd().args(["dm", "send", profile.to_str().unwrap(), "--to", "t", "--from", "t", "msg2"]).assert().success();
+
+    let thread = dir.path().join("s.dm").join("t.md");
+    cmd()
+        .args(["--json", "dm", "summary", thread.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"message_count\": 2"));
+}
+
+// ─── Post ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn post_create_send_read() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("thread.md");
+
+    cmd()
+        .args(["post", "create", path.to_str().unwrap(), "--title", "Design Discussion"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--from", "alice", "I think we should use Rust."])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Rust"));
+}
+
+#[test]
+fn post_edit() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("edit-thread.md");
+
+    cmd().args(["post", "create", path.to_str().unwrap(), "--title", "T"]).assert().success();
+    cmd().args(["post", "send", path.to_str().unwrap(), "--from", "bob", "original"]).assert().success();
+
+    // Edit the last message (seq 2, since create is seq 1)
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "--seq", "2", "--from", "bob", "edited"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--from", "2", "--to", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("edited"));
+}
+
+#[test]
+fn post_summary() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("sum.md");
+
+    cmd().args(["post", "create", path.to_str().unwrap(), "--title", "S"]).assert().success();
+    cmd().args(["post", "send", path.to_str().unwrap(), "--from", "x", "hello"]).assert().success();
+
+    cmd()
+        .args(["--json", "post", "summary", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"message_count\": 2"));
+}
+
+// ─── Brief ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn brief_create_add_read() {
+    let dir = TempDir::new().unwrap();
+    let brief_path = dir.path().join("brief.md");
+    let entry_file = dir.path().join("notes.txt");
+
+    std::fs::write(&entry_file, "some content").unwrap();
+
+    cmd()
+        .args(["brief", "create", brief_path.to_str().unwrap(), "--title", "My Brief"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "notes.txt"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["brief", "read", brief_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("notes.txt"));
+}
+
+#[test]
+fn brief_remove() {
+    let dir = TempDir::new().unwrap();
+    let brief_path = dir.path().join("b.md");
+    let entry_file = dir.path().join("e.txt");
+
+    std::fs::write(&entry_file, "data").unwrap();
+
+    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "--title", "B"]).assert().success();
+    cmd().args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "e.txt"]).assert().success();
+
+    cmd()
+        .args(["brief", "remove", brief_path.to_str().unwrap(), "--entry-title", "e.txt"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["--json", "brief", "read", brief_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"entries\": []"));
+}
+
+#[test]
+fn brief_verify() {
+    let dir = TempDir::new().unwrap();
+    let brief_path = dir.path().join("v.md");
+    let entry_file = dir.path().join("src.txt");
+
+    std::fs::write(&entry_file, "original").unwrap();
+
+    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "--title", "V"]).assert().success();
+    cmd().args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "src.txt"]).assert().success();
+
+    // Verify fresh
+    cmd()
+        .args(["--json", "brief", "verify", brief_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fresh"));
+
+    // Modify file → shifted
+    std::fs::write(&entry_file, "modified").unwrap();
+    cmd()
+        .args(["--json", "brief", "verify", brief_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Shifted"));
+}
+
+// ─── Contacts ───────────────────────────────────────────────────────────────
+
+#[test]
+fn contacts_create_add_read() {
+    let dir = TempDir::new().unwrap();
+    let contacts_path = dir.path().join("contacts.md");
+    let profile_path = dir.path().join("agent.md");
+
+    cmd().args(["profile", "create", profile_path.to_str().unwrap(), "--name", "agent"]).assert().success();
+
+    cmd()
+        .args(["contacts", "create", contacts_path.to_str().unwrap(), "--title", "Team"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["contacts", "add", contacts_path.to_str().unwrap(), "--profile", profile_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["--json", "contacts", "read", contacts_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent.md"));
+}
+
+// ─── Notify ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn notify_push_and_read() {
+    let dir = TempDir::new().unwrap();
+    let notify_path = dir.path().join("alice.notify.md");
+
+    cmd()
+        .args([
+            "notify", "push", notify_path.to_str().unwrap(),
+            "--from", "bob",
+            "--thread", "some/thread.md",
+            "--seq", "5",
+            "--type", "mention",
+            "--snippet", "Hey @alice",
         ])
         .assert()
         .success();
 
-    // Remove entry
-    paperwork()
-        .args(["--root", root, "manifest", "test-manifest", "remove", "lib.rs"])
+    cmd()
+        .args(["--json", "notify", "read", notify_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("entry removed"));
-
-    // Verify removed
-    paperwork()
-        .args(["--root", root, "manifest", "test-manifest", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("0 entries"));
+        .stdout(predicate::str::contains("bob"))
+        .stdout(predicate::str::contains("Mention"));
 }
 
 #[test]
-fn test_quiet_mode() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
+fn notify_read_empty() {
+    let dir = TempDir::new().unwrap();
+    let notify_path = dir.path().join("empty.notify.md");
 
-    // Quiet mode suppresses success messages
-    paperwork()
-        .args(["--root", root, "-q", "init", "--name", "alice"])
+    cmd()
+        .args(["--json", "notify", "read", notify_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[]"));
+}
+
+// ─── Global flags ───────────────────────────────────────────────────────────
+
+#[test]
+fn quiet_suppresses_success() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("q.md");
+
+    cmd()
+        .args(["--quiet", "profile", "create", path.to_str().unwrap(), "--name", "q"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
 }
 
 #[test]
-fn test_plain_output() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
-
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice"])
+fn error_exit_code_1() {
+    cmd()
+        .args(["profile", "show", "nonexistent/path/file.md"])
         .assert()
-        .success();
-
-    // Plain mode shows raw file content
-    paperwork()
-        .args(["--root", root, "--plain", "profile", "show", "alice"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("# alice"));
-}
-
-#[test]
-fn test_post_full_workflow_json() {
-    let tmp = TempDir::new().expect("temp dir");
-    let root = tmp.path().to_str().expect("valid path");
-
-    paperwork()
-        .args(["--root", root, "init", "--name", "alice"])
-        .assert()
-        .success();
-
-    paperwork()
-        .args(["--root", root, "invite", "bob"])
-        .assert()
-        .success();
-
-    // Create post
-    paperwork()
-        .args([
-            "--root", root, "--json", "post", "create", "dev",
-            "--participants", "alice,bob",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"created\""));
-
-    // Send to post
-    paperwork()
-        .args(["--root", root, "--json", "post", "dev", "send", "Hello team"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"seq\": 1"));
-
-    // Read post JSON
-    paperwork()
-        .args(["--root", root, "--json", "post", "dev", "read"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"messages\""))
-        .stdout(predicate::str::contains("Hello team"));
-
-    // Summary JSON
-    paperwork()
-        .args(["--root", root, "--json", "post", "dev", "summary"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"message_count\": 1"));
+        .code(1);
 }

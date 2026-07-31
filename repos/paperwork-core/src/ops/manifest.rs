@@ -1,4 +1,7 @@
-//! Manifest operations: create, add entry, remove entry, verify (3-state).
+//! Brief operations (formerly "manifest"): create, add/remove entry, read, verify.
+//!
+//! A brief is a standalone reading list / knowledge brief.
+//! All operations take explicit file paths — no workspace root.
 
 use std::fs;
 use std::path::Path;
@@ -9,246 +12,206 @@ use regex::Regex;
 use crate::error::{PaperworkError, Result};
 use crate::format::manifest::{extract_regex_groups, parse_manifest, serialize_manifest};
 use crate::hash;
-use crate::layout;
 use crate::{Manifest, ManifestEntry, VerifyResult};
 
-/// Create a new empty manifest.
-pub fn create_manifest(root: &Path, name: &str, author: &str, description: &str) -> Result<()> {
-    layout::ensure_initialized(root)?;
-
-    let path = layout::manifest_path(root, name);
-
+/// Create a new empty brief at the given path.
+///
+/// Creates parent directories if needed.
+/// Fails if the file already exists.
+pub fn brief_create(
+    path: &Path,
+    title: &str,
+    owner: Option<&str>,
+    description: &str,
+) -> Result<()> {
     if path.exists() {
         return Err(PaperworkError::AlreadyExists {
-            resource: "Manifest".to_string(),
-            name: name.to_string(),
-            hint: "Use `paperwork manifest <name> add` to add entries.".to_string(),
+            resource: "Brief".to_string(),
+            name: path.display().to_string(),
+            hint: "Use `paperwork brief add` to add entries.".to_string(),
         });
     }
 
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+
     let manifest = Manifest {
-        name: name.to_string(),
-        author: author.to_string(),
+        name: title.to_string(),
+        author: owner.unwrap_or("").to_string(),
         created: Utc::now(),
         description: description.to_string(),
         entries: Vec::new(),
     };
 
     let content = serialize_manifest(&manifest);
-    fs::write(&path, content).map_err(|e| PaperworkError::IoContext {
-        path: path.clone(),
+    fs::write(path, content).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     Ok(())
 }
 
-/// Add an entry to a manifest.
+/// Add an entry to a brief.
 ///
-/// Computes the SHA-256 hash of the file at the given path.
-pub fn add_entry(
-    root: &Path,
-    manifest_name: &str,
-    title: &str,
-    file_path: &str,
-    regex_pattern: Option<&str>,
+/// The entry title is derived from the file name of `entry_path`.
+/// Computes the SHA-256 hash of the file at `entry_path` (resolved relative
+/// to the brief file's parent directory).
+pub fn brief_add_entry(
+    path: &Path,
+    entry_path: &str,
+    regex: Option<&str>,
     note: Option<&str>,
 ) -> Result<()> {
-    layout::ensure_initialized(root)?;
-
-    let manifest_path = layout::manifest_path(root, manifest_name);
-
-    if !manifest_path.exists() {
+    if !path.exists() {
         return Err(PaperworkError::NotFound {
-            resource: "Manifest".to_string(),
-            name: manifest_name.to_string(),
-            hint: format!("Run `paperwork manifest create {}` first.", manifest_name),
+            resource: "Brief".to_string(),
+            name: path.display().to_string(),
+            hint: "Run `paperwork brief create <path>` first.".to_string(),
         });
     }
 
-    // Read and parse manifest
-    let content = fs::read_to_string(&manifest_path).map_err(|e| PaperworkError::IoContext {
-        path: manifest_path.clone(),
+    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     let mut manifest = parse_manifest(&content)?;
 
-    // Check if entry title already exists
+    // Derive title from entry_path file name
+    let title = Path::new(entry_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| entry_path.to_string());
+
+    // Check for duplicate title
     if manifest.entries.iter().any(|e| e.title == title) {
         return Err(PaperworkError::AlreadyExists {
-            resource: "Manifest entry".to_string(),
-            name: title.to_string(),
-            hint: "Use a different title or remove the existing entry first.".to_string(),
+            resource: "Brief entry".to_string(),
+            name: title,
+            hint: "Use a different entry path or remove the existing entry first.".to_string(),
         });
     }
 
-    // Resolve file path relative to workspace root
-    let abs_file_path = root.join(file_path);
+    // Resolve entry file path: try as-is (CWD-relative) first, then relative to brief's parent
+    let entry_as_given = Path::new(entry_path);
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    let abs_entry_path = if entry_as_given.exists() {
+        entry_as_given.to_path_buf()
+    } else {
+        base_dir.join(entry_path)
+    };
 
-    // Compute hash
-    let file_hash = hash::hash_file(&abs_file_path)?;
+    let file_hash = hash::hash_file(&abs_entry_path)?;
 
-    // Extract groups from regex if present
-    let groups = regex_pattern
-        .map(extract_regex_groups)
-        .unwrap_or_default();
+    let groups = regex.map(extract_regex_groups).unwrap_or_default();
 
     let entry = ManifestEntry {
-        title: title.to_string(),
-        path: file_path.to_string(),
+        title,
+        path: entry_path.to_string(),
         hash: file_hash,
-        regex: regex_pattern.map(|s| s.to_string()),
+        regex: regex.map(|s| s.to_string()),
         groups,
         note: note.map(|s| s.to_string()),
     };
 
     manifest.entries.push(entry);
 
-    // Write back
     let serialized = serialize_manifest(&manifest);
-    fs::write(&manifest_path, serialized).map_err(|e| PaperworkError::IoContext {
-        path: manifest_path.clone(),
+    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     Ok(())
 }
 
-/// Remove an entry from a manifest by title.
-pub fn remove_entry(root: &Path, manifest_name: &str, entry_title: &str) -> Result<()> {
-    layout::ensure_initialized(root)?;
-
-    let manifest_path = layout::manifest_path(root, manifest_name);
-
-    if !manifest_path.exists() {
+/// Remove an entry from a brief by title.
+pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
+    if !path.exists() {
         return Err(PaperworkError::NotFound {
-            resource: "Manifest".to_string(),
-            name: manifest_name.to_string(),
-            hint: format!("Run `paperwork manifest create {}` first.", manifest_name),
+            resource: "Brief".to_string(),
+            name: path.display().to_string(),
+            hint: "Run `paperwork brief create <path>` first.".to_string(),
         });
     }
 
-    // Read and parse manifest
-    let content = fs::read_to_string(&manifest_path).map_err(|e| PaperworkError::IoContext {
-        path: manifest_path.clone(),
+    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     let mut manifest = parse_manifest(&content)?;
 
-    // Find and remove entry
     let original_len = manifest.entries.len();
-    manifest.entries.retain(|e| e.title != entry_title);
+    manifest.entries.retain(|e| e.title != title);
 
     if manifest.entries.len() == original_len {
         return Err(PaperworkError::NotFound {
-            resource: "Manifest entry".to_string(),
-            name: entry_title.to_string(),
-            hint: format!(
-                "Run `paperwork manifest {} read` to see available entries.",
-                manifest_name
-            ),
+            resource: "Brief entry".to_string(),
+            name: title.to_string(),
+            hint: "Run `paperwork brief read <path>` to see available entries.".to_string(),
         });
     }
 
-    // Write back
     let serialized = serialize_manifest(&manifest);
-    fs::write(&manifest_path, serialized).map_err(|e| PaperworkError::IoContext {
-        path: manifest_path.clone(),
+    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     Ok(())
 }
 
-/// Read a manifest by name.
-pub fn read_manifest(root: &Path, manifest_name: &str) -> Result<Manifest> {
-    layout::ensure_initialized(root)?;
-
-    let manifest_path = layout::manifest_path(root, manifest_name);
-
-    if !manifest_path.exists() {
+/// Read a brief (reuses the Manifest type internally).
+pub fn brief_read(path: &Path) -> Result<Manifest> {
+    if !path.exists() {
         return Err(PaperworkError::NotFound {
-            resource: "Manifest".to_string(),
-            name: manifest_name.to_string(),
-            hint: format!("Run `paperwork manifest create {}` first.", manifest_name),
+            resource: "Brief".to_string(),
+            name: path.display().to_string(),
+            hint: "Run `paperwork brief create <path>` first.".to_string(),
         });
     }
 
-    let content = fs::read_to_string(&manifest_path).map_err(|e| PaperworkError::IoContext {
-        path: manifest_path.clone(),
+    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     parse_manifest(&content)
 }
 
-/// List all manifests.
-pub fn list_manifests(root: &Path) -> Result<Vec<String>> {
-    layout::ensure_initialized(root)?;
-
-    let manifests_dir = layout::manifests_dir(root);
-    let mut names = Vec::new();
-
-    if !manifests_dir.exists() {
-        return Ok(names);
-    }
-
-    let entries = fs::read_dir(&manifests_dir).map_err(|e| PaperworkError::IoContext {
-        path: manifests_dir.clone(),
-        source: e,
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| PaperworkError::IoContext {
-            path: manifests_dir.clone(),
-            source: e,
-        })?;
-
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "md") {
-            if let Some(stem) = path.file_stem() {
-                names.push(stem.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    names.sort();
-    Ok(names)
-}
-
-/// Verify all entries in a manifest.
+/// Verify all entries in a brief.
+///
+/// `base_dir` is used to resolve relative paths in entries.
 ///
 /// Three-state verification:
 /// - Fresh: regex matches (or no regex) + hash matches
 /// - Shifted: regex matches (or no regex) + hash differs
-/// - Stale: regex fails to match
-pub fn verify_manifest(root: &Path, manifest_name: &str) -> Result<Vec<(ManifestEntry, VerifyResult)>> {
-    layout::ensure_initialized(root)?;
-
-    let manifest = read_manifest(root, manifest_name)?;
+/// - Stale: regex fails to match (or file missing)
+pub fn brief_verify(path: &Path, base_dir: &Path) -> Result<Vec<(ManifestEntry, VerifyResult)>> {
+    let manifest = brief_read(path)?;
     let mut results = Vec::new();
 
     for entry in &manifest.entries {
-        let result = verify_entry(root, entry)?;
+        let result = verify_entry(base_dir, entry)?;
         results.push((entry.clone(), result));
     }
 
     Ok(results)
 }
 
-/// Verify a single manifest entry.
-fn verify_entry(root: &Path, entry: &ManifestEntry) -> Result<VerifyResult> {
-    let abs_path = root.join(&entry.path);
+/// Verify a single brief entry against the current file state.
+fn verify_entry(base_dir: &Path, entry: &ManifestEntry) -> Result<VerifyResult> {
+    let abs_path = base_dir.join(&entry.path);
 
-    // Read file
     let file_content = match fs::read_to_string(&abs_path) {
         Ok(content) => content,
-        Err(_) => {
-            // File doesn't exist or can't be read → Stale
-            return Ok(VerifyResult::Stale);
-        }
+        Err(_) => return Ok(VerifyResult::Stale),
     };
 
     // Check regex if present
@@ -256,21 +219,16 @@ fn verify_entry(root: &Path, entry: &ManifestEntry) -> Result<VerifyResult> {
         match Regex::new(pattern) {
             Ok(re) => {
                 if !re.is_match(&file_content) {
-                    // Regex fails → Stale
                     return Ok(VerifyResult::Stale);
                 }
             }
-            Err(_) => {
-                // Invalid regex → treat as Stale
-                return Ok(VerifyResult::Stale);
-            }
+            Err(_) => return Ok(VerifyResult::Stale),
         }
     }
 
     // Compute current hash
     let current_hash = hash::hash_file(&abs_path)?;
 
-    // Compare hashes
     if current_hash == entry.hash {
         Ok(VerifyResult::Fresh)
     } else {

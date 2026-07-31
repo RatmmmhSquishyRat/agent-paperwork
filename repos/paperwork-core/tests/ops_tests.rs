@@ -1,4 +1,4 @@
-//! Integration tests for the operations layer.
+//! Integration tests for the stateless, path-explicit operations layer.
 
 use std::fs;
 use std::path::PathBuf;
@@ -6,119 +6,86 @@ use std::sync::{Arc, Barrier};
 use std::thread as std_thread;
 
 use chrono::Utc;
-use tempfile::{tempdir, TempDir};
+use tempfile::tempdir;
 
 use paperwork_core::ops::{contacts, manifest, notify, profile, thread};
-use paperwork_core::{Access, Message, Notification, NotifyType, Profile, VerifyResult};
-
-/// Setup helper: create initialized workspace.
-fn setup_workspace(name: &str) -> (TempDir, PathBuf) {
-    let dir = tempdir().expect("failed to create tempdir");
-    let root = dir.path().to_path_buf();
-    paperwork_core::ops::init(&root, name, "test-model").expect("init failed");
-    (dir, root)
-}
+use paperwork_core::{Notification, NotifyType, VerifyResult};
 
 // ============================================================================
-// 2.1 Init & Layout Tests
-// ============================================================================
-
-#[test]
-fn init_creates_skeleton() {
-    let dir = tempdir().expect("failed to create tempdir");
-    let root = dir.path();
-
-    paperwork_core::ops::init(root, "alice", "gpt-4").expect("init failed");
-
-    // Check directories exist
-    assert!(root.join(".paperwork").is_dir());
-    assert!(root.join(".paperwork/profiles").is_dir());
-    assert!(root.join(".paperwork/dm").is_dir());
-    assert!(root.join(".paperwork/posts").is_dir());
-    assert!(root.join(".paperwork/manifests").is_dir());
-    assert!(root.join(".paperwork/notifications").is_dir());
-
-    // Check files exist
-    assert!(root.join(".paperwork/contacts.md").is_file());
-    assert!(root.join(".paperwork/.gitattributes").is_file());
-    assert!(root.join(".paperwork/profiles/alice.md").is_file());
-}
-
-#[test]
-fn init_idempotent() {
-    let dir = tempdir().expect("failed to create tempdir");
-    let root = dir.path();
-
-    paperwork_core::ops::init(root, "alice", "gpt-4").expect("first init failed");
-
-    // Read profile content
-    let content_before =
-        fs::read_to_string(root.join(".paperwork/profiles/alice.md")).expect("read failed");
-
-    // Init again
-    paperwork_core::ops::init(root, "alice", "gpt-4").expect("second init failed");
-
-    // Content should be unchanged
-    let content_after =
-        fs::read_to_string(root.join(".paperwork/profiles/alice.md")).expect("read failed");
-
-    assert_eq!(content_before, content_after);
-}
-
-#[test]
-fn init_second_agent() {
-    let dir = tempdir().expect("failed to create tempdir");
-    let root = dir.path();
-
-    paperwork_core::ops::init(root, "alice", "gpt-4").expect("alice init failed");
-    paperwork_core::ops::init(root, "bob", "claude-3").expect("bob init failed");
-
-    // Both profiles should exist
-    assert!(root.join(".paperwork/profiles/alice.md").is_file());
-    assert!(root.join(".paperwork/profiles/bob.md").is_file());
-
-    // Contacts should have both
-    let contacts_content =
-        fs::read_to_string(root.join(".paperwork/contacts.md")).expect("read failed");
-    assert!(contacts_content.contains("alice"));
-    assert!(contacts_content.contains("bob"));
-}
-
-// ============================================================================
-// 2.2 Profile Ops Tests
+// Profile Ops Tests
 // ============================================================================
 
 #[test]
 fn create_profile_writes_file() {
-    let (_dir, root) = setup_workspace("alice");
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.md");
 
-    let bob = Profile {
-        name: "bob".to_string(),
-        model: "claude-3".to_string(),
-        description: "Test agent".to_string(),
-        scope_read: vec!["src/**".to_string()],
-        scope_write: vec![],
-        scope_owns: vec![],
-    };
+    profile::create_profile(&path, "alice", "gpt-4", "Test agent")
+        .expect("create_profile failed");
 
-    profile::create_profile(&root, &bob).expect("create_profile failed");
-
-    // File should exist
-    assert!(root.join(".paperwork/profiles/bob.md").is_file());
-
-    // Contacts should be updated
-    let contacts = contacts::contacts_list(&root).expect("contacts_list failed");
-    assert!(contacts.iter().any(|c| c.agent == "bob"));
+    assert!(path.is_file());
+    let content = fs::read_to_string(&path).expect("read failed");
+    assert!(content.contains("# alice"));
+    assert!(content.contains("**Model**: gpt-4"));
 }
 
 #[test]
-fn edit_profile_scope() {
-    let (_dir, root) = setup_workspace("alice");
+fn create_profile_creates_parent_dirs() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("nested").join("deep").join("alice.md");
+
+    profile::create_profile(&path, "alice", "gpt-4", "")
+        .expect("create_profile failed");
+
+    assert!(path.is_file());
+}
+
+#[test]
+fn create_profile_rejects_overwrite() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.md");
+
+    profile::create_profile(&path, "alice", "gpt-4", "").expect("first create");
+    let result = profile::create_profile(&path, "alice", "gpt-4", "");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("already exists"));
+}
+
+#[test]
+fn show_profile_reads_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.md");
+
+    profile::create_profile(&path, "alice", "gpt-4", "Hello world")
+        .expect("create failed");
+
+    let p = profile::show_profile(&path).expect("show_profile failed");
+    assert_eq!(p.name, "alice");
+    assert_eq!(p.model, "gpt-4");
+    assert_eq!(p.description, "Hello world");
+}
+
+#[test]
+fn show_profile_not_found() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("nonexistent.md");
+
+    let result = profile::show_profile(&path);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("not found"));
+}
+
+#[test]
+fn edit_profile_updates_fields() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.md");
+
+    profile::create_profile(&path, "alice", "gpt-4", "Original")
+        .expect("create failed");
 
     profile::edit_profile(
-        &root,
-        "alice",
-        None,
+        &path,
+        Some("claude-3"),
         Some("Updated description"),
         Some(vec!["docs/**".to_string()]),
         None,
@@ -126,80 +93,70 @@ fn edit_profile_scope() {
     )
     .expect("edit_profile failed");
 
-    let profile = profile::show_profile(&root, "alice").expect("show_profile failed");
-    assert_eq!(profile.description, "Updated description");
-    assert_eq!(profile.scope_read, vec!["docs/**"]);
-    assert_eq!(profile.scope_owns, vec!["src/core/**"]);
-}
-
-#[test]
-fn list_profiles() {
-    let (_dir, root) = setup_workspace("alice");
-
-    let bob = Profile {
-        name: "bob".to_string(),
-        model: "claude-3".to_string(),
-        description: String::new(),
-        scope_read: vec![],
-        scope_write: vec![],
-        scope_owns: vec![],
-    };
-    profile::create_profile(&root, &bob).expect("create bob failed");
-
-    let profiles = profile::list_profiles(&root).expect("list_profiles failed");
-    assert_eq!(profiles.len(), 2);
-    assert!(profiles.iter().any(|p| p.name == "alice"));
-    assert!(profiles.iter().any(|p| p.name == "bob"));
+    let p = profile::show_profile(&path).expect("show failed");
+    assert_eq!(p.model, "claude-3");
+    assert_eq!(p.description, "Updated description");
+    assert_eq!(p.scope_read, vec!["docs/**"]);
+    assert_eq!(p.scope_owns, vec!["src/core/**"]);
+    // scope_write unchanged (empty)
+    assert!(p.scope_write.is_empty());
 }
 
 // ============================================================================
-// 2.3 Thread Ops Tests
+// Thread Ops Tests
 // ============================================================================
 
 #[test]
-fn append_first_message() {
-    let (_dir, root) = setup_workspace("alice");
+fn thread_send_creates_file_and_returns_seq() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
 
-    // Create DM folder first
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+    let seq = thread::thread_send(
+        &path,
+        "alice",
+        &["bob".to_string()],
+        "Hello, Bob!",
+        None,
+        &[],
+    )
+    .expect("thread_send failed");
 
-    let msg = Message {
-        seq: 0, // Will be overwritten
-        sender: "alice".to_string(),
-        timestamp: Utc::now(),
-        to: vec!["bob".to_string()],
-        reply_to: None,
-        body: "Hello, Bob!".to_string(),
-    };
-
-    thread::append_msg(&root, "dm/alice--bob/thread.md", &msg).expect("append failed");
-
-    let messages = thread::read_range(&root, "dm/alice--bob/thread.md", 1, 100)
-        .expect("read_range failed");
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].seq, 1);
-    assert_eq!(messages[0].body, "Hello, Bob!");
+    assert_eq!(seq, 1);
+    assert!(path.is_file());
 }
 
 #[test]
-fn append_increments_seq() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_send_creates_parent_dirs() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.dm").join("bob.md");
+
+    let seq = thread::thread_send(&path, "alice", &["bob".to_string()], "Hi", None, &[])
+        .expect("thread_send failed");
+
+    assert_eq!(seq, 1);
+    assert!(path.is_file());
+}
+
+#[test]
+fn thread_send_increments_seq() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
 
     for i in 0..3 {
-        let msg = Message {
-            seq: 0,
-            sender: if i % 2 == 0 { "alice" } else { "bob" }.to_string(),
-            timestamp: Utc::now(),
-            to: vec![],
-            reply_to: None,
-            body: format!("Message {}", i + 1),
-        };
-        thread::append_msg(&root, "dm/alice--bob/thread.md", &msg).expect("append failed");
+        let sender = if i % 2 == 0 { "alice" } else { "bob" };
+        let seq = thread::thread_send(
+            &path,
+            sender,
+            &[],
+            &format!("Message {}", i + 1),
+            None,
+            &[],
+        )
+        .expect("thread_send failed");
+        assert_eq!(seq, (i + 1) as u64);
     }
 
-    let messages = thread::read_range(&root, "dm/alice--bob/thread.md", 1, 100)
-        .expect("read_range failed");
+    let messages = thread::thread_read(&path, None, None).expect("read failed");
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].seq, 1);
     assert_eq!(messages[1].seq, 2);
@@ -207,88 +164,106 @@ fn append_increments_seq() {
 }
 
 #[test]
-fn read_range_subset() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_read_range_subset() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
 
     for i in 1..=5 {
-        let msg = Message {
-            seq: 0,
-            sender: "alice".to_string(),
-            timestamp: Utc::now(),
-            to: vec![],
-            reply_to: None,
-            body: format!("Message {}", i),
-        };
-        thread::append_msg(&root, "dm/alice--bob/thread.md", &msg).expect("append failed");
+        thread::thread_send(&path, "alice", &[], &format!("Msg {}", i), None, &[])
+            .expect("send failed");
     }
 
-    let messages = thread::read_range(&root, "dm/alice--bob/thread.md", 2, 4)
-        .expect("read_range failed");
+    let messages = thread::thread_read(&path, Some(2), Some(4)).expect("read failed");
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].seq, 2);
-    assert_eq!(messages[1].seq, 3);
     assert_eq!(messages[2].seq, 4);
 }
 
 #[test]
-fn summary_correct() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_read_not_found() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("nonexistent.md");
 
-    for i in 1..=3 {
-        let msg = Message {
-            seq: 0,
-            sender: if i == 3 { "bob" } else { "alice" }.to_string(),
-            timestamp: Utc::now(),
-            to: vec![],
-            reply_to: None,
-            body: format!("Message {}", i),
-        };
-        thread::append_msg(&root, "dm/alice--bob/thread.md", &msg).expect("append failed");
-    }
+    let result = thread::thread_read(&path, None, None);
+    assert!(result.is_err());
+}
 
-    let summary = thread::summary(&root, "dm/alice--bob/thread.md").expect("summary failed");
+#[test]
+fn thread_summary_correct() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
+
+    thread::thread_send(&path, "alice", &[], "First", None, &[]).expect("send");
+    thread::thread_send(&path, "bob", &[], "Second", None, &[]).expect("send");
+    thread::thread_send(&path, "alice", &[], "Third", None, &[]).expect("send");
+
+    let summary = thread::thread_summary(&path).expect("summary failed");
     assert_eq!(summary.message_count, 3);
-    assert_eq!(summary.last_sender, Some("bob".to_string()));
+    assert_eq!(summary.last_sender, Some("alice".to_string()));
     assert!(!summary.snippets.is_empty());
 }
 
 #[test]
-fn concurrent_append_safety() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_summary_empty_for_missing_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("missing.md");
 
-    let root = Arc::new(root);
+    let summary = thread::thread_summary(&path).expect("summary failed");
+    assert_eq!(summary.message_count, 0);
+    assert_eq!(summary.last_sender, None);
+}
+
+#[test]
+fn thread_send_with_reply_to() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
+
+    thread::thread_send(&path, "alice", &["bob".to_string()], "Hello", None, &[])
+        .expect("send");
+    thread::thread_send(
+        &path,
+        "bob",
+        &["alice".to_string()],
+        "Reply",
+        Some(1),
+        &[],
+    )
+    .expect("send");
+
+    let messages = thread::thread_read(&path, None, None).expect("read");
+    assert_eq!(messages[1].reply_to, Some(1));
+}
+
+#[test]
+fn concurrent_thread_send_safety() {
+    let dir = tempdir().expect("tempdir");
+    let path = Arc::new(dir.path().join("thread.md"));
     let barrier = Arc::new(Barrier::new(10));
     let mut handles = vec![];
 
     for i in 0..10 {
-        let root = Arc::clone(&root);
+        let path = Arc::clone(&path);
         let barrier = Arc::clone(&barrier);
 
         let handle = std_thread::spawn(move || {
             barrier.wait();
-            let msg = Message {
-                seq: 0,
-                sender: format!("agent{}", i),
-                timestamp: Utc::now(),
-                to: vec![],
-                reply_to: None,
-                body: format!("Concurrent message {}", i),
-            };
-            thread::append_msg(&root, "dm/alice--bob/thread.md", &msg)
+            thread::thread_send(
+                &path,
+                &format!("agent{}", i),
+                &[],
+                &format!("Concurrent message {}", i),
+                None,
+                &[],
+            )
         });
         handles.push(handle);
     }
 
     for handle in handles {
-        handle.join().expect("thread panicked").expect("append failed");
+        handle.join().expect("thread panicked").expect("send failed");
     }
 
-    // All 10 messages should be present with unique seqs
-    let messages = thread::read_range(&root, "dm/alice--bob/thread.md", 1, 100)
-        .expect("read_range failed");
+    let messages = thread::thread_read(&path, None, None).expect("read failed");
     assert_eq!(messages.len(), 10);
 
     // Verify seqs are 1-10 with no gaps
@@ -297,390 +272,406 @@ fn concurrent_append_safety() {
     }
 }
 
+// ============================================================================
+// Thread Edit Tests
+// ============================================================================
+
 #[test]
-fn self_edit_own_message() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_edit_own_message() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
 
-    let msg = Message {
-        seq: 0,
-        sender: "alice".to_string(),
-        timestamp: Utc::now(),
-        to: vec!["bob".to_string()],
-        reply_to: None,
-        body: "Original body".to_string(),
-    };
-    thread::append_msg(&root, "dm/alice--bob/thread.md", &msg).expect("append failed");
+    thread::thread_send(&path, "alice", &["bob".to_string()], "Original body", None, &[])
+        .expect("send");
 
-    thread::self_edit(&root, "dm/alice--bob/thread.md", 1, "alice", "Edited body")
-        .expect("self_edit failed");
+    thread::thread_edit(&path, 1, "alice", "Edited body").expect("edit failed");
 
-    let messages = thread::read_range(&root, "dm/alice--bob/thread.md", 1, 1)
-        .expect("read_range failed");
+    let messages = thread::thread_read(&path, Some(1), Some(1)).expect("read");
     assert_eq!(messages[0].body, "Edited body");
-    assert_eq!(messages[0].sender, "alice"); // Metadata unchanged
+    assert_eq!(messages[0].sender, "alice");
 }
 
 #[test]
-fn self_edit_rejects_other_sender() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_edit_rejects_other_sender() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
 
-    let msg = Message {
-        seq: 0,
-        sender: "alice".to_string(),
-        timestamp: Utc::now(),
-        to: vec![],
-        reply_to: None,
-        body: "Alice's message".to_string(),
-    };
-    thread::append_msg(&root, "dm/alice--bob/thread.md", &msg).expect("append failed");
+    thread::thread_send(&path, "alice", &[], "Alice's message", None, &[]).expect("send");
 
-    let result = thread::self_edit(&root, "dm/alice--bob/thread.md", 1, "bob", "Hacked!");
+    let result = thread::thread_edit(&path, 1, "bob", "Hacked!");
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("sent by 'alice', not 'bob'") || err.contains("only edit your own"));
+    assert!(err.contains("sent by 'alice', not 'bob'"));
 }
 
 #[test]
-fn self_edit_only_last_own() {
-    let (_dir, root) = setup_workspace("alice");
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
+fn thread_edit_only_last_own() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("thread.md");
 
-    // alice sends #1
-    let msg1 = Message {
-        seq: 0,
-        sender: "alice".to_string(),
-        timestamp: Utc::now(),
-        to: vec![],
-        reply_to: None,
-        body: "Alice 1".to_string(),
-    };
-    thread::append_msg(&root, "dm/alice--bob/thread.md", &msg1).expect("append failed");
+    thread::thread_send(&path, "alice", &[], "Alice 1", None, &[]).expect("send");
+    thread::thread_send(&path, "bob", &[], "Bob 1", None, &[]).expect("send");
+    thread::thread_send(&path, "alice", &[], "Alice 2", None, &[]).expect("send");
 
-    // bob sends #2
-    let msg2 = Message {
-        seq: 0,
-        sender: "bob".to_string(),
-        timestamp: Utc::now(),
-        to: vec![],
-        reply_to: None,
-        body: "Bob 1".to_string(),
-    };
-    thread::append_msg(&root, "dm/alice--bob/thread.md", &msg2).expect("append failed");
-
-    // alice sends #3
-    let msg3 = Message {
-        seq: 0,
-        sender: "alice".to_string(),
-        timestamp: Utc::now(),
-        to: vec![],
-        reply_to: None,
-        body: "Alice 2".to_string(),
-    };
-    thread::append_msg(&root, "dm/alice--bob/thread.md", &msg3).expect("append failed");
-
-    // Try to edit #1 (not alice's most recent)
-    let result = thread::self_edit(&root, "dm/alice--bob/thread.md", 1, "alice", "Edited");
+    // Try to edit #1 (not alice's most recent, and not final)
+    let result = thread::thread_edit(&path, 1, "alice", "Edited");
     assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("not your most recent") || err.contains("not the final") || err.contains("#3"));
+}
+
+#[test]
+fn thread_edit_not_found_thread() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("missing.md");
+
+    let result = thread::thread_edit(&path, 1, "alice", "test");
+    assert!(result.is_err());
 }
 
 // ============================================================================
-// 2.4 Manifest Ops Tests
+// Brief (Manifest) Ops Tests
 // ============================================================================
 
 #[test]
-fn create_manifest() {
-    let (_dir, root) = setup_workspace("alice");
+fn brief_create_writes_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("onboarding.md");
 
-    manifest::create_manifest(&root, "onboarding", "alice", "Understanding the codebase")
-        .expect("create_manifest failed");
+    manifest::brief_create(&path, "onboarding", Some("alice"), "Understanding the codebase")
+        .expect("brief_create failed");
 
-    assert!(root.join(".paperwork/manifests/onboarding.md").is_file());
+    assert!(path.is_file());
 
-    let m = manifest::read_manifest(&root, "onboarding").expect("read_manifest failed");
+    let m = manifest::brief_read(&path).expect("brief_read failed");
     assert_eq!(m.name, "onboarding");
     assert_eq!(m.author, "alice");
     assert!(m.entries.is_empty());
 }
 
 #[test]
-fn add_entry_computes_hash() {
-    let (_dir, root) = setup_workspace("alice");
+fn brief_create_no_owner() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("anon.md");
 
-    // Create a test file
-    let test_file = root.join("test.txt");
-    fs::write(&test_file, "Hello, World!").expect("write test file failed");
+    manifest::brief_create(&path, "anonymous-brief", None, "No owner")
+        .expect("brief_create failed");
 
-    manifest::create_manifest(&root, "test", "alice", "Test manifest")
-        .expect("create_manifest failed");
+    let m = manifest::brief_read(&path).expect("brief_read failed");
+    assert_eq!(m.name, "anonymous-brief");
+    assert_eq!(m.author, "");
+}
 
-    manifest::add_entry(&root, "test", "Test File", "test.txt", None, Some("A test file"))
+#[test]
+fn brief_create_rejects_overwrite() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("brief.md");
+
+    manifest::brief_create(&path, "test", None, "").expect("first create");
+    let result = manifest::brief_create(&path, "test", None, "");
+    assert!(result.is_err());
+}
+
+#[test]
+fn brief_add_entry_computes_hash() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "Hello, World!").expect("write test file");
+
+    manifest::brief_create(&brief_path, "test", Some("alice"), "Test brief")
+        .expect("create failed");
+
+    manifest::brief_add_entry(&brief_path, "test.txt", None, Some("A test file"))
         .expect("add_entry failed");
 
-    let m = manifest::read_manifest(&root, "test").expect("read_manifest failed");
+    let m = manifest::brief_read(&brief_path).expect("read failed");
     assert_eq!(m.entries.len(), 1);
-    assert_eq!(m.entries[0].title, "Test File");
+    assert_eq!(m.entries[0].title, "test.txt");
     assert!(!m.entries[0].hash.is_empty());
 
-    // Verify hash is correct SHA-256
     let expected_hash = paperwork_core::hash::hash_bytes(b"Hello, World!");
     assert_eq!(m.entries[0].hash, expected_hash);
 }
 
 #[test]
-fn verify_fresh() {
-    let (_dir, root) = setup_workspace("alice");
+fn brief_remove_entry() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+    let test_file = dir.path().join("file.rs");
+    fs::write(&test_file, "fn main() {}").expect("write");
 
-    let test_file = root.join("test.txt");
-    fs::write(&test_file, "content").expect("write failed");
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path, "file.rs", None, None).expect("add");
 
-    manifest::create_manifest(&root, "test", "alice", "Test").expect("create failed");
-    manifest::add_entry(&root, "test", "Entry", "test.txt", None, None).expect("add failed");
+    manifest::brief_remove_entry(&brief_path, "file.rs").expect("remove failed");
 
-    let results = manifest::verify_manifest(&root, "test").expect("verify failed");
+    let m = manifest::brief_read(&brief_path).expect("read");
+    assert!(m.entries.is_empty());
+}
+
+#[test]
+fn brief_remove_entry_not_found() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+
+    let result = manifest::brief_remove_entry(&brief_path, "nonexistent");
+    assert!(result.is_err());
+}
+
+#[test]
+fn brief_verify_fresh() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "content").expect("write");
+
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path, "test.txt", None, None).expect("add");
+
+    let results = manifest::brief_verify(&brief_path, dir.path()).expect("verify");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].1, VerifyResult::Fresh);
 }
 
 #[test]
-fn verify_shifted() {
-    let (_dir, root) = setup_workspace("alice");
+fn brief_verify_shifted() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "original content").expect("write");
 
-    let test_file = root.join("test.txt");
-    fs::write(&test_file, "original content").expect("write failed");
-
-    manifest::create_manifest(&root, "test", "alice", "Test").expect("create failed");
-    manifest::add_entry(&root, "test", "Entry", "test.txt", None, None).expect("add failed");
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path, "test.txt", None, None).expect("add");
 
     // Modify the file
-    fs::write(&test_file, "modified content").expect("write failed");
+    fs::write(&test_file, "modified content").expect("write");
 
-    let results = manifest::verify_manifest(&root, "test").expect("verify failed");
+    let results = manifest::brief_verify(&brief_path, dir.path()).expect("verify");
     assert_eq!(results[0].1, VerifyResult::Shifted);
 }
 
 #[test]
-fn verify_stale() {
-    let (_dir, root) = setup_workspace("alice");
+fn brief_verify_stale_regex_mismatch() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "fn main() {}").expect("write");
 
-    let test_file = root.join("test.txt");
-    fs::write(&test_file, "fn main() {}").expect("write failed");
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path, "test.txt", Some(r"fn nonexistent\(\)"), None)
+        .expect("add");
 
-    manifest::create_manifest(&root, "test", "alice", "Test").expect("create failed");
-    manifest::add_entry(
-        &root,
-        "test",
-        "Entry",
-        "test.txt",
-        Some(r"fn nonexistent\(\)"),
-        None,
-    )
-    .expect("add failed");
+    let results = manifest::brief_verify(&brief_path, dir.path()).expect("verify");
+    assert_eq!(results[0].1, VerifyResult::Stale);
+}
 
-    let results = manifest::verify_manifest(&root, "test").expect("verify failed");
+#[test]
+fn brief_verify_stale_file_missing() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "content").expect("write");
+
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path, "test.txt", None, None).expect("add");
+
+    // Delete the file
+    fs::remove_file(&test_file).expect("remove");
+
+    let results = manifest::brief_verify(&brief_path, dir.path()).expect("verify");
     assert_eq!(results[0].1, VerifyResult::Stale);
 }
 
 // ============================================================================
-// 2.5 Notification Ops Tests
+// Contacts Ops Tests
 // ============================================================================
 
 #[test]
-fn push_notification() {
-    let (_dir, root) = setup_workspace("alice");
+fn contacts_create_writes_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("contacts.md");
 
-    let notif = Notification {
-        timestamp: Utc::now(),
-        from: "alice".to_string(),
-        thread_path: "dm/alice--bob/thread.md".to_string(),
-        seq: 1,
-        notify_type: NotifyType::Mention,
-        snippet: "Hey @bob!".to_string(),
-    };
+    contacts::contacts_create(&path, "my-team").expect("contacts_create failed");
 
-    notify::push_notify(&root, "bob", &notif).expect("push_notify failed");
-
-    let unread = notify::list_unread(&root, "bob").expect("list_unread failed");
-    assert_eq!(unread.len(), 1);
-    assert_eq!(unread[0].from, "alice");
-    assert_eq!(unread[0].snippet, "Hey @bob!");
+    assert!(path.is_file());
+    let content = fs::read_to_string(&path).expect("read");
+    assert!(content.contains("# Contacts: my-team"));
 }
 
 #[test]
-fn ack_moves_to_history() {
-    let (_dir, root) = setup_workspace("alice");
+fn contacts_create_rejects_overwrite() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("contacts.md");
 
-    // Push 2 notifications
-    for i in 1..=2 {
+    contacts::contacts_create(&path, "team").expect("first create");
+    let result = contacts::contacts_create(&path, "team");
+    assert!(result.is_err());
+}
+
+#[test]
+fn contacts_add_and_read() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("contacts.md");
+
+    contacts::contacts_create(&path, "team").expect("create");
+    contacts::contacts_add(&path, "/agents/alice.md").expect("add alice");
+    contacts::contacts_add(&path, "/agents/bob.md").expect("add bob");
+
+    let entries = contacts::contacts_read(&path).expect("read");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].profile_path, "/agents/alice.md");
+    assert_eq!(entries[1].profile_path, "/agents/bob.md");
+}
+
+#[test]
+fn contacts_add_idempotent() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("contacts.md");
+
+    contacts::contacts_create(&path, "team").expect("create");
+    contacts::contacts_add(&path, "/agents/alice.md").expect("add first");
+    contacts::contacts_add(&path, "/agents/alice.md").expect("add duplicate");
+
+    let entries = contacts::contacts_read(&path).expect("read");
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn contacts_read_not_found() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("missing.md");
+
+    let result = contacts::contacts_read(&path);
+    assert!(result.is_err());
+}
+
+// ============================================================================
+// Notification Ops Tests
+// ============================================================================
+
+#[test]
+fn notify_push_and_read() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.notify.md");
+
+    let notif = Notification {
+        timestamp: Utc::now(),
+        from: "bob".to_string(),
+        thread_path: "/threads/dm.md".to_string(),
+        seq: 1,
+        notify_type: NotifyType::Mention,
+        snippet: "Hey @alice!".to_string(),
+    };
+
+    notify::notify_push(&path, "alice", &notif).expect("push failed");
+
+    let notifications = notify::notify_read(&path).expect("read failed");
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].from, "bob");
+    assert_eq!(notifications[0].snippet, "Hey @alice!");
+}
+
+#[test]
+fn notify_read_empty_for_missing_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("missing.notify.md");
+
+    let notifications = notify::notify_read(&path).expect("read failed");
+    assert!(notifications.is_empty());
+}
+
+#[test]
+fn notify_push_multiple() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.notify.md");
+
+    for i in 1..=3 {
         let notif = Notification {
             timestamp: Utc::now(),
-            from: "alice".to_string(),
-            thread_path: "dm/alice--bob/thread.md".to_string(),
+            from: format!("agent{}", i),
+            thread_path: "/threads/t.md".to_string(),
             seq: i,
             notify_type: NotifyType::Mention,
             snippet: format!("Notification {}", i),
         };
-        notify::push_notify(&root, "bob", &notif).expect("push_notify failed");
+        notify::notify_push(&path, "alice", &notif).expect("push");
     }
 
-    // Ack
-    let acked = notify::ack_notify(&root, "bob").expect("ack_notify failed");
-    assert_eq!(acked.len(), 2);
-
-    // Unread should be empty
-    let unread = notify::list_unread(&root, "bob").expect("list_unread failed");
-    assert!(unread.is_empty());
-
-    // History should have 2
-    let history = notify::list_history(&root, "bob").expect("list_history failed");
-    assert_eq!(history.len(), 2);
+    let notifications = notify::notify_read(&path).expect("read");
+    assert_eq!(notifications.len(), 3);
 }
 
 // ============================================================================
-// 2.6 Who Query Tests
+// DM Path Helper Tests
 // ============================================================================
 
 #[test]
-fn who_owns_match() {
-    let (_dir, root) = setup_workspace("alice");
+fn dm_thread_path_convention() {
+    let profile = PathBuf::from("/foo/alice.md");
+    let dm = paperwork_core::ops::dm_thread_path(&profile, "bob");
+    assert_eq!(dm, PathBuf::from("/foo/alice.dm/bob.md"));
+}
 
-    profile::edit_profile(
-        &root,
+#[test]
+fn dm_thread_path_windows_style() {
+    let profile = PathBuf::from(r"C:\agents\alice.md");
+    let dm = paperwork_core::ops::dm_thread_path(&profile, "charlie");
+    assert_eq!(dm, PathBuf::from(r"C:\agents\alice.dm\charlie.md"));
+}
+
+// ============================================================================
+// End-to-End: Profile + DM Thread Workflow
+// ============================================================================
+
+#[test]
+fn e2e_profile_dm_workflow() {
+    let dir = tempdir().expect("tempdir");
+
+    // Create alice's profile
+    let alice_profile = dir.path().join("alice.md");
+    profile::create_profile(&alice_profile, "alice", "gpt-4", "Alice agent")
+        .expect("create alice");
+
+    // Compute DM path with bob
+    let dm_path = paperwork_core::ops::dm_thread_path(&alice_profile, "bob");
+    assert_eq!(
+        dm_path,
+        dir.path().join("alice.dm").join("bob.md")
+    );
+
+    // Send messages (auto-creates alice.dm/bob.md)
+    let seq1 = thread::thread_send(
+        &dm_path,
         "alice",
+        &["bob".to_string()],
+        "Hello Bob!",
         None,
-        None,
-        None,
-        None,
-        Some(vec!["src/**".to_string()]),
+        &[],
     )
-    .expect("edit failed");
+    .expect("send 1");
+    assert_eq!(seq1, 1);
 
-    let matches = contacts::who_query(&root, "src/main.rs", Access::Owns)
-        .expect("who_query failed");
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].name, "alice");
-}
-
-#[test]
-fn who_owns_no_match() {
-    let (_dir, root) = setup_workspace("alice");
-
-    profile::edit_profile(
-        &root,
-        "alice",
-        None,
-        None,
-        None,
-        None,
-        Some(vec!["src/**".to_string()]),
+    let seq2 = thread::thread_send(
+        &dm_path,
+        "bob",
+        &["alice".to_string()],
+        "Hi Alice!",
+        Some(1),
+        &[],
     )
-    .expect("edit failed");
+    .expect("send 2");
+    assert_eq!(seq2, 2);
 
-    let matches = contacts::who_query(&root, "docs/readme.md", Access::Owns)
-        .expect("who_query failed");
-    assert!(matches.is_empty());
-}
+    // Read the thread
+    let messages = thread::thread_read(&dm_path, None, None).expect("read");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].sender, "alice");
+    assert_eq!(messages[1].sender, "bob");
+    assert_eq!(messages[1].reply_to, Some(1));
 
-#[test]
-fn who_reads_match() {
-    let (_dir, root) = setup_workspace("alice");
-
-    profile::edit_profile(
-        &root,
-        "alice",
-        None,
-        None,
-        Some(vec!["docs/**".to_string()]),
-        None,
-        None,
-    )
-    .expect("edit failed");
-
-    let matches = contacts::who_query(&root, "docs/guide.md", Access::Read)
-        .expect("who_query failed");
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].name, "alice");
-}
-
-#[test]
-fn who_writes_match() {
-    let (_dir, root) = setup_workspace("alice");
-
-    let bob = Profile {
-        name: "bob".to_string(),
-        model: "claude-3".to_string(),
-        description: String::new(),
-        scope_read: vec![],
-        scope_write: vec!["src/lexer/**".to_string()],
-        scope_owns: vec![],
-    };
-    profile::create_profile(&root, &bob).expect("create bob failed");
-
-    let matches = contacts::who_query(&root, "src/lexer/token.rs", Access::Write)
-        .expect("who_query failed");
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].name, "bob");
-}
-
-// ============================================================================
-// 2.7 Invite & Contacts Ops Tests
-// ============================================================================
-
-#[test]
-fn invite_creates_profile_and_dm() {
-    let (_dir, root) = setup_workspace("alice");
-
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
-
-    // Profile exists
-    assert!(root.join(".paperwork/profiles/bob.md").is_file());
-
-    // DM folder exists (alphabetically sorted)
-    assert!(root.join(".paperwork/dm/alice--bob").is_dir());
-    assert!(root.join(".paperwork/dm/alice--bob/meta.md").is_file());
-    assert!(root.join(".paperwork/dm/alice--bob/thread.md").is_file());
-}
-
-#[test]
-fn invite_dm_folder_alphabetical() {
-    let (_dir, root) = setup_workspace("zara");
-
-    contacts::invite(&root, "zara", "alice", "gpt-4").expect("invite failed");
-
-    // Folder should be alice--zara (sorted)
-    assert!(root.join(".paperwork/dm/alice--zara").is_dir());
-    assert!(!root.join(".paperwork/dm/zara--alice").exists());
-}
-
-#[test]
-fn invite_updates_contacts() {
-    let (_dir, root) = setup_workspace("alice");
-
-    contacts::invite(&root, "alice", "bob", "claude-3").expect("invite failed");
-
-    let contacts = contacts::contacts_list(&root).expect("contacts_list failed");
-    assert!(contacts.iter().any(|c| c.agent == "bob"));
-}
-
-#[test]
-fn contacts_list() {
-    let (_dir, root) = setup_workspace("alice");
-
-    let bob = Profile {
-        name: "bob".to_string(),
-        model: "claude-3".to_string(),
-        description: String::new(),
-        scope_read: vec![],
-        scope_write: vec![],
-        scope_owns: vec![],
-    };
-    profile::create_profile(&root, &bob).expect("create bob failed");
-
-    let contacts = contacts::contacts_list(&root).expect("contacts_list failed");
-    assert_eq!(contacts.len(), 2);
-    assert!(contacts.iter().any(|c| c.agent == "alice"));
-    assert!(contacts.iter().any(|c| c.agent == "bob"));
+    // Summary
+    let summary = thread::thread_summary(&dm_path).expect("summary");
+    assert_eq!(summary.message_count, 2);
+    assert_eq!(summary.last_sender, Some("bob".to_string()));
 }

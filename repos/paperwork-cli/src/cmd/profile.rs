@@ -1,106 +1,94 @@
-//! `paperwork profile` — create/edit/show/list profiles.
+//! Profile commands: create, show, edit, list.
+
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use serde::Serialize;
 
 use crate::cmd::Context;
 use crate::output::{self, OutputMode};
 
-/// Manage agent profiles
 #[derive(Args)]
 pub struct ProfileArgs {
     #[command(subcommand)]
-    pub command: ProfileCommand,
+    command: ProfileCommand,
 }
 
 #[derive(Subcommand)]
-pub enum ProfileCommand {
-    /// Create a new profile
+enum ProfileCommand {
+    /// Create a new agent profile
     Create {
+        /// Path for the new profile file
+        path: PathBuf,
+
         /// Agent name
+        #[arg(long)]
         name: String,
+
         /// Model identifier
-        #[arg(long)]
-        model: Option<String>,
-        /// Description
-        #[arg(long)]
-        description: Option<String>,
-        /// Read scope (comma-separated globs)
-        #[arg(long)]
-        scope_read: Option<String>,
-        /// Write scope (comma-separated globs)
-        #[arg(long)]
-        scope_write: Option<String>,
-        /// Owns scope (comma-separated globs)
-        #[arg(long)]
-        scope_owns: Option<String>,
+        #[arg(long, default_value = "")]
+        model: String,
+
+        /// Description of the agent
+        #[arg(long, default_value = "")]
+        description: String,
+
+        /// Read scope glob patterns
+        #[arg(long = "scope-read", num_args = 0..)]
+        scope_read: Vec<String>,
+
+        /// Write scope glob patterns
+        #[arg(long = "scope-write", num_args = 0..)]
+        scope_write: Vec<String>,
+
+        /// Owned scope glob patterns
+        #[arg(long = "scope-owns", num_args = 0..)]
+        scope_owns: Vec<String>,
     },
-    /// Edit an existing profile
-    Edit {
-        /// Agent name
-        name: String,
-        /// Model identifier
-        #[arg(long)]
-        model: Option<String>,
-        /// Description
-        #[arg(long)]
-        description: Option<String>,
-        /// Read scope (comma-separated globs)
-        #[arg(long)]
-        scope_read: Option<String>,
-        /// Write scope (comma-separated globs)
-        #[arg(long)]
-        scope_write: Option<String>,
-        /// Owns scope (comma-separated globs)
-        #[arg(long)]
-        scope_owns: Option<String>,
-    },
+
     /// Show a profile
     Show {
-        /// Agent name
-        name: String,
+        /// Path to the profile file
+        path: PathBuf,
     },
-    /// List all profiles
-    List,
-}
 
-#[derive(Serialize)]
-struct ProfileJson {
-    name: String,
-    model: String,
-    description: String,
-    scope: ScopeJson,
-    path: String,
-}
+    /// Edit an existing profile
+    Edit {
+        /// Path to the profile file
+        path: PathBuf,
 
-#[derive(Serialize)]
-struct ScopeJson {
-    read: Vec<String>,
-    write: Vec<String>,
-    owns: Vec<String>,
-}
+        /// New model identifier
+        #[arg(long)]
+        model: Option<String>,
 
-#[derive(Serialize)]
-struct ProfileListItem {
-    name: String,
-    model: String,
-    description: String,
-    path: String,
-}
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
 
-fn parse_scope(s: Option<String>) -> Option<Vec<String>> {
-    s.map(|v| {
-        v.split(',')
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .collect()
-    })
+        /// New read scope glob patterns
+        #[arg(long = "scope-read", num_args = 0..)]
+        scope_read: Option<Vec<String>>,
+
+        /// New write scope glob patterns
+        #[arg(long = "scope-write", num_args = 0..)]
+        scope_write: Option<Vec<String>>,
+
+        /// New owned scope glob patterns
+        #[arg(long = "scope-owns", num_args = 0..)]
+        scope_owns: Option<Vec<String>>,
+    },
+
+    /// List all .md profiles in a directory
+    List {
+        /// Directory to scan
+        dir: PathBuf,
+    },
 }
 
 pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
     match args.command {
         ProfileCommand::Create {
+            path,
             name,
             model,
             description,
@@ -108,30 +96,68 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
             scope_write,
             scope_owns,
         } => {
-            let profile = paperwork_core::Profile {
-                name: name.clone(),
-                model: model.unwrap_or_else(|| "\u{2014}".to_string()),
-                description: description.unwrap_or_default(),
-                scope_read: parse_scope(scope_read).unwrap_or_default(),
-                scope_write: parse_scope(scope_write).unwrap_or_default(),
-                scope_owns: parse_scope(scope_owns).unwrap_or_default(),
-            };
-
-            paperwork_core::ops::profile::create_profile(&ctx.root, &profile)
+            paperwork_core::ops::profile::create_profile(&path, &name, &model, &description)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            // Apply scopes if provided
+            if !scope_read.is_empty() || !scope_write.is_empty() || !scope_owns.is_empty() {
+                paperwork_core::ops::profile::edit_profile(
+                    &path,
+                    None,
+                    None,
+                    if scope_read.is_empty() { None } else { Some(scope_read) },
+                    if scope_write.is_empty() { None } else { Some(scope_write) },
+                    if scope_owns.is_empty() { None } else { Some(scope_owns) },
+                )
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            }
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let out = serde_json::json!({
-                        "created": format!("profiles/{}.md", name),
-                    });
-                    output::print_json(&out);
+                    let profile = paperwork_core::ops::profile::show_profile(&path)
+                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                    output::print_json(&profile);
                 }
-                _ => output::success(ctx, &format!("profile created: profiles/{}.md", name)),
+                _ => output::success(ctx, &format!("Profile created: {}", path.display())),
             }
+            Ok(())
         }
+
+        ProfileCommand::Show { path } => {
+            let profile = paperwork_core::ops::profile::show_profile(&path)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            match ctx.mode {
+                OutputMode::Json => output::print_json(&profile),
+                OutputMode::Plain => {
+                    let content = std::fs::read_to_string(&path)
+                        .map_err(|e| anyhow::anyhow!("IO error: {}", e))?;
+                    output::print_plain(&content);
+                }
+                OutputMode::Default => {
+                    output::print_default(&format!("# {}", profile.name));
+                    if !profile.model.is_empty() {
+                        output::print_default(&format!("**Model**: {}", profile.model));
+                    }
+                    if !profile.description.is_empty() {
+                        output::print_default(&format!("**Description**: {}", profile.description));
+                    }
+                    if !profile.scope_read.is_empty() {
+                        output::print_default(&format!("**Scope (read)**: {}", profile.scope_read.join(", ")));
+                    }
+                    if !profile.scope_write.is_empty() {
+                        output::print_default(&format!("**Scope (write)**: {}", profile.scope_write.join(", ")));
+                    }
+                    if !profile.scope_owns.is_empty() {
+                        output::print_default(&format!("**Scope (owns)**: {}", profile.scope_owns.join(", ")));
+                    }
+                }
+            }
+            Ok(())
+        }
+
         ProfileCommand::Edit {
-            name,
+            path,
             model,
             description,
             scope_read,
@@ -139,126 +165,60 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
             scope_owns,
         } => {
             paperwork_core::ops::profile::edit_profile(
-                &ctx.root,
-                &name,
+                &path,
                 model.as_deref(),
                 description.as_deref(),
-                parse_scope(scope_read),
-                parse_scope(scope_write),
-                parse_scope(scope_owns),
+                scope_read,
+                scope_write,
+                scope_owns,
             )
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let out = serde_json::json!({
-                        "edited": format!("profiles/{}.md", name),
-                    });
-                    output::print_json(&out);
+                    let profile = paperwork_core::ops::profile::show_profile(&path)
+                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                    output::print_json(&profile);
                 }
-                _ => output::success(ctx, &format!("profile updated: profiles/{}.md", name)),
+                _ => output::success(ctx, &format!("Profile updated: {}", path.display())),
             }
+            Ok(())
         }
-        ProfileCommand::Show { name } => {
-            let profile = paperwork_core::ops::profile::show_profile(&ctx.root, &name)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-            let path = format!("profiles/{}.md", name);
+        ProfileCommand::List { dir } => {
+            if !dir.is_dir() {
+                anyhow::bail!(
+                    "Directory '{}' not found.\n  \u{2192} Provide a valid directory path.",
+                    dir.display()
+                );
+            }
 
-            match ctx.mode {
-                OutputMode::Json => {
-                    let out = ProfileJson {
-                        name: profile.name,
-                        model: profile.model,
-                        description: profile.description,
-                        scope: ScopeJson {
-                            read: profile.scope_read,
-                            write: profile.scope_write,
-                            owns: profile.scope_owns,
-                        },
-                        path,
-                    };
-                    output::print_json(&out);
-                }
-                OutputMode::Plain => {
-                    let content = std::fs::read_to_string(
-                        paperwork_core::layout::profile_path(&ctx.root, &name),
-                    )?;
-                    output::print_plain(&content);
-                }
-                OutputMode::Default => {
-                    let mut out = format!("# {}\n\n", profile.name);
-                    out.push_str(&format!("**Model**: {}  \n", profile.model));
-                    out.push_str(&format!("**Description**: {}\n\n", profile.description));
-                    out.push_str("## Scope\n\n");
-                    out.push_str(&format!(
-                        "**Read**: {}  \n",
-                        format_scope(&profile.scope_read)
-                    ));
-                    out.push_str(&format!(
-                        "**Write**: {}  \n",
-                        format_scope(&profile.scope_write)
-                    ));
-                    out.push_str(&format!(
-                        "**Owns**: {}",
-                        format_scope(&profile.scope_owns)
-                    ));
-                    output::print_default(&out);
+            let mut profiles: Vec<String> = Vec::new();
+            let entries = std::fs::read_dir(&dir)
+                .map_err(|e| anyhow::anyhow!("IO error at '{}': {}", dir.display(), e))?;
+
+            for entry in entries {
+                let entry = entry.map_err(|e| anyhow::anyhow!("IO error: {}", e))?;
+                let path = entry.path();
+                if path.extension().map(|e| e == "md").unwrap_or(false) && path.is_file() {
+                    profiles.push(path.display().to_string());
                 }
             }
-        }
-        ProfileCommand::List => {
-            let profiles = paperwork_core::ops::profile::list_profiles(&ctx.root)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            profiles.sort();
 
             match ctx.mode {
-                OutputMode::Json => {
-                    let items: Vec<ProfileListItem> = profiles
-                        .iter()
-                        .map(|p| ProfileListItem {
-                            name: p.name.clone(),
-                            model: p.model.clone(),
-                            description: p.description.clone(),
-                            path: format!("profiles/{}.md", p.name),
-                        })
-                        .collect();
-                    output::print_json(&items);
-                }
-                OutputMode::Plain => {
-                    let mut out = String::from("| Agent | Profile |\n|-------|--------|\n");
-                    for p in &profiles {
-                        out.push_str(&format!("| {} | profiles/{}.md |\n", p.name, p.name));
-                    }
-                    output::print_plain(&out);
-                }
-                OutputMode::Default => {
+                OutputMode::Json => output::print_json(&profiles),
+                _ => {
                     if profiles.is_empty() {
                         output::print_default("No profiles found.");
                     } else {
-                        let mut out = String::from("AGENT   MODEL           DESCRIPTION\n");
                         for p in &profiles {
-                            out.push_str(&format!(
-                                "{:<8}{:<16}{}\n",
-                                p.name, p.model, p.description
-                            ));
+                            output::print_default(p);
                         }
-                        output::print_default(out.trim_end());
                     }
                 }
             }
+            Ok(())
         }
-    }
-    Ok(())
-}
-
-fn format_scope(globs: &[String]) -> String {
-    if globs.is_empty() {
-        "\u{2014}".to_string()
-    } else {
-        globs
-            .iter()
-            .map(|g| format!("`{}`", g))
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 }

@@ -52,10 +52,6 @@ pub enum PaperworkError {
         hint: String,
     },
 
-    /// Workspace not initialized.
-    #[error("Workspace not initialized at '{}'.\n  → Run `paperwork init` first.", path.display())]
-    NotInitialized { path: PathBuf },
-
     /// Message size exceeds limit.
     #[error("Message too large ({size} bytes, max {max} bytes).\n  → Split into smaller messages.")]
     MessageTooLarge { size: usize, max: usize },

@@ -1,56 +1,113 @@
-//! `paperwork contacts` — list all registered agents.
+//! Contacts commands: create, add, read.
+
+use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Args;
-use serde::Serialize;
+use clap::{Args, Subcommand};
 
 use crate::cmd::Context;
 use crate::output::{self, OutputMode};
 
-/// List all registered agents
 #[derive(Args)]
-pub struct ContactsArgs {}
-
-#[derive(Serialize)]
-struct ContactJson {
-    agent: String,
-    profile: String,
+pub struct ContactsArgs {
+    #[command(subcommand)]
+    command: ContactsCommand,
 }
 
-pub fn run(ctx: &Context, _args: ContactsArgs) -> Result<()> {
-    let contacts = paperwork_core::ops::contacts::contacts_list(&ctx.root)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+#[derive(Subcommand)]
+enum ContactsCommand {
+    /// Create a new contacts file
+    Create {
+        /// Path for the new contacts file
+        path: PathBuf,
 
-    match ctx.mode {
-        OutputMode::Json => {
-            let items: Vec<ContactJson> = contacts
-                .iter()
-                .map(|c| ContactJson {
-                    agent: c.agent.clone(),
-                    profile: c.profile_path.clone(),
-                })
-                .collect();
-            output::print_json(&items);
-        }
-        OutputMode::Plain => {
-            let mut out = String::from("| Agent | Profile |\n|-------|--------|\n");
-            for c in &contacts {
-                out.push_str(&format!("| {} | {} |\n", c.agent, c.profile_path));
-            }
-            output::print_plain(&out);
-        }
-        OutputMode::Default => {
-            if contacts.is_empty() {
-                output::print_default("No contacts registered.");
-            } else {
-                let mut out = String::from("AGENT   PROFILE\n");
-                for c in &contacts {
-                    out.push_str(&format!("{:<8}{}\n", c.agent, c.profile_path));
+        /// Title for the contacts list
+        #[arg(long, default_value = "Contacts")]
+        title: String,
+    },
+
+    /// Add a profile to the contacts file
+    Add {
+        /// Path to the contacts file
+        path: PathBuf,
+
+        /// Path to the profile to add
+        #[arg(long)]
+        profile: String,
+    },
+
+    /// Read all contacts
+    Read {
+        /// Path to the contacts file
+        path: PathBuf,
+    },
+}
+
+pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
+    match args.command {
+        ContactsCommand::Create { path, title } => {
+            paperwork_core::ops::contacts::contacts_create(&path, &title)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            match ctx.mode {
+                OutputMode::Json => {
+                    let result = serde_json::json!({
+                        "path": path.display().to_string(),
+                        "title": title,
+                    });
+                    output::print_json(&result);
                 }
-                output::print_default(out.trim_end());
+                _ => output::success(ctx, &format!("Contacts created: {}", path.display())),
             }
+            Ok(())
+        }
+
+        ContactsCommand::Add { path, profile } => {
+            paperwork_core::ops::contacts::contacts_add(&path, &profile)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            match ctx.mode {
+                OutputMode::Json => {
+                    let result = serde_json::json!({
+                        "contacts": path.display().to_string(),
+                        "added": profile,
+                    });
+                    output::print_json(&result);
+                }
+                _ => output::success(ctx, &format!("Contact added: {}", profile)),
+            }
+            Ok(())
+        }
+
+        ContactsCommand::Read { path } => {
+            let contacts = paperwork_core::ops::contacts::contacts_read(&path)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            match ctx.mode {
+                OutputMode::Json => output::print_json(&contacts),
+                OutputMode::Plain => {
+                    let content = std::fs::read_to_string(&path)
+                        .map_err(|e| anyhow::anyhow!("IO error: {}", e))?;
+                    output::print_plain(&content);
+                }
+                OutputMode::Default => {
+                    if contacts.is_empty() {
+                        output::print_default("(no contacts)");
+                    } else {
+                        for contact in &contacts {
+                            if contact.summary.is_empty() {
+                                output::print_default(&format!("  - {}", contact.profile_path));
+                            } else {
+                                output::print_default(&format!(
+                                    "  - {} ({})",
+                                    contact.profile_path, contact.summary
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
         }
     }
-
-    Ok(())
 }

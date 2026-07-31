@@ -5,7 +5,6 @@
 pub mod error;
 pub mod format;
 pub mod hash;
-pub mod layout;
 pub mod ops;
 
 // Re-export error types for convenience
@@ -28,11 +27,11 @@ pub struct Profile {
     pub scope_owns: Vec<GlobPattern>,
 }
 
-/// A registered agent contact entry.
+/// A contact entry: a profile path with an optional summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContactEntry {
-    pub agent: String,
     pub profile_path: String,
+    pub summary: String,
 }
 
 /// A message in a DM or post thread.
@@ -104,12 +103,4 @@ pub struct Notification {
     pub seq: u64,
     pub notify_type: NotifyType,
     pub snippet: String,
-}
-
-/// Access level for scope queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Access {
-    Owns,
-    Read,
-    Write,
 }

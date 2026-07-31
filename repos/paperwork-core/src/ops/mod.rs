@@ -1,6 +1,7 @@
-//! Operations layer: filesystem operations composing the format layer.
+//! Operations layer: stateless, path-explicit filesystem operations.
 //!
-//! All operations are rooted at a workspace path and use layout.rs for path resolution.
+//! Every operation takes an explicit file path. No workspace root, no init, no state.
+//! Files are independent — no cross-references managed by the CLI.
 
 pub mod contacts;
 pub mod manifest;
@@ -8,40 +9,59 @@ pub mod notify;
 pub mod profile;
 pub mod thread;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::error::Result;
-use crate::layout;
-use crate::Profile;
-
-/// Initialize a `.paperwork/` workspace.
+/// Compute the DM thread path for a profile and another party.
 ///
-/// Creates the full directory skeleton, initial profile, and contacts entry.
-/// Idempotent: calling on an existing workspace adds the agent if not present.
+/// Convention: profile at `any/path/alice.md` has DM threads at
+/// `any/path/alice.dm/<other_party>.md`.
 ///
-/// # Arguments
-/// * `root` - Workspace root directory
-/// * `name` - Agent name
-/// * `model` - Model identifier (e.g., "gpt-4", "claude-3")
-pub fn init(root: &Path, name: &str, model: &str) -> Result<()> {
-    // Create skeleton (idempotent)
-    layout::create_skeleton(root)?;
+/// # Example
+/// ```
+/// use std::path::{Path, PathBuf};
+/// let profile = Path::new("/foo/alice.md");
+/// let dm = paperwork_core::ops::dm_thread_path(profile, "bob");
+/// assert_eq!(dm, PathBuf::from("/foo/alice.dm/bob.md"));
+/// ```
+pub fn dm_thread_path(profile_path: &Path, other_party: &str) -> PathBuf {
+    let parent = profile_path.parent().unwrap_or(Path::new("."));
+    let stem = profile_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    parent
+        .join(format!("{}.dm", stem))
+        .join(format!("{}.md", other_party))
+}
 
-    // Create initial profile if it doesn't exist
-    let profile = Profile {
-        name: name.to_string(),
-        model: model.to_string(),
-        description: String::new(),
-        scope_read: Vec::new(),
-        scope_write: Vec::new(),
-        scope_owns: Vec::new(),
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Only create if profile doesn't exist (idempotent)
-    let profile_path = layout::profile_path(root, name);
-    if !profile_path.exists() {
-        profile::create_profile(root, &profile)?;
+    #[test]
+    fn test_dm_thread_path_basic() {
+        let profile = Path::new("/foo/alice.md");
+        assert_eq!(
+            dm_thread_path(profile, "bob"),
+            PathBuf::from("/foo/alice.dm/bob.md")
+        );
     }
 
-    Ok(())
+    #[test]
+    fn test_dm_thread_path_nested() {
+        let profile = Path::new("/a/b/c/agent.md");
+        assert_eq!(
+            dm_thread_path(profile, "other"),
+            PathBuf::from("/a/b/c/agent.dm/other.md")
+        );
+    }
+
+    #[test]
+    fn test_dm_thread_path_relative() {
+        let profile = Path::new("alice.md");
+        assert_eq!(
+            dm_thread_path(profile, "bob"),
+            PathBuf::from("alice.dm/bob.md")
+        );
+    }
 }

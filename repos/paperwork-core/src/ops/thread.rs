@@ -1,47 +1,55 @@
-//! Thread operations: atomic append, read-range, summary, self-edit.
+//! Thread operations: send, read, summary, edit — all path-explicit.
 //!
-//! CRITICAL: append_msg uses fs2::FileExt::lock_exclusive() around read-seq + write
-//! to prevent seq collision under concurrent writes.
+//! Used for both DM threads and Post/GDM threads (same format).
+//! `thread_send` auto-creates the file (and parent dirs) if it doesn't exist.
+//! File locking (fs2) applies for send and edit.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use chrono::Utc;
 use fs2::FileExt;
 use regex::Regex;
 use std::sync::LazyLock;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::thread::{parse_messages, serialize_message, serialize_thread};
-use crate::layout;
 use crate::{Message, ThreadSummary};
 
-/// Maximum message size (64KB hard cap).
+/// Maximum message size (64 KB hard cap).
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 
-/// Size of reverse-scan buffer for finding last seq (4KB).
-const REVERSE_SCAN_SIZE: u64 = (64 * 1024 + 256) as u64; // Must exceed MAX_MESSAGE_SIZE to handle large last messages
+/// Size of reverse-scan buffer for finding last seq.
+const REVERSE_SCAN_SIZE: u64 = (64 * 1024 + 256) as u64;
 
 /// Regex for extracting seq from message header.
 static SEQ_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"### #(\d+) —").expect("valid regex"));
 
-/// Append a message to a thread with atomic locking.
+/// Send a message to a thread. Auto-creates the file and parent dirs if absent.
 ///
-/// Uses fs2::FileExt::lock_exclusive() around read-seq + write to prevent
-/// seq collision. The seq is assigned automatically based on the last message.
+/// Returns the assigned sequence number.
 ///
 /// # Arguments
-/// * `root` - Workspace root
-/// * `thread_rel` - Relative thread path (e.g., "dm/alice--bob/thread.md")
-/// * `msg` - Message to append (seq field is overwritten with assigned value)
-pub fn append_msg(root: &Path, thread_rel: &str, msg: &Message) -> Result<()> {
-    layout::ensure_initialized(root)?;
-
-    let thread_path = layout::resolve_thread_path(root, thread_rel);
+/// * `path` - Explicit path to the thread file
+/// * `from` - Sender name
+/// * `to` - Recipient names (empty = broadcast / "all")
+/// * `body` - Message body (free-form Markdown)
+/// * `reply_to` - Optional seq being replied to
+/// * `mentions` - Names mentioned in the message (for notification hooks)
+pub fn thread_send(
+    path: &Path,
+    from: &str,
+    to: &[String],
+    body: &str,
+    reply_to: Option<u64>,
+    mentions: &[String],
+) -> Result<u64> {
+    let _ = mentions; // Used by CLI for notification hooks; not stored in thread format.
 
     // Ensure parent directory exists
-    if let Some(parent) = thread_path.parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
             path: parent.to_path_buf(),
             source: e,
@@ -53,28 +61,32 @@ pub fn append_msg(root: &Path, thread_rel: &str, msg: &Message) -> Result<()> {
         .append(true)
         .create(true)
         .read(true)
-        .open(&thread_path)
+        .open(path)
         .map_err(|e| PaperworkError::IoContext {
-            path: thread_path.clone(),
+            path: path.to_path_buf(),
             source: e,
         })?;
 
     // Acquire exclusive lock (blocks concurrent writers)
     file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     // Read last seq within lock
-    let last_seq = read_last_seq_locked(&file, &thread_path)?;
+    let last_seq = read_last_seq_locked(&file, path)?;
     let new_seq = last_seq + 1;
 
-    // Create message with assigned seq
-    let mut msg_with_seq = msg.clone();
-    msg_with_seq.seq = new_seq;
+    let msg = Message {
+        seq: new_seq,
+        sender: from.to_string(),
+        timestamp: Utc::now(),
+        to: to.to_vec(),
+        reply_to,
+        body: body.to_string(),
+    };
 
-    // Serialize message
-    let serialized = serialize_message(&msg_with_seq);
+    let serialized = serialize_message(&msg);
 
     // Check size limit
     if serialized.len() > MAX_MESSAGE_SIZE {
@@ -90,106 +102,54 @@ pub fn append_msg(root: &Path, thread_rel: &str, msg: &Message) -> Result<()> {
     writer
         .write_all(serialized.as_bytes())
         .map_err(|e| PaperworkError::IoContext {
-            path: thread_path.clone(),
+            path: path.to_path_buf(),
             source: e,
         })?;
 
-    // Release lock
     file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
-        source: e,
-    })?;
-
-    Ok(())
-}
-
-/// Read the last seq number from a thread file (within lock).
-///
-/// Reverse-scans last 4KB for efficiency (O(1) regardless of file size).
-fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
-    let metadata = file.metadata().map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
     })?;
 
-    let file_size = metadata.len();
-    if file_size == 0 {
-        return Ok(0); // Empty file, next seq is 1
-    }
-
-    // Calculate read position (last 4KB or whole file if smaller)
-    let read_start = file_size.saturating_sub(REVERSE_SCAN_SIZE);
-    let read_len = (file_size - read_start) as usize;
-
-    // Read the tail portion
-    let mut file_ref = file;
-    file_ref
-        .seek(SeekFrom::Start(read_start))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-
-    let mut buffer = vec![0u8; read_len];
-    file_ref
-        .read_exact(&mut buffer)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-
-    let content = String::from_utf8_lossy(&buffer);
-
-    // Find all seq numbers and take the last one
-    let mut last_seq = 0u64;
-    for caps in SEQ_RE.captures_iter(&content) {
-        if let Ok(seq) = caps[1].parse::<u64>() {
-            last_seq = seq;
-        }
-    }
-
-    Ok(last_seq)
+    Ok(new_seq)
 }
 
-/// Read messages from a thread within a seq range (inclusive).
-pub fn read_range(root: &Path, thread_rel: &str, from: u64, to: u64) -> Result<Vec<Message>> {
-    layout::ensure_initialized(root)?;
-
-    let thread_path = layout::resolve_thread_path(root, thread_rel);
-
-    if !thread_path.exists() {
+/// Read messages from a thread within an optional seq range (inclusive).
+///
+/// - `from = None` → start from beginning
+/// - `to = None` → read to end
+pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Vec<Message>> {
+    if !path.exists() {
         return Err(PaperworkError::NotFound {
             resource: "Thread".to_string(),
-            name: thread_rel.to_string(),
+            name: path.display().to_string(),
             hint: "Send a message first to create the thread.".to_string(),
         });
     }
 
-    let content = fs::read_to_string(&thread_path).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
+    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     let messages = parse_messages(&content)?;
 
-    // Filter by seq range (inclusive)
+    let from_seq = from.unwrap_or(1);
+    let to_seq = to.unwrap_or(u64::MAX);
+
     let filtered: Vec<Message> = messages
         .into_iter()
-        .filter(|m| m.seq >= from && m.seq <= to)
+        .filter(|m| m.seq >= from_seq && m.seq <= to_seq)
         .collect();
 
     Ok(filtered)
 }
 
 /// Get a summary of a thread.
-pub fn summary(root: &Path, thread_rel: &str) -> Result<ThreadSummary> {
-    layout::ensure_initialized(root)?;
-
-    let thread_path = layout::resolve_thread_path(root, thread_rel);
-
-    if !thread_path.exists() {
+pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
+    if !path.exists() {
         return Ok(ThreadSummary {
-            thread_path: thread_rel.to_string(),
+            thread_path: path.display().to_string(),
             message_count: 0,
             last_sender: None,
             last_timestamp: None,
@@ -197,8 +157,8 @@ pub fn summary(root: &Path, thread_rel: &str) -> Result<ThreadSummary> {
         });
     }
 
-    let content = fs::read_to_string(&thread_path).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
+    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
         source: e,
     })?;
 
@@ -208,7 +168,7 @@ pub fn summary(root: &Path, thread_rel: &str) -> Result<ThreadSummary> {
     let last_sender = messages.last().map(|m| m.sender.clone());
     let last_timestamp = messages.last().map(|m| m.timestamp);
 
-    // Get snippets from last 3 messages
+    // Snippets from last 3 messages (chronological order)
     let snippets: Vec<String> = messages
         .iter()
         .rev()
@@ -227,7 +187,7 @@ pub fn summary(root: &Path, thread_rel: &str) -> Result<ThreadSummary> {
         .collect();
 
     Ok(ThreadSummary {
-        thread_path: thread_rel.to_string(),
+        thread_path: path.display().to_string(),
         message_count,
         last_sender,
         last_timestamp,
@@ -235,58 +195,49 @@ pub fn summary(root: &Path, thread_rel: &str) -> Result<ThreadSummary> {
     })
 }
 
-/// Self-edit: update the body of own message.
+/// Edit a message body in a thread (self-edit).
 ///
 /// ONLY allowed if:
-/// 1. The message is the sender's most recent message
-/// 2. The message is the final message in the thread
+/// 1. The message was sent by `sender`
+/// 2. It is the sender's most recent message
+/// 3. It is the final message in the thread
 ///
 /// Requires file lock for safe rewrite.
-pub fn self_edit(
-    root: &Path,
-    thread_rel: &str,
-    seq: u64,
-    sender: &str,
-    new_body: &str,
-) -> Result<()> {
-    layout::ensure_initialized(root)?;
-
-    let thread_path = layout::resolve_thread_path(root, thread_rel);
-
-    if !thread_path.exists() {
+pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Result<()> {
+    if !path.exists() {
         return Err(PaperworkError::NotFound {
             resource: "Thread".to_string(),
-            name: thread_rel.to_string(),
+            name: path.display().to_string(),
             hint: "Cannot edit a non-existent thread.".to_string(),
         });
     }
 
-    // Open file for reading and writing
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&thread_path)
+        .open(path)
         .map_err(|e| PaperworkError::IoContext {
-            path: thread_path.clone(),
+            path: path.to_path_buf(),
             source: e,
         })?;
 
-    // Acquire exclusive lock
     file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     // Read content through the locked file handle
     let mut content = String::new();
-    file.seek(SeekFrom::Start(0)).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
-        source: e,
-    })?;
-    file.read_to_string(&mut content).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
-        source: e,
-    })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    file.read_to_string(&mut content)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
 
     let mut messages = parse_messages(&content)?;
 
@@ -300,15 +251,14 @@ pub fn self_edit(
     }
 
     // Find the message to edit
-    let msg_index = messages.iter().position(|m| m.seq == seq);
-    let msg_index = match msg_index {
+    let msg_index = match messages.iter().position(|m| m.seq == seq) {
         Some(idx) => idx,
         None => {
             file.unlock().ok();
             return Err(PaperworkError::NotFound {
                 resource: "Message".to_string(),
                 name: format!("#{}", seq),
-                hint: "Check the seq number with `paperwork dm <agent> read`.".to_string(),
+                hint: "Check the seq number with `paperwork dm read`.".to_string(),
             });
         }
     };
@@ -319,7 +269,7 @@ pub fn self_edit(
     if msg.sender != sender {
         file.unlock().ok();
         return Err(PaperworkError::NotAllowed {
-            operation: "self_edit".to_string(),
+            operation: "thread_edit".to_string(),
             reason: format!(
                 "Message #{} was sent by '{}', not '{}'",
                 seq, msg.sender, sender
@@ -339,7 +289,7 @@ pub fn self_edit(
     if seq != sender_last_seq {
         file.unlock().ok();
         return Err(PaperworkError::NotAllowed {
-            operation: "self_edit".to_string(),
+            operation: "thread_edit".to_string(),
             reason: format!(
                 "Message #{} is not your most recent message (your last is #{})",
                 seq, sender_last_seq
@@ -353,7 +303,7 @@ pub fn self_edit(
     if seq != last_seq {
         file.unlock().ok();
         return Err(PaperworkError::NotAllowed {
-            operation: "self_edit".to_string(),
+            operation: "thread_edit".to_string(),
             reason: format!(
                 "Message #{} is not the final message in thread (last is #{})",
                 seq, last_seq
@@ -368,26 +318,70 @@ pub fn self_edit(
     // Rewrite entire file
     let serialized = serialize_thread(&messages);
 
-    // Truncate and write
     file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
+        path: path.to_path_buf(),
         source: e,
     })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    file.write_all(serialized.as_bytes())
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
 
-    file.seek(SeekFrom::Start(0)).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
-        source: e,
-    })?;
-    file.write_all(serialized.as_bytes()).map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
-        source: e,
-    })?;
-
-    // Release lock
     file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: thread_path.clone(),
+        path: path.to_path_buf(),
         source: e,
     })?;
 
     Ok(())
+}
+
+/// Read the last seq number from a thread file (within lock).
+///
+/// Reverse-scans the tail for efficiency (O(1) regardless of file size).
+fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
+    let metadata = file.metadata().map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+
+    let file_size = metadata.len();
+    if file_size == 0 {
+        return Ok(0);
+    }
+
+    let read_start = file_size.saturating_sub(REVERSE_SCAN_SIZE);
+    let read_len = (file_size - read_start) as usize;
+
+    let mut file_ref = file;
+    file_ref
+        .seek(SeekFrom::Start(read_start))
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+
+    let mut buffer = vec![0u8; read_len];
+    file_ref
+        .read_exact(&mut buffer)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+
+    let content = String::from_utf8_lossy(&buffer);
+
+    let mut last_seq = 0u64;
+    for caps in SEQ_RE.captures_iter(&content) {
+        if let Ok(seq) = caps[1].parse::<u64>() {
+            last_seq = seq;
+        }
+    }
+
+    Ok(last_seq)
 }

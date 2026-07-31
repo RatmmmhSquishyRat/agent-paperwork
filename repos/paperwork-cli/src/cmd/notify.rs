@@ -1,134 +1,137 @@
-//! `paperwork notify` — view/acknowledge notifications.
+//! Notify commands: read, push.
+
+use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Args;
-use serde::Serialize;
+use clap::{Args, Subcommand};
 
 use crate::cmd::Context;
 use crate::output::{self, OutputMode};
 
-/// Notification operations
 #[derive(Args)]
 pub struct NotifyArgs {
-    /// Target agent (defaults to current agent)
-    #[arg(long)]
-    pub agent: Option<String>,
-
-    /// Acknowledge all unread notifications
-    #[arg(long)]
-    pub ack: bool,
+    #[command(subcommand)]
+    command: NotifyCommand,
 }
 
-#[derive(Serialize)]
-struct NotifyOutput {
-    agent: String,
-    unread_count: usize,
-    notifications: Vec<NotifyItemJson>,
-}
+#[derive(Subcommand)]
+enum NotifyCommand {
+    /// Read notifications from a file
+    Read {
+        /// Path to the notification file
+        path: PathBuf,
+    },
 
-#[derive(Serialize)]
-struct NotifyItemJson {
-    timestamp: String,
-    from: String,
-    #[serde(rename = "type")]
-    notify_type: String,
-    thread: String,
-    seq: u64,
-    snippet: String,
+    /// Push a notification to a file
+    Push {
+        /// Path to the notification file
+        path: PathBuf,
+
+        /// Sender name
+        #[arg(long)]
+        from: String,
+
+        /// Thread path that triggered the notification
+        #[arg(long)]
+        thread: String,
+
+        /// Sequence number of the triggering message
+        #[arg(long)]
+        seq: u64,
+
+        /// Notification type: mention or reply
+        #[arg(long = "type")]
+        notify_type: String,
+
+        /// Snippet of the triggering message
+        #[arg(long, default_value = "")]
+        snippet: String,
+    },
 }
 
 pub fn run(ctx: &Context, args: NotifyArgs) -> Result<()> {
-    let agent = match &args.agent {
-        Some(a) => a.clone(),
-        None => ctx.current_agent()?,
-    };
+    match args.command {
+        NotifyCommand::Read { path } => {
+            let notifications = paperwork_core::ops::notify::notify_read(&path)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    if args.ack {
-        let acked = paperwork_core::ops::notify::ack_notify(&ctx.root, &agent)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        match ctx.mode {
-            OutputMode::Json => {
-                let out = serde_json::json!({
-                    "acknowledged": acked.len(),
-                    "agent": agent,
-                });
-                output::print_json(&out);
-            }
-            _ => {
-                if acked.is_empty() {
-                    output::success(ctx, "no unread notifications");
-                } else {
-                    output::success(
-                        ctx,
-                        &format!(
-                            "{} notifications acknowledged \u{2192} notifications/{}/history.md",
-                            acked.len(),
-                            agent
-                        ),
-                    );
-                }
-            }
-        }
-    } else {
-        let notifications = paperwork_core::ops::notify::list_unread(&ctx.root, &agent)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        match ctx.mode {
-            OutputMode::Json => {
-                let items: Vec<NotifyItemJson> = notifications
-                    .iter()
-                    .map(|n| NotifyItemJson {
-                        timestamp: n.timestamp.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-                        from: n.from.clone(),
-                        notify_type: match n.notify_type {
-                            paperwork_core::NotifyType::Mention => "mention".to_string(),
-                            paperwork_core::NotifyType::Reply => "reply".to_string(),
-                        },
-                        thread: n.thread_path.clone(),
-                        seq: n.seq,
-                        snippet: n.snippet.clone(),
-                    })
-                    .collect();
-                let out = NotifyOutput {
-                    agent: agent.clone(),
-                    unread_count: notifications.len(),
-                    notifications: items,
-                };
-                output::print_json(&out);
-            }
-            _ => {
-                if notifications.is_empty() {
-                    output::print_default(&format!(
-                        "notifications for {} \u{2014} 0 unread",
-                        agent
-                    ));
-                } else {
-                    let mut out = format!(
-                        "notifications for {} \u{2014} {} unread\n",
-                        agent,
-                        notifications.len()
-                    );
-                    for n in &notifications {
-                        let type_str = match n.notify_type {
-                            paperwork_core::NotifyType::Mention => "mention",
-                            paperwork_core::NotifyType::Reply => "reply",
-                        };
-                        out.push_str(&format!(
-                            "\n  {}  from {:<8} {}  in {} #{}\n",
-                            n.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-                            n.from,
-                            type_str,
-                            n.thread_path,
-                            n.seq
-                        ));
-                        out.push_str(&format!("    \"{}\"\n", n.snippet));
+            match ctx.mode {
+                OutputMode::Json => output::print_json(&notifications),
+                OutputMode::Plain => {
+                    if path.exists() {
+                        let content = std::fs::read_to_string(&path)
+                            .map_err(|e| anyhow::anyhow!("IO error: {}", e))?;
+                        output::print_plain(&content);
+                    } else {
+                        output::print_plain("(no notifications)");
                     }
-                    output::print_default(out.trim_end());
+                }
+                OutputMode::Default => {
+                    if notifications.is_empty() {
+                        output::print_default("(no notifications)");
+                    } else {
+                        for n in &notifications {
+                            output::print_default(&format!(
+                                "[{:?}] from {} in {} #{}: {}",
+                                n.notify_type, n.from, n.thread_path, n.seq, n.snippet
+                            ));
+                        }
+                    }
                 }
             }
+            Ok(())
+        }
+
+        NotifyCommand::Push {
+            path,
+            from,
+            thread,
+            seq,
+            notify_type,
+            snippet,
+        } => {
+            let nt = match notify_type.as_str() {
+                "mention" => paperwork_core::NotifyType::Mention,
+                "reply" => paperwork_core::NotifyType::Reply,
+                other => {
+                    anyhow::bail!(
+                        "Invalid notify type '{}'.\n  \u{2192} Use 'mention' or 'reply'.",
+                        other
+                    );
+                }
+            };
+
+            let notification = paperwork_core::Notification {
+                timestamp: chrono::Utc::now(),
+                from: from.clone(),
+                thread_path: thread,
+                seq,
+                notify_type: nt,
+                snippet,
+            };
+
+            // Derive name from file stem for the H1 heading
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Notifications".to_string());
+
+            paperwork_core::ops::notify::notify_push(&path, &name, &notification)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            match ctx.mode {
+                OutputMode::Json => {
+                    let result = serde_json::json!({
+                        "path": path.display().to_string(),
+                        "from": from,
+                        "type": format!("{:?}", nt),
+                        "seq": seq,
+                    });
+                    output::print_json(&result);
+                }
+                _ => output::success(ctx, &format!("Notification pushed → {}", path.display())),
+            }
+            Ok(())
         }
     }
-
-    Ok(())
 }
