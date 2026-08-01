@@ -1,3 +1,0 @@
-# Team
-
-- ./alice.profile.md

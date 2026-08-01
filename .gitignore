@@ -3,6 +3,7 @@
 
 # Test artifacts
 _selftest/
+_uxtest/
 test-v*/
 
 # IDE
