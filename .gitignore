@@ -1,6 +1,10 @@
 # Rust build artifacts
 **/target/
 
+# Test artifacts
+_selftest/
+test-v*/
+
 # IDE
 .idea/
 .vscode/
