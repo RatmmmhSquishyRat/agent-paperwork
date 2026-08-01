@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::cmd::Context;
+use crate::cmd::{ensure_suffix, Context};
 use crate::output::{self, OutputMode};
 
 #[derive(Args)]
@@ -104,6 +104,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             title,
             participants,
         } => {
+            let path = ensure_suffix(path, ".post.md");
             // Create the thread by sending a system/creation message
             // The first message establishes the thread with title as body
             let body = if participants.is_empty() {
@@ -143,6 +144,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             reply_to,
             mention,
         } => {
+            let path = ensure_suffix(path, ".post.md");
             // Reply carries implicit @: auto-add original sender to mentions
             let mut mentions = mention;
             if let Some(reply_seq) = reply_to {
@@ -174,6 +176,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
         }
 
         PostCommand::Read { path, from, to, mention, reply_to } => {
+            let path = ensure_suffix(path, ".post.md");
             let mut messages = paperwork_core::ops::thread::thread_read(&path, from, to)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -214,6 +217,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
         }
 
         PostCommand::Summary { path } => {
+            let path = ensure_suffix(path, ".post.md");
             let summary = paperwork_core::ops::thread::thread_summary(&path)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -241,6 +245,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             from,
             new_body,
         } => {
+            let path = ensure_suffix(path, ".post.md");
             paperwork_core::ops::thread::thread_edit(&path, seq, &from, &new_body)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 

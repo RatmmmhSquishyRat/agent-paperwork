@@ -16,3 +16,12 @@
 ## 追加feedback
 
 的确使用追随profile的文件来存储DM是一个糟糕的做法, GDM本身已经能够涵盖DM的功能了, 因此DM应当删除.
+
+## v0.2 feedback
+
+1. 管理的各个文件都应当使用自己的sub suffix, 类似 impl1.profile.md, meeting1.post.md等等
+2. 既然我们选择使用md作为文件格式, 那么就以正规简洁的方式组织信息结构, 严谨克制, 但是自由灵活地使用各个标题, 列表等等语法.
+3. 而矛盾点在于, 使用者输入的内容也需要是markdown格式. 因此:
+   1. 输入的时候, 把content类型的参数放在最后方便书写有换行的大片内容
+   2. 输入之后给一个markdown validation机制帮助检查markdown语法是否正确
+   3. 在我们的managed文件中, 以fenced code block形式包裹, 并设置为markdown block, 这样就能够让文件支持多层markdown了.

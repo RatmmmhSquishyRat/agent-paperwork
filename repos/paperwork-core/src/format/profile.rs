@@ -1,22 +1,22 @@
 //! Profile parsing and serialization.
 //!
-//! Format spec (§2.1):
+//! Format spec:
 //! ```markdown
 //! # <name>
 //!
-//! **Model**: <model-id>
-//! **Description**: <free-text>
+//! - Model: <model-id>
+//! - Description: <free-text>
 //!
 //! ## Scope
 //!
-//! **Read**: `<glob>`, `<glob>`, ...
-//! **Write**: `<glob>`, `<glob>`, ...
-//! **Owns**: `<glob>`, `<glob>`, ...
+//! - Read: `<glob>`, `<glob>`, ...
+//! - Write: `<glob>`, `<glob>`, ...
+//! - Owns: `<glob>`, `<glob>`, ...
 //! ```
 
 use crate::{PaperworkError, Profile, Result};
 
-use super::{extract_bold_key, normalize_line_endings, parse_scope_globs, serialize_scope_globs};
+use super::{extract_bullet_key, normalize_line_endings, parse_scope_globs, serialize_scope_globs};
 
 /// Parse a profile from Markdown content.
 pub fn parse_profile(content: &str) -> Result<Profile> {
@@ -53,8 +53,8 @@ pub fn parse_profile(content: &str) -> Result<Profile> {
             continue;
         }
 
-        // Bold key extraction
-        if let Some((key, value)) = extract_bold_key(trimmed) {
+        // Bullet key extraction
+        if let Some((key, value)) = extract_bullet_key(trimmed) {
             match key.as_str() {
                 "Model" => model = Some(value),
                 "Description" => description = Some(value),
@@ -71,7 +71,7 @@ pub fn parse_profile(content: &str) -> Result<Profile> {
     })?;
 
     let model = model.ok_or_else(|| {
-        PaperworkError::Parse(format!("missing **Model**: line for profile '{}'", name))
+        PaperworkError::Parse(format!("missing - Model: line for profile '{}'", name))
     })?;
 
     Ok(Profile {
@@ -89,19 +89,19 @@ pub fn serialize_profile(profile: &Profile) -> String {
     let mut out = String::new();
 
     out.push_str(&format!("# {}\n\n", profile.name));
-    out.push_str(&format!("**Model**: {}  \n", profile.model));
-    out.push_str(&format!("**Description**: {}\n\n", profile.description));
+    out.push_str(&format!("- Model: {}\n", profile.model));
+    out.push_str(&format!("- Description: {}\n\n", profile.description));
     out.push_str("## Scope\n\n");
     out.push_str(&format!(
-        "**Read**: {}  \n",
+        "- Read: {}\n",
         serialize_scope_globs(&profile.scope_read)
     ));
     out.push_str(&format!(
-        "**Write**: {}  \n",
+        "- Write: {}\n",
         serialize_scope_globs(&profile.scope_write)
     ));
     out.push_str(&format!(
-        "**Owns**: {}\n",
+        "- Owns: {}\n",
         serialize_scope_globs(&profile.scope_owns)
     ));
 
@@ -116,14 +116,14 @@ mod tests {
     fn test_parse_profile_basic() {
         let content = r#"# alice
 
-**Model**: gpt-4  
-**Description**: Test agent for unit tests
+- Model: gpt-4
+- Description: Test agent for unit tests
 
 ## Scope
 
-**Read**: `src/**`, `docs/**`  
-**Write**: `src/**`  
-**Owns**: `src/core/**`
+- Read: `src/**`, `docs/**`
+- Write: `src/**`
+- Owns: `src/core/**`
 "#;
         let profile = parse_profile(content).expect("should parse");
         assert_eq!(profile.name, "alice");
@@ -138,14 +138,14 @@ mod tests {
     fn test_parse_profile_empty_scope() {
         let content = r#"# bob
 
-**Model**: claude-3  
-**Description**: Minimal agent
+- Model: claude-3
+- Description: Minimal agent
 
 ## Scope
 
-**Read**: —  
-**Write**: —  
-**Owns**: —
+- Read: —
+- Write: —
+- Owns: —
 "#;
         let profile = parse_profile(content).expect("should parse");
         assert_eq!(profile.name, "bob");
@@ -158,14 +158,14 @@ mod tests {
     fn test_parse_profile_multi_glob() {
         let content = r#"# multi
 
-**Model**: test  
-**Description**: Multi-glob test
+- Model: test
+- Description: Multi-glob test
 
 ## Scope
 
-**Read**: `a/**`, `b/**`, `c/**`, `d/**`  
-**Write**: —  
-**Owns**: `x/*.rs`, `y/*.toml`
+- Read: `a/**`, `b/**`, `c/**`, `d/**`
+- Write: —
+- Owns: `x/*.rs`, `y/*.toml`
 "#;
         let profile = parse_profile(content).expect("should parse");
         assert_eq!(profile.scope_read.len(), 4);
@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn test_parse_profile_invalid_no_h1() {
-        let content = r#"**Model**: gpt-4
-**Description**: No name heading
+        let content = r#"- Model: gpt-4
+- Description: No name heading
 "#;
         let result = parse_profile(content);
         assert!(result.is_err());
@@ -203,17 +203,17 @@ mod tests {
     fn test_parse_profile_missing_model() {
         let content = r#"# alice
 
-**Description**: No model line
+- Description: No model line
 "#;
         let result = parse_profile(content);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("missing **Model**:"));
+        assert!(err.contains("missing - Model:"));
     }
 
     #[test]
     fn test_parse_profile_crlf() {
-        let content = "# alice\r\n\r\n**Model**: gpt-4  \r\n**Description**: CRLF test\r\n\r\n## Scope\r\n\r\n**Read**: —  \r\n**Write**: —  \r\n**Owns**: —\r\n";
+        let content = "# alice\r\n\r\n- Model: gpt-4\r\n- Description: CRLF test\r\n\r\n## Scope\r\n\r\n- Read: —\r\n- Write: —\r\n- Owns: —\r\n";
         let profile = parse_profile(content).expect("should parse CRLF");
         assert_eq!(profile.name, "alice");
         assert_eq!(profile.model, "gpt-4");
@@ -223,14 +223,14 @@ mod tests {
     fn test_parse_profile_unicode() {
         let content = r#"# ünïcödé
 
-**Model**: mödel-π  
-**Description**: Descriptión with émojis 🚀
+- Model: mödel-π
+- Description: Descriptión with émojis 🚀
 
 ## Scope
 
-**Read**: `src/**`  
-**Write**: —  
-**Owns**: —
+- Read: `src/**`
+- Write: —
+- Owns: —
 "#;
         let profile = parse_profile(content).expect("should parse unicode");
         assert_eq!(profile.name, "ünïcödé");

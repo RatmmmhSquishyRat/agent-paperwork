@@ -1,6 +1,6 @@
 //! Format layer: parsing and serialization of managed Markdown files.
 //!
-//! Shared utilities for boundary detection, bold-key extraction, and CRLF normalization.
+//! Shared utilities for boundary detection, bullet-key extraction, and CRLF normalization.
 
 pub mod contacts;
 pub mod manifest;
@@ -16,18 +16,18 @@ pub fn normalize_line_endings(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// Regex for extracting bold-key metadata lines: `**Key**: value`
-static BOLD_KEY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\*\*([^*]+)\*\*:\s*(.*)$").expect("valid regex"));
+/// Regex for extracting bullet-key metadata lines: `- Key: value`
+static BULLET_KEY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^- ([^:]+):\s*(.*)$").expect("valid regex"));
 
-/// Regex for message H3 header: `### #<seq> — <sender> · <timestamp>`
+/// Regex for message H3 header: `### #<seq> <sender> · <timestamp>`
 static MESSAGE_HEADER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^### #(\d+) — (.+) · (.+)$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^### #(\d+) (.+) · (.+)$").expect("valid regex"));
 
-/// Extract a bold-key value from a line.
-/// Returns (key, value) if the line matches `**Key**: value`.
-pub fn extract_bold_key(line: &str) -> Option<(String, String)> {
-    BOLD_KEY_RE.captures(line.trim()).map(|caps| {
+/// Extract a bullet-key value from a line.
+/// Returns (key, value) if the line matches `- Key: value`.
+pub fn extract_bullet_key(line: &str) -> Option<(String, String)> {
+    BULLET_KEY_RE.captures(line.trim()).map(|caps| {
         (
             caps[1].to_string(),
             caps[2].trim().to_string(),
@@ -52,19 +52,32 @@ pub fn is_boundary_line(line: &str) -> bool {
     line.trim() == "---"
 }
 
-/// Detect message boundaries in content.
+/// Check if a line opens or closes a 4-backtick fence.
+fn is_four_backtick_fence(line: &str) -> bool {
+    line.trim().starts_with("````")
+}
+
+/// Detect message boundaries in content (fence-aware).
 ///
 /// A message boundary is a `---` line immediately followed (within 2 lines)
-/// by a valid H3 header matching `### #\d+ — .+ · .+`.
-/// A lone `---` NOT followed by this pattern is body content (invariant I12).
+/// by a valid H3 header matching `### #\d+ .+ · .+`.
+/// A `---` inside a 4-backtick fenced code block is NEVER a boundary.
 ///
 /// Returns a list of (boundary_line_index, header_line_index) pairs.
 pub fn find_message_boundaries(lines: &[&str]) -> Vec<(usize, usize)> {
     let mut boundaries = Vec::new();
     let mut i = 0;
+    let mut in_fence = false;
 
     while i < lines.len() {
-        if is_boundary_line(lines[i]) {
+        // Track fence state
+        if is_four_backtick_fence(lines[i]) {
+            in_fence = !in_fence;
+            i += 1;
+            continue;
+        }
+
+        if !in_fence && is_boundary_line(lines[i]) {
             // Look ahead within 2 lines for a valid H3 header
             let mut found = false;
             for offset in 1..=2 {
@@ -82,7 +95,6 @@ pub fn find_message_boundaries(lines: &[&str]) -> Vec<(usize, usize)> {
             if found {
                 continue;
             }
-            // If no header found within 2 lines, this --- is body content
         }
         i += 1;
     }
@@ -130,6 +142,67 @@ pub fn serialize_scope_globs(globs: &[String]) -> String {
     }
 }
 
+/// Validate basic Markdown structure of content.
+///
+/// Returns a list of warning/error messages. Empty vec = valid.
+/// Checks:
+/// - Unclosed fenced code blocks (``` or ````)
+/// - Unclosed 4-backtick fences
+pub fn validate_markdown(content: &str) -> Vec<String> {
+    let content = normalize_line_endings(content);
+    let lines: Vec<&str> = content.lines().collect();
+    let mut issues = Vec::new();
+
+    // Track fence state
+    let mut in_four_fence = false;
+    let mut four_fence_start = 0;
+    let mut in_three_fence = false;
+    let mut three_fence_start = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        if in_four_fence {
+            // Inside a 4-backtick fence, only ```` closes it
+            if trimmed == "````" {
+                in_four_fence = false;
+            }
+            continue;
+        }
+
+        if in_three_fence {
+            if trimmed == "```" || (trimmed.starts_with("```") && !trimmed.starts_with("````")) {
+                in_three_fence = false;
+            }
+            continue;
+        }
+
+        // Not inside any fence
+        if trimmed.starts_with("````") {
+            in_four_fence = true;
+            four_fence_start = i + 1; // 1-based line number
+        } else if trimmed.starts_with("```") {
+            in_three_fence = true;
+            three_fence_start = i + 1;
+        }
+    }
+
+    if in_four_fence {
+        issues.push(format!(
+            "unclosed 4-backtick fence opened at line {}",
+            four_fence_start
+        ));
+    }
+    if in_three_fence {
+        issues.push(format!(
+            "unclosed 3-backtick fence opened at line {}",
+            three_fence_start
+        ));
+    }
+
+    issues
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,31 +215,38 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_bold_key() {
+    fn test_extract_bullet_key() {
         assert_eq!(
-            extract_bold_key("**Model**: gpt-4"),
+            extract_bullet_key("- Model: gpt-4"),
             Some(("Model".to_string(), "gpt-4".to_string()))
         );
         assert_eq!(
-            extract_bold_key("**To**: alice"),
+            extract_bullet_key("- To: alice"),
             Some(("To".to_string(), "alice".to_string()))
         );
-        assert_eq!(extract_bold_key("not a bold key"), None);
-        assert_eq!(extract_bold_key("**Empty**:"), Some(("Empty".to_string(), String::new())));
+        assert_eq!(extract_bullet_key("not a bullet key"), None);
+        assert_eq!(
+            extract_bullet_key("- Empty:"),
+            Some(("Empty".to_string(), String::new()))
+        );
+        assert_eq!(
+            extract_bullet_key("- Reply-To: #1"),
+            Some(("Reply-To".to_string(), "#1".to_string()))
+        );
     }
 
     #[test]
     fn test_parse_message_header() {
         assert_eq!(
-            parse_message_header("### #1 — alice · 2026-01-15T10:30:00Z"),
+            parse_message_header("### #1 alice · 2026-01-15T10:30:00Z"),
             Some((1, "alice".to_string(), "2026-01-15T10:30:00Z".to_string()))
         );
         assert_eq!(
-            parse_message_header("### #42 — bob-agent · 2026-07-29T23:59:59Z"),
+            parse_message_header("### #42 bob-agent · 2026-07-29T23:59:59Z"),
             Some((42, "bob-agent".to_string(), "2026-07-29T23:59:59Z".to_string()))
         );
         assert_eq!(parse_message_header("### not a message"), None);
-        assert_eq!(parse_message_header("# #1 — alice · time"), None);
+        assert_eq!(parse_message_header("# #1 alice · time"), None);
     }
 
     #[test]
@@ -180,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_find_message_boundaries_basic() {
-        let content = "---\n\n### #1 — alice · 2026-01-15T10:30:00Z\n\nbody\n\n---\n\n### #2 — bob · 2026-01-15T11:00:00Z\n\nbody2";
+        let content = "---\n\n### #1 alice · 2026-01-15T10:30:00Z\n\nbody\n\n---\n\n### #2 bob · 2026-01-15T11:00:00Z\n\nbody2";
         let lines: Vec<&str> = content.split('\n').collect();
         let boundaries = find_message_boundaries(&lines);
         assert_eq!(boundaries.len(), 2);
@@ -191,11 +271,21 @@ mod tests {
     #[test]
     fn test_find_message_boundaries_lone_hr() {
         // A --- NOT followed by header is body content
-        let content = "---\n\n### #1 — alice · 2026-01-15T10:30:00Z\n\nbody with\n---\ninside\n\n---\n\n### #2 — bob · 2026-01-15T11:00:00Z";
+        let content = "---\n\n### #1 alice · 2026-01-15T10:30:00Z\n\nbody with\n---\ninside\n\n---\n\n### #2 bob · 2026-01-15T11:00:00Z";
         let lines: Vec<&str> = content.split('\n').collect();
         let boundaries = find_message_boundaries(&lines);
         // Only 2 real boundaries, the --- in body is ignored
         assert_eq!(boundaries.len(), 2);
+    }
+
+    #[test]
+    fn test_find_message_boundaries_fence_aware() {
+        // --- inside a 4-backtick fence should NOT be a boundary
+        let content = "---\n\n### #1 alice · 2026-01-15T10:30:00Z\n\n````markdown\n---\n### #99 fake · 2026-01-01T00:00:00Z\n````\n\n---\n\n### #2 bob · 2026-01-15T11:00:00Z";
+        let lines: Vec<&str> = content.split('\n').collect();
+        let boundaries = find_message_boundaries(&lines);
+        assert_eq!(boundaries.len(), 2);
+        assert_eq!(boundaries[0], (0, 2));
     }
 
     #[test]
@@ -224,5 +314,35 @@ mod tests {
         let serialized = serialize_scope_globs(&globs);
         let parsed = parse_scope_globs(&serialized);
         assert_eq!(globs, parsed);
+    }
+
+    #[test]
+    fn test_validate_markdown_valid() {
+        let content = "# Hello\n\nSome text\n\n```rust\nfn main() {}\n```\n";
+        assert!(validate_markdown(content).is_empty());
+    }
+
+    #[test]
+    fn test_validate_markdown_unclosed_three_fence() {
+        let content = "# Hello\n\n```rust\nfn main() {}\n";
+        let issues = validate_markdown(content);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("unclosed 3-backtick fence"));
+    }
+
+    #[test]
+    fn test_validate_markdown_unclosed_four_fence() {
+        let content = "# Hello\n\n````markdown\nSome content\n";
+        let issues = validate_markdown(content);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("unclosed 4-backtick fence"));
+    }
+
+    #[test]
+    fn test_validate_markdown_nested_fences() {
+        // 4-backtick fence containing 3-backtick fence is valid
+        let content = "````markdown\n```rust\nfn main() {}\n```\n````\n";
+        let issues = validate_markdown(content);
+        assert!(issues.is_empty());
     }
 }

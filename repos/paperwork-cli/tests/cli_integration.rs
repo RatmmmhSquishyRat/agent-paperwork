@@ -92,8 +92,8 @@ fn profile_list() {
         .args(["--json", "profile", "list", dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("a.md"))
-        .stdout(predicate::str::contains("b.md"));
+        .stdout(predicate::str::contains("a.profile.md"))
+        .stdout(predicate::str::contains("b.profile.md"));
 }
 
 // ─── Post ───────────────────────────────────────────────────────────────────

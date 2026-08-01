@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::cmd::Context;
+use crate::cmd::{ensure_suffix, Context};
 use crate::output::{self, OutputMode};
 
 #[derive(Args)]
@@ -91,6 +91,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
             owner,
             description,
         } => {
+            let path = ensure_suffix(path, ".brief.md");
             paperwork_core::ops::manifest::brief_create(
                 &path,
                 &title,
@@ -118,6 +119,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
             regex,
             note,
         } => {
+            let path = ensure_suffix(path, ".brief.md");
             paperwork_core::ops::manifest::brief_add_entry(
                 &path,
                 &entry,
@@ -140,6 +142,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
         }
 
         BriefCommand::Remove { path, entry_title } => {
+            let path = ensure_suffix(path, ".brief.md");
             paperwork_core::ops::manifest::brief_remove_entry(&path, &entry_title)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -157,6 +160,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
         }
 
         BriefCommand::Read { path, full } => {
+            let path = ensure_suffix(path, ".brief.md");
             let manifest = paperwork_core::ops::manifest::brief_read(&path)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -198,6 +202,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
         }
 
         BriefCommand::Verify { path, base_dir } => {
+            let path = ensure_suffix(path, ".brief.md");
             let resolved_base = base_dir.unwrap_or_else(|| {
                 path.parent()
                     .map(|p| p.to_path_buf())

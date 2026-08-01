@@ -48,6 +48,10 @@ enum Commands {
     /// Contacts operations
     #[command(alias = "c")]
     Contacts(cmd::contacts::ContactsArgs),
+
+    /// Validate Markdown structure of a file
+    #[command(alias = "v")]
+    Validate(cmd::validate::ValidateArgs),
 }
 
 fn main() {
@@ -71,6 +75,7 @@ fn main() {
         Commands::Post(args) => cmd::post::run(&ctx, args),
         Commands::Brief(args) => cmd::brief::run(&ctx, args),
         Commands::Contacts(args) => cmd::contacts::run(&ctx, args),
+        Commands::Validate(args) => cmd::validate::run(&ctx, args),
     };
 
     if let Err(e) = result {

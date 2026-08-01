@@ -9,7 +9,7 @@ homepage = "https://github.com/RatmmmhSquishyRat/agent-paperwork"
 readme = "README.md"
 keywords = ["agent", "collaboration", "file-based", "cli", "markdown"]
 categories = ["command-line-utilities"]
-rust-version = "1.74"
+rust-version = "1.89"
 
 [[bin]]
 name = "paperwork"

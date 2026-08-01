@@ -24,7 +24,7 @@ fn create_profile_writes_file() {
     assert!(path.is_file());
     let content = fs::read_to_string(&path).expect("read failed");
     assert!(content.contains("# alice"));
-    assert!(content.contains("**Model**: gpt-4"));
+    assert!(content.contains("- Model: gpt-4"));
 }
 
 #[test]
@@ -494,7 +494,7 @@ fn contacts_create_writes_file() {
 
     assert!(path.is_file());
     let content = fs::read_to_string(&path).expect("read");
-    assert!(content.contains("# Contacts: my-team"));
+    assert!(content.contains("# my-team"));
 }
 
 #[test]

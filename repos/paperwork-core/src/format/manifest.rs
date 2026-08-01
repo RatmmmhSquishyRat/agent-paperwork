@@ -1,28 +1,25 @@
-//! Manifest parsing and serialization.
+//! Manifest (brief) parsing and serialization.
 //!
-//! Format spec (§2.7):
+//! Format spec:
 //! ```markdown
-//! # Manifest: <name>
+//! # <title>
 //!
-//! **Author**: <agent>
-//! **Created**: <ISO-8601>
-//! **Description**: <what this manifest helps you understand>
+//! - Owner: <agent>
+//! - Created: <ISO-8601>
+//! - Description: <what this brief helps you understand>
 //!
 //! ## Entries
 //!
 //! ### <entry-title>
 //!
-//! **Path**: `<relative-path-or-glob>`
-//! **Hash**: `<sha256-hex>`
-//! **Regex**: `<pattern>` | —
-//! **Groups**: <group1>, <group2> | —
+//! - Path: `<relative-path-or-glob>`
+//! - Hash: `<sha256-hex>`
+//! - Regex: `<pattern>` | —
 //!
 //! > Optional note about why this entry matters.
-//!
-//! ---
 //! ```
 //!
-//! Regex is stored in fenced code blocks (```regex ... ```) to handle special characters.
+//! Regex is stored in fenced code blocks (```regex ... ```) for complex patterns.
 //! Groups are derived automatically from regex named captures at parse time.
 
 use chrono::{DateTime, Utc};
@@ -30,7 +27,7 @@ use regex::Regex;
 
 use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
-use super::{extract_bold_key, normalize_line_endings};
+use super::{extract_bullet_key, normalize_line_endings};
 
 /// Extract named capture group names from a regex pattern.
 pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
@@ -82,9 +79,11 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
             continue;
         }
 
-        // H1: Manifest name
-        if let Some(stripped) = trimmed.strip_prefix("# Manifest: ") {
-            name = Some(stripped.to_string());
+        // H1: Title (new format: `# <title>`, no "Manifest: " prefix)
+        if trimmed.starts_with("# ") && !trimmed.starts_with("## ") && !trimmed.starts_with("### ") {
+            let title = trimmed[2..].trim().to_string();
+            // Support both old "# Manifest: X" and new "# X" format
+            name = Some(title.strip_prefix("Manifest: ").unwrap_or(&title).to_string());
             continue;
         }
 
@@ -104,7 +103,7 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
             continue;
         }
 
-        // Horizontal rule (entry separator)
+        // Horizontal rule (entry separator, optional)
         if trimmed == "---" {
             if let Some(builder) = current_entry.take() {
                 entries.push(builder.build());
@@ -112,10 +111,11 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
             continue;
         }
 
-        // Bold key extraction
-        if let Some((key, value)) = extract_bold_key(trimmed) {
+        // Bullet key extraction
+        if let Some((key, value)) = extract_bullet_key(trimmed) {
             match key.as_str() {
-                "Author" => author = Some(value),
+                "Owner" => author = Some(value),
+                "Author" => author = Some(value), // backward compat
                 "Created" => {
                     created = parse_timestamp(&value).ok();
                 }
@@ -142,12 +142,7 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
                             entry.groups = extract_regex_groups(&pattern);
                             entry.regex = Some(pattern);
                         }
-                        // If value indicates fenced block follows, it's handled above
                     }
-                }
-                "Groups" => {
-                    // Groups are derived from regex, but we parse for validation
-                    // This field is informational; actual groups come from regex
                 }
                 _ => {}
             }
@@ -175,15 +170,15 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
     }
 
     let name = name.ok_or_else(|| {
-        PaperworkError::Parse("missing manifest name heading (# Manifest: <name>)".to_string())
+        PaperworkError::Parse("missing title heading (# <title>)".to_string())
     })?;
 
     let author = author.ok_or_else(|| {
-        PaperworkError::Parse(format!("missing **Author**: line for manifest '{}'", name))
+        PaperworkError::Parse(format!("missing - Owner: line for brief '{}'", name))
     })?;
 
     let created = created.ok_or_else(|| {
-        PaperworkError::Parse(format!("missing or invalid **Created**: line for manifest '{}'", name))
+        PaperworkError::Parse(format!("missing or invalid - Created: line for brief '{}'", name))
     })?;
 
     Ok(Manifest {
@@ -254,13 +249,13 @@ impl EntryBuilder {
 pub fn serialize_manifest(manifest: &Manifest) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!("# Manifest: {}\n\n", manifest.name));
-    out.push_str(&format!("**Author**: {}  \n", manifest.author));
+    out.push_str(&format!("# {}\n\n", manifest.name));
+    out.push_str(&format!("- Owner: {}\n", manifest.author));
     out.push_str(&format!(
-        "**Created**: {}  \n",
+        "- Created: {}\n",
         manifest.created.format("%Y-%m-%dT%H:%M:%SZ")
     ));
-    out.push_str(&format!("**Description**: {}\n\n", manifest.description));
+    out.push_str(&format!("- Description: {}\n\n", manifest.description));
     out.push_str("## Entries\n");
 
     for entry in &manifest.entries {
@@ -275,33 +270,26 @@ fn serialize_entry(entry: &ManifestEntry) -> String {
     let mut out = String::new();
 
     out.push_str(&format!("\n### {}\n\n", entry.title));
-    out.push_str(&format!("**Path**: `{}`  \n", entry.path));
-    out.push_str(&format!("**Hash**: `{}`  \n", entry.hash));
+    out.push_str(&format!("- Path: `{}`\n", entry.path));
+    out.push_str(&format!("- Hash: `{}`\n", entry.hash));
 
     // Regex: use fenced code block for complex patterns, — for none
     match &entry.regex {
         Some(pattern) => {
             if pattern.contains('\n') || pattern.contains('`') {
                 // Complex pattern: use fenced code block
-                out.push_str("**Regex**:  \n");
+                out.push_str("- Regex:\n");
                 out.push_str("```regex\n");
                 out.push_str(pattern);
                 out.push_str("\n```\n");
             } else {
                 // Simple pattern: inline backticks
-                out.push_str(&format!("**Regex**: `{}`  \n", pattern));
+                out.push_str(&format!("- Regex: `{}`\n", pattern));
             }
         }
         None => {
-            out.push_str("**Regex**: —  \n");
+            out.push_str("- Regex: —\n");
         }
-    }
-
-    // Groups
-    if entry.groups.is_empty() {
-        out.push_str("**Groups**: —\n");
-    } else {
-        out.push_str(&format!("**Groups**: {}\n", entry.groups.join(", ")));
     }
 
     // Note
@@ -311,8 +299,6 @@ fn serialize_entry(entry: &ManifestEntry) -> String {
             out.push_str(&format!("> {}\n", line));
         }
     }
-
-    out.push_str("\n---\n");
 
     out
 }
@@ -328,24 +314,21 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_entry_full() {
-        let content = r#"# Manifest: onboarding
+        let content = r#"# onboarding
 
-**Author**: alice  
-**Created**: 2026-01-15T10:00:00Z  
-**Description**: Understanding the codebase structure
+- Owner: alice
+- Created: 2026-01-15T10:00:00Z
+- Description: Understanding the codebase structure
 
 ## Entries
 
 ### Main Entry Point
 
-**Path**: `src/main.rs`  
-**Hash**: `abc123def456`  
-**Regex**: `fn main\(\)`  
-**Groups**: —
+- Path: `src/main.rs`
+- Hash: `abc123def456`
+- Regex: `fn main\(\)`
 
 > This is where the application starts.
-
----
 "#;
         let manifest = parse_manifest(content).expect("should parse");
         assert_eq!(manifest.name, "onboarding");
@@ -363,22 +346,19 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_no_regex() {
-        let content = r#"# Manifest: simple
+        let content = r#"# simple
 
-**Author**: bob  
-**Created**: 2026-01-15T10:00:00Z  
-**Description**: Simple manifest
+- Owner: bob
+- Created: 2026-01-15T10:00:00Z
+- Description: Simple manifest
 
 ## Entries
 
 ### Config File
 
-**Path**: `config.toml`  
-**Hash**: `deadbeef`  
-**Regex**: —  
-**Groups**: —
-
----
+- Path: `config.toml`
+- Hash: `deadbeef`
+- Regex: —
 "#;
         let manifest = parse_manifest(content).expect("should parse");
         assert_eq!(manifest.entries.len(), 1);
@@ -388,40 +368,31 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_multi_entry() {
-        let content = r#"# Manifest: multi
+        let content = r#"# multi
 
-**Author**: alice  
-**Created**: 2026-01-15T10:00:00Z  
-**Description**: Multiple entries
+- Owner: alice
+- Created: 2026-01-15T10:00:00Z
+- Description: Multiple entries
 
 ## Entries
 
 ### Entry One
 
-**Path**: `src/one.rs`  
-**Hash**: `hash1`  
-**Regex**: —  
-**Groups**: —
-
----
+- Path: `src/one.rs`
+- Hash: `hash1`
+- Regex: —
 
 ### Entry Two
 
-**Path**: `src/two.rs`  
-**Hash**: `hash2`  
-**Regex**: —  
-**Groups**: —
-
----
+- Path: `src/two.rs`
+- Hash: `hash2`
+- Regex: —
 
 ### Entry Three
 
-**Path**: `src/three.rs`  
-**Hash**: `hash3`  
-**Regex**: —  
-**Groups**: —
-
----
+- Path: `src/three.rs`
+- Hash: `hash3`
+- Regex: —
 "#;
         let manifest = parse_manifest(content).expect("should parse");
         assert_eq!(manifest.entries.len(), 3);
@@ -432,22 +403,19 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_regex_with_groups() {
-        let content = r#"# Manifest: grouped
+        let content = r#"# grouped
 
-**Author**: alice  
-**Created**: 2026-01-15T10:00:00Z  
-**Description**: Regex with named groups
+- Owner: alice
+- Created: 2026-01-15T10:00:00Z
+- Description: Regex with named groups
 
 ## Entries
 
 ### Function Parser
 
-**Path**: `src/**/*.rs`  
-**Hash**: `abc123`  
-**Regex**: `fn (?<name>\w+)\((?<args>[^)]*)\)`  
-**Groups**: name, args
-
----
+- Path: `src/**/*.rs`
+- Hash: `abc123`
+- Regex: `fn (?<name>\w+)\((?<args>[^)]*)\)`
 "#;
         let manifest = parse_manifest(content).expect("should parse");
         let entry = &manifest.entries[0];
@@ -460,25 +428,22 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_fenced_regex() {
-        let content = r#"# Manifest: fenced
+        let content = r#"# fenced
 
-**Author**: alice  
-**Created**: 2026-01-15T10:00:00Z  
-**Description**: Fenced regex block
+- Owner: alice
+- Created: 2026-01-15T10:00:00Z
+- Description: Fenced regex block
 
 ## Entries
 
 ### Complex Pattern
 
-**Path**: `data.txt`  
-**Hash**: `xyz789`  
-**Regex**:  
+- Path: `data.txt`
+- Hash: `xyz789`
+- Regex:
 ```regex
 (?<year>\d{4})-(?<month>\d{2})
 ```
-**Groups**: year, month
-
----
 "#;
         let manifest = parse_manifest(content).expect("should parse");
         let entry = &manifest.entries[0];
@@ -545,17 +510,17 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_missing_name() {
-        let content = r#"**Author**: alice
-**Created**: 2026-01-15T10:00:00Z
+        let content = r#"- Owner: alice
+- Created: 2026-01-15T10:00:00Z
 "#;
         let result = parse_manifest(content);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing manifest name"));
+        assert!(result.unwrap_err().to_string().contains("missing title heading"));
     }
 
     #[test]
     fn test_parse_manifest_crlf() {
-        let content = "# Manifest: test\r\n\r\n**Author**: alice  \r\n**Created**: 2026-01-15T10:00:00Z  \r\n**Description**: CRLF test\r\n\r\n## Entries\r\n";
+        let content = "# test\r\n\r\n- Owner: alice\r\n- Created: 2026-01-15T10:00:00Z\r\n- Description: CRLF test\r\n\r\n## Entries\r\n";
         let manifest = parse_manifest(content).expect("should parse CRLF");
         assert_eq!(manifest.name, "test");
         assert_eq!(manifest.author, "alice");
@@ -563,25 +528,22 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_multiline_note() {
-        let content = r#"# Manifest: noted
+        let content = r#"# noted
 
-**Author**: alice  
-**Created**: 2026-01-15T10:00:00Z  
-**Description**: Multi-line note
+- Owner: alice
+- Created: 2026-01-15T10:00:00Z
+- Description: Multi-line note
 
 ## Entries
 
 ### Entry
 
-**Path**: `file.rs`  
-**Hash**: `abc`  
-**Regex**: —  
-**Groups**: —
+- Path: `file.rs`
+- Hash: `abc`
+- Regex: —
 
 > First line of note.
 > Second line of note.
-
----
 "#;
         let manifest = parse_manifest(content).expect("should parse");
         let note = manifest.entries[0].note.as_ref().expect("should have note");

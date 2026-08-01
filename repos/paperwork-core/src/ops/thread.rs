@@ -25,7 +25,7 @@ const REVERSE_SCAN_SIZE: u64 = (64 * 1024 + 256) as u64;
 
 /// Regex for extracting seq from message header.
 static SEQ_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"### #(\d+) —").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"### #(\d+) ").expect("valid regex"));
 
 /// Send a message to a thread. Auto-creates the file and parent dirs if absent.
 ///

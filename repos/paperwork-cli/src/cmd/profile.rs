@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::cmd::Context;
+use crate::cmd::{ensure_suffix, Context};
 use crate::output::{self, OutputMode};
 
 #[derive(Args)]
@@ -96,6 +96,7 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
             scope_write,
             scope_owns,
         } => {
+            let path = ensure_suffix(path, ".profile.md");
             paperwork_core::ops::profile::create_profile(&path, &name, &model, &description)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -124,6 +125,7 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
         }
 
         ProfileCommand::Show { path } => {
+            let path = ensure_suffix(path, ".profile.md");
             let profile = paperwork_core::ops::profile::show_profile(&path)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -164,6 +166,7 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
             scope_write,
             scope_owns,
         } => {
+            let path = ensure_suffix(path, ".profile.md");
             paperwork_core::ops::profile::edit_profile(
                 &path,
                 model.as_deref(),

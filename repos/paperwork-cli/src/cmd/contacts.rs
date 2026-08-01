@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::cmd::Context;
+use crate::cmd::{ensure_suffix, Context};
 use crate::output::{self, OutputMode};
 
 #[derive(Args)]
@@ -46,6 +46,7 @@ enum ContactsCommand {
 pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
     match args.command {
         ContactsCommand::Create { path, title } => {
+            let path = ensure_suffix(path, ".contacts.md");
             paperwork_core::ops::contacts::contacts_create(&path, &title)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -63,6 +64,7 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
         }
 
         ContactsCommand::Add { path, profile } => {
+            let path = ensure_suffix(path, ".contacts.md");
             paperwork_core::ops::contacts::contacts_add(&path, &profile)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -80,6 +82,7 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
         }
 
         ContactsCommand::Read { path } => {
+            let path = ensure_suffix(path, ".contacts.md");
             let contacts = paperwork_core::ops::contacts::contacts_read(&path)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 

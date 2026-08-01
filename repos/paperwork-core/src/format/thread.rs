@@ -1,33 +1,24 @@
 //! Thread message parsing and serialization.
 //!
-//! Format spec (§2.3):
-//! ```markdown
-//! ---
+//! Format spec (see tests for examples):
+//! - Message boundary: horizontal rule followed by H3 header
+//! - Metadata: bullet list (- To:, - Reply-To:, - Mentions:)
+//! - Body: wrapped in 4-backtick markdown fence
 //!
-//! ### #<seq> — <sender> · <ISO-8601>
-//!
-//! **To**: <recipient>
-//! **Reply-To**: #<seq> | —
-//!
-//! <body: free-form Markdown, multi-line>
-//!
-//! ---
-//! ```
-//!
-//! CRITICAL (invariant I12): Message boundary = `---` line immediately followed
-//! (within 2 lines) by a valid H3 header. A lone `---` NOT followed by this
-//! pattern is BODY CONTENT, not a boundary.
+//! CRITICAL: Message boundary = horizontal rule line immediately followed
+//! (within 2 lines) by a valid H3 header. A horizontal rule inside a 4-backtick
+//! fenced code block is NEVER a boundary.
 
 use chrono::{DateTime, Utc};
 
 use crate::{Message, PaperworkError, Result};
 
-use super::{extract_bold_key, find_message_boundaries, normalize_line_endings, parse_message_header};
+use super::{extract_bullet_key, find_message_boundaries, normalize_line_endings, parse_message_header};
 
 /// Parse all messages from thread content.
 ///
 /// Uses boundary-anchored parsing: only `---` + valid H3 header pairs
-/// trigger message splits. Lone `---` in body is content.
+/// trigger message splits. `---` inside 4-backtick fences is ignored.
 pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
     let content = normalize_line_endings(content);
 
@@ -75,7 +66,7 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
 
         // Extract metadata and body from content range
         let (to, reply_to, mentions, body) =
-            parse_message_content(&lines[content_start..content_end], seq)?;
+            parse_message_content(&lines[content_start..content_end])?;
 
         messages.push(Message {
             seq,
@@ -104,31 +95,39 @@ fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
     Err(format!("cannot parse '{}' as ISO-8601 timestamp", s))
 }
 
-/// Parse message content (metadata lines + body) from lines after header.
+/// Parse message content (metadata bullets + fenced body) from lines after header.
 #[allow(clippy::type_complexity)]
-fn parse_message_content(
-    lines: &[&str],
-    seq: u64,
-) -> Result<(Vec<String>, Option<u64>, Vec<String>, String)> {
+fn parse_message_content(lines: &[&str]) -> Result<(Vec<String>, Option<u64>, Vec<String>, String)> {
     let mut to: Vec<String> = Vec::new();
     let mut reply_to: Option<u64> = None;
     let mut mentions: Vec<String> = Vec::new();
+    let mut body = String::new();
+
+    let mut in_fence = false;
     let mut body_lines: Vec<&str> = Vec::new();
-    let mut in_body = false;
-    let mut metadata_done = false;
 
     for line in lines {
-        if !in_body {
-            let trimmed = line.trim();
+        let trimmed = line.trim();
 
-            // Skip empty lines before metadata
-            if trimmed.is_empty() && !metadata_done {
-                continue;
+        if in_fence {
+            // Check for closing 4-backtick fence
+            if trimmed == "````" {
+                in_fence = false;
+            } else {
+                body_lines.push(line);
             }
+            continue;
+        }
 
-            // Try to extract bold key metadata
-            if let Some((key, value)) = extract_bold_key(trimmed) {
-                metadata_done = true;
+        // Check for opening 4-backtick fence
+        if trimmed.starts_with("````") {
+            in_fence = true;
+            continue;
+        }
+
+        // Try to extract bullet metadata (only before fence)
+        if body.is_empty() && body_lines.is_empty() {
+            if let Some((key, value)) = extract_bullet_key(trimmed) {
                 match key.as_str() {
                     "To" => {
                         to = parse_to_field(&value);
@@ -139,22 +138,10 @@ fn parse_message_content(
                     "Mentions" => {
                         mentions = parse_to_field(&value);
                     }
-                    _ => {
-                        // Unknown metadata key - treat as body start
-                        in_body = true;
-                        body_lines.push(line);
-                    }
+                    _ => {}
                 }
                 continue;
             }
-
-            // First non-metadata, non-empty line starts body
-            if metadata_done || !trimmed.is_empty() {
-                in_body = true;
-                body_lines.push(line);
-            }
-        } else {
-            body_lines.push(line);
         }
     }
 
@@ -168,10 +155,7 @@ fn parse_message_content(
         body_lines.remove(0);
     }
 
-    let body = body_lines.join("\n");
-
-    // Validate: To field should be present (warning level, not error for flexibility)
-    let _ = seq; // Used for error context if needed
+    body = body_lines.join("\n");
 
     Ok((to, reply_to, mentions, body))
 }
@@ -215,27 +199,32 @@ pub fn serialize_message(msg: &Message) -> String {
         msg.to.join(", ")
     };
 
-    let reply_to_str = msg
-        .reply_to
-        .map(|r| format!("#{}", r))
-        .unwrap_or_else(|| "—".to_string());
-
-    let mentions_line = if msg.mentions.is_empty() {
-        String::new()
-    } else {
-        format!("**Mentions**: {}  \n", msg.mentions.join(", "))
-    };
-
-    format!(
-        "---\n\n### #{} — {} · {}\n\n**To**: {}  \n**Reply-To**: {}\n{}\n{}\n\n",
+    let mut out = String::new();
+    out.push_str("---\n\n");
+    out.push_str(&format!(
+        "### #{} {} · {}\n\n",
         msg.seq,
         msg.sender,
         msg.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-        to_str,
-        reply_to_str,
-        mentions_line,
-        msg.body
-    )
+    ));
+    out.push_str(&format!("- To: {}\n", to_str));
+
+    if let Some(r) = msg.reply_to {
+        out.push_str(&format!("- Reply-To: #{}\n", r));
+    }
+
+    if !msg.mentions.is_empty() {
+        out.push_str(&format!("- Mentions: {}\n", msg.mentions.join(", ")));
+    }
+
+    out.push_str("\n````markdown\n");
+    out.push_str(&msg.body);
+    if !msg.body.is_empty() && !msg.body.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("````\n\n");
+
+    out
 }
 
 /// Serialize multiple messages to a complete thread.
@@ -288,12 +277,13 @@ mod tests {
     fn test_parse_single_message() {
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 Hello, Bob!
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages.len(), 1);
@@ -308,30 +298,35 @@ Hello, Bob!
     fn test_parse_multi_message() {
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 First message
+````
 
 ---
 
-### #2 — bob · 2026-01-15T10:35:00Z
+### #2 bob · 2026-01-15T10:35:00Z
 
-**To**: alice  
-**Reply-To**: #1
+- To: alice
+- Reply-To: #1
 
+````markdown
 Second message
+````
 
 ---
 
-### #3 — alice · 2026-01-15T10:40:00Z
+### #3 alice · 2026-01-15T10:40:00Z
 
-**To**: bob  
-**Reply-To**: #2
+- To: bob
+- Reply-To: #2
 
+````markdown
 Third message
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages.len(), 3);
@@ -347,12 +342,14 @@ Third message
     fn test_parse_message_with_reply() {
         let content = r#"---
 
-### #2 — bob · 2026-01-15T10:35:00Z
+### #2 bob · 2026-01-15T10:35:00Z
 
-**To**: alice  
-**Reply-To**: #1
+- To: alice
+- Reply-To: #1
 
+````markdown
 Replying to your message
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages[0].reply_to, Some(1));
@@ -362,12 +359,13 @@ Replying to your message
     fn test_parse_message_no_reply() {
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 No reply
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages[0].reply_to, None);
@@ -377,16 +375,17 @@ No reply
     fn test_parse_message_multiline_body() {
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 Line 1
 Line 2
 Line 3
 Line 4
 Line 5
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages[0].body, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
@@ -394,28 +393,31 @@ Line 5
 
     #[test]
     fn test_parse_message_body_with_hr() {
-        // CRITICAL TEST: Body containing --- should NOT split the message
+        // CRITICAL TEST: Body containing --- inside fence should NOT split the message
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 Here is some text
 
 ---
 
 This is still part of the body!
+````
 
 ---
 
-### #2 — bob · 2026-01-15T10:35:00Z
+### #2 bob · 2026-01-15T10:35:00Z
 
-**To**: alice  
-**Reply-To**: #1
+- To: alice
+- Reply-To: #1
 
+````markdown
 Got it
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages.len(), 2);
@@ -426,26 +428,28 @@ Got it
 
     #[test]
     fn test_parse_message_body_with_h3() {
-        // Body containing H3 that doesn't match message pattern
+        // Body containing H3 that doesn't match message pattern (inside fence)
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 ### This is a body heading
 
 Some text under it
+````
 
 ---
 
-### #2 — bob · 2026-01-15T10:35:00Z
+### #2 bob · 2026-01-15T10:35:00Z
 
-**To**: alice  
-**Reply-To**: —
+- To: alice
 
+````markdown
 Ok
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages.len(), 2);
@@ -500,7 +504,7 @@ Ok
         };
 
         let serialized = serialize_message(&msg);
-        assert!(serialized.contains("**To**: all"));
+        assert!(serialized.contains("- To: all"));
 
         let parsed = parse_messages(&serialized).expect("should parse");
         assert_eq!(parsed[0].to, Vec::<String>::new());
@@ -599,7 +603,7 @@ Ok
 
     #[test]
     fn test_parse_crlf_thread() {
-        let content = "---\r\n\r\n### #1 — alice · 2026-01-15T10:30:00Z\r\n\r\n**To**: bob  \r\n**Reply-To**: —\r\n\r\nCRLF body\r\n";
+        let content = "---\r\n\r\n### #1 alice · 2026-01-15T10:30:00Z\r\n\r\n- To: bob\r\n\r\n````markdown\r\nCRLF body\r\n````\r\n";
         let messages = parse_messages(content).expect("should parse CRLF");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].body, "CRLF body");
@@ -609,13 +613,14 @@ Ok
     fn test_parse_unicode_message() {
         let content = r#"---
 
-### #1 — alicé · 2026-01-15T10:30:00Z
+### #1 alicé · 2026-01-15T10:30:00Z
 
-**To**: böb  
-**Reply-To**: —
+- To: böb
 
+````markdown
 Héllo Wörld! 🚀
 Unicode: 你好世界
+````
 "#;
         let messages = parse_messages(content).expect("should parse unicode");
         assert_eq!(messages[0].sender, "alicé");
@@ -628,12 +633,13 @@ Unicode: 你好世界
     fn test_parse_multi_recipient() {
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob, charlie, dave  
-**Reply-To**: —
+- To: bob, charlie, dave
 
+````markdown
 Multi-recipient message
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages[0].to, vec!["bob", "charlie", "dave"]);
@@ -671,13 +677,14 @@ Multi-recipient message
     fn test_body_with_bold_text() {
         let content = r#"---
 
-### #1 — alice · 2026-01-15T10:30:00Z
+### #1 alice · 2026-01-15T10:30:00Z
 
-**To**: bob  
-**Reply-To**: —
+- To: bob
 
+````markdown
 This has **bold text** in the body.
 And **another bold** line.
+````
 "#;
         let messages = parse_messages(content).expect("should parse");
         assert!(messages[0].body.contains("**bold text**"));
@@ -699,5 +706,47 @@ And **another bold** line.
         let serialized = serialize_message(&msg);
         let parsed = parse_messages(&serialized).expect("should parse");
         assert_eq!(parsed[0].body, "");
+    }
+
+    #[test]
+    fn test_body_with_triple_backtick_fence() {
+        // Body containing ``` inside ```` fence is safe
+        let content = r#"---
+
+### #1 alice · 2026-01-15T10:30:00Z
+
+- To: all
+
+````markdown
+Here is code:
+```rust
+fn main() {}
+```
+Done.
+````
+"#;
+        let messages = parse_messages(content).expect("should parse");
+        assert!(messages[0].body.contains("```rust"));
+        assert!(messages[0].body.contains("fn main() {}"));
+        assert!(messages[0].body.contains("Done."));
+    }
+
+    #[test]
+    fn test_parse_message_with_mentions() {
+        let content = r#"---
+
+### #2 bob · 2026-01-15T10:35:00Z
+
+- To: all
+- Reply-To: #1
+- Mentions: alice
+
+````markdown
+Reply body
+````
+"#;
+        let messages = parse_messages(content).expect("should parse");
+        assert_eq!(messages[0].mentions, vec!["alice"]);
+        assert_eq!(messages[0].reply_to, Some(1));
     }
 }
