@@ -4,7 +4,6 @@
 
 pub mod contacts;
 pub mod manifest;
-pub mod notification;
 pub mod profile;
 pub mod thread;
 

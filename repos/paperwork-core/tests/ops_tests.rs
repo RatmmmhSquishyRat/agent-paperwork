@@ -4,11 +4,10 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread as std_thread;
 
-use chrono::Utc;
 use tempfile::tempdir;
 
-use paperwork_core::ops::{contacts, manifest, notify, profile, thread};
-use paperwork_core::{Notification, NotifyType, VerifyResult};
+use paperwork_core::ops::{contacts, manifest, profile, thread};
+use paperwork_core::VerifyResult;
 
 // ============================================================================
 // Profile Ops Tests
@@ -545,64 +544,6 @@ fn contacts_read_not_found() {
     assert!(result.is_err());
 }
 
-// ============================================================================
-// Notification Ops Tests
-// ============================================================================
-
-#[test]
-fn notify_push_and_read() {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("alice.notify.md");
-
-    let notif = Notification {
-        timestamp: Utc::now(),
-        from: "bob".to_string(),
-        thread_path: "/threads/dm.md".to_string(),
-        seq: 1,
-        notify_type: NotifyType::Mention,
-        snippet: "Hey @alice!".to_string(),
-    };
-
-    notify::notify_push(&path, "alice", &notif).expect("push failed");
-
-    let notifications = notify::notify_read(&path).expect("read failed");
-    assert_eq!(notifications.len(), 1);
-    assert_eq!(notifications[0].from, "bob");
-    assert_eq!(notifications[0].snippet, "Hey @alice!");
-}
-
-#[test]
-fn notify_read_empty_for_missing_file() {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("missing.notify.md");
-
-    let notifications = notify::notify_read(&path).expect("read failed");
-    assert!(notifications.is_empty());
-}
-
-#[test]
-fn notify_push_multiple() {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("alice.notify.md");
-
-    for i in 1..=3 {
-        let notif = Notification {
-            timestamp: Utc::now(),
-            from: format!("agent{}", i),
-            thread_path: "/threads/t.md".to_string(),
-            seq: i,
-            notify_type: NotifyType::Mention,
-            snippet: format!("Notification {}", i),
-        };
-        notify::notify_push(&path, "alice", &notif).expect("push");
-    }
-
-    let notifications = notify::notify_read(&path).expect("read");
-    assert_eq!(notifications.len(), 3);
-}
-
-// ============================================================================
-// DM Path Helper Tests
 // ============================================================================
 // End-to-End: Profile + Post Thread Workflow
 // ============================================================================

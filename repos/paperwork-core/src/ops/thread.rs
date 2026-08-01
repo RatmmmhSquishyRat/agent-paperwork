@@ -1,6 +1,6 @@
 //! Thread operations: send, read, summary, edit — all path-explicit.
 //!
-//! Used for both DM threads and Post/GDM threads (same format).
+//! Used for Post/GDM threads (append-only group conversations).
 //! `thread_send` auto-creates the file (and parent dirs) if it doesn't exist.
 //! File locking (fs2) applies for send and edit.
 
@@ -257,7 +257,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             return Err(PaperworkError::NotFound {
                 resource: "Message".to_string(),
                 name: format!("#{}", seq),
-                hint: "Check the seq number with `paperwork dm read`.".to_string(),
+                hint: "Check the seq number with `paperwork post read`.".to_string(),
             });
         }
     };

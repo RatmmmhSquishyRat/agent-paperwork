@@ -87,21 +87,3 @@ pub enum VerifyResult {
     /// Regex fails to match.
     Stale,
 }
-
-/// Type of notification trigger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NotifyType {
-    Mention,
-    Reply,
-}
-
-/// A notification for an agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Notification {
-    pub timestamp: DateTime<Utc>,
-    pub from: String,
-    pub thread_path: String,
-    pub seq: u64,
-    pub notify_type: NotifyType,
-    pub snippet: String,
-}
