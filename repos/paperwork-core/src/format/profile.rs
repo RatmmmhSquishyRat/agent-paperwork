@@ -67,11 +67,19 @@ pub fn parse_profile(content: &str) -> Result<Profile> {
     }
 
     let name = name.ok_or_else(|| {
-        PaperworkError::Parse("missing agent name heading (# <name>)".to_string())
+        PaperworkError::Parse {
+            message: "missing agent name heading (# <name>)".to_string(),
+            fix: "add a top-level heading with the agent name".to_string(),
+            example: "# alice".to_string(),
+        }
     })?;
 
     let model = model.ok_or_else(|| {
-        PaperworkError::Parse(format!("missing - Model: line for profile '{}'", name))
+        PaperworkError::Parse {
+            message: format!("missing - Model: line for profile '{}'", name),
+            fix: "add a '- Model: <model-id>' bullet line".to_string(),
+            example: "- Model: gpt-4o".to_string(),
+        }
     })?;
 
     Ok(Profile {

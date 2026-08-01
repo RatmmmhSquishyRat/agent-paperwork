@@ -8,7 +8,7 @@ fn cmd() -> Command {
     Command::cargo_bin("paperwork").unwrap()
 }
 
-// ─── Profile ────────────────────────────────────────────────────────────────
+// --- Profile ---
 
 #[test]
 fn profile_create_and_show() {
@@ -19,13 +19,15 @@ fn profile_create_and_show() {
         .args(["profile", "create", path.to_str().unwrap(), "--name", "alice", "--model", "gpt-4"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\u{2713}"));
+        .stdout(predicate::str::contains("ok profile.create"))
+        .stdout(predicate::str::contains("name: alice"));
 
     cmd()
         .args(["profile", "show", path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("alice"));
+        .stdout(predicate::str::contains("ok profile.show"))
+        .stdout(predicate::str::contains("name: alice"));
 }
 
 #[test]
@@ -37,7 +39,8 @@ fn profile_create_json() {
         .args(["--json", "profile", "create", path.to_str().unwrap(), "--name", "bob"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"name\": \"bob\""));
+        .stdout(predicate::str::contains("\"name\":\"bob\""))
+        .stdout(predicate::str::contains("\"status\":\"ok\""));
 }
 
 #[test]
@@ -54,7 +57,7 @@ fn profile_create_duplicate_fails() {
         .args(["profile", "create", path.to_str().unwrap(), "--name", "y"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("\u{2717}"));
+        .stderr(predicate::str::contains("error already-exists:"));
 }
 
 #[test]
@@ -70,7 +73,9 @@ fn profile_edit() {
     cmd()
         .args(["profile", "edit", path.to_str().unwrap(), "--model", "claude-3"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok profile.edit"))
+        .stdout(predicate::str::contains("changed: model"));
 
     cmd()
         .args(["--json", "profile", "show", path.to_str().unwrap()])
@@ -96,7 +101,7 @@ fn profile_list() {
         .stdout(predicate::str::contains("b.profile.md"));
 }
 
-// ─── Post ───────────────────────────────────────────────────────────────────
+// --- Post ---
 
 #[test]
 fn post_create_send_read() {
@@ -106,18 +111,62 @@ fn post_create_send_read() {
     cmd()
         .args(["post", "create", path.to_str().unwrap(), "--title", "Design Discussion"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok post.create"));
 
     cmd()
         .args(["post", "send", path.to_str().unwrap(), "--from", "alice", "I think we should use Rust."])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok post.send"));
 
     cmd()
         .args(["post", "read", path.to_str().unwrap()])
         .assert()
         .success()
+        .stdout(predicate::str::contains("ok post.read"))
         .stdout(predicate::str::contains("Rust"));
+}
+
+#[test]
+fn post_send_stdin() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("stdin-thread.md");
+
+    cmd()
+        .args(["post", "create", path.to_str().unwrap(), "--title", "T"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--from", "alice", "--stdin"])
+        .write_stdin("Message from stdin")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ok post.send"));
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Message from stdin"));
+}
+
+#[test]
+fn post_send_empty_body_rejected() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty.md");
+
+    cmd()
+        .args(["post", "create", path.to_str().unwrap(), "--title", "T"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--from", "alice", "   "])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error validation:"));
 }
 
 #[test]
@@ -132,7 +181,8 @@ fn post_edit() {
     cmd()
         .args(["post", "edit", path.to_str().unwrap(), "--seq", "2", "--from", "bob", "edited"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok post.edit"));
 
     cmd()
         .args(["post", "read", path.to_str().unwrap(), "--from", "2", "--to", "2"])
@@ -153,10 +203,10 @@ fn post_summary() {
         .args(["--json", "post", "summary", path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"message_count\": 2"));
+        .stdout(predicate::str::contains("\"messages\":2"));
 }
 
-// ─── Brief ──────────────────────────────────────────────────────────────────
+// --- Brief ---
 
 #[test]
 fn brief_create_add_read() {
@@ -169,12 +219,14 @@ fn brief_create_add_read() {
     cmd()
         .args(["brief", "create", brief_path.to_str().unwrap(), "--title", "My Brief"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok brief.create"));
 
     cmd()
         .args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "notes.txt"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok brief.add"));
 
     cmd()
         .args(["brief", "read", brief_path.to_str().unwrap()])
@@ -197,13 +249,14 @@ fn brief_remove() {
     cmd()
         .args(["brief", "remove", brief_path.to_str().unwrap(), "--entry-title", "e.txt"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok brief.remove"));
 
     cmd()
         .args(["--json", "brief", "read", brief_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"entries\": []"));
+        .stdout(predicate::str::contains("\"entries\":[]"));
 }
 
 #[test]
@@ -222,18 +275,18 @@ fn brief_verify() {
         .args(["--json", "brief", "verify", brief_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fresh"));
+        .stdout(predicate::str::contains("fresh"));
 
-    // Modify file → shifted
+    // Modify file -> shifted
     std::fs::write(&entry_file, "modified").unwrap();
     cmd()
         .args(["--json", "brief", "verify", brief_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shifted"));
+        .stdout(predicate::str::contains("shifted"));
 }
 
-// ─── Contacts ───────────────────────────────────────────────────────────────
+// --- Contacts ---
 
 #[test]
 fn contacts_create_add_read() {
@@ -246,32 +299,67 @@ fn contacts_create_add_read() {
     cmd()
         .args(["contacts", "create", contacts_path.to_str().unwrap(), "--title", "Team"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok contacts.create"));
 
     cmd()
         .args(["contacts", "add", contacts_path.to_str().unwrap(), "--profile", profile_path.to_str().unwrap()])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("ok contacts.add"));
 
     cmd()
         .args(["--json", "contacts", "read", contacts_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("agent.md"));
+        .stdout(predicate::str::contains("agent"));
 }
 
-// ─── Global flags ───────────────────────────────────────────────────────────
+// --- Validate ---
 
 #[test]
-fn quiet_suppresses_success() {
+fn validate_post_file() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("thread.md");
+
+    cmd().args(["post", "create", path.to_str().unwrap(), "--title", "T"]).assert().success();
+
+    // The actual file created has .post.md suffix
+    let actual_path = dir.path().join("thread.post.md");
+    cmd()
+        .args(["validate", actual_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ok validate"));
+}
+
+#[test]
+fn validate_unknown_suffix() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("random.txt");
+    std::fs::write(&path, "hello").unwrap();
+
+    cmd()
+        .args(["validate", path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error format:"));
+}
+
+// --- Global flags ---
+
+#[test]
+fn quiet_suppresses_status_line() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("q.md");
 
+    // Quiet suppresses the "ok" status line but still outputs fields
     cmd()
         .args(["--quiet", "profile", "create", path.to_str().unwrap(), "--name", "q"])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::contains("name: q"))
+        .stdout(predicate::str::contains("ok").not());
 }
 
 #[test]
@@ -280,4 +368,14 @@ fn error_exit_code_1() {
         .args(["profile", "show", "nonexistent/path/file.md"])
         .assert()
         .code(1);
+}
+
+#[test]
+fn json_error_on_stdout() {
+    cmd()
+        .args(["--json", "profile", "show", "nonexistent/path/file.md"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("\"status\":\"error\""))
+        .stdout(predicate::str::contains("\"exit_code\":1"));
 }

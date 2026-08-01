@@ -51,6 +51,8 @@ pub fn thread_send(
         fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
             path: parent.to_path_buf(),
             source: e,
+            fix: "check that the parent directory is writable".to_string(),
+            example: String::new(),
         })?;
     }
 
@@ -63,12 +65,16 @@ pub fn thread_send(
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check that the file path is accessible".to_string(),
+            example: String::new(),
         })?;
 
     // Acquire exclusive lock (blocks concurrent writers)
     file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "another process may hold the lock; retry shortly".to_string(),
+        example: String::new(),
     })?;
 
     // Read last seq within lock
@@ -93,6 +99,8 @@ pub fn thread_send(
         return Err(PaperworkError::MessageTooLarge {
             size: serialized.len(),
             max: MAX_MESSAGE_SIZE,
+            fix: "split into smaller messages".to_string(),
+            example: String::new(),
         });
     }
 
@@ -103,11 +111,15 @@ pub fn thread_send(
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check disk space and file permissions".to_string(),
+            example: String::new(),
         })?;
 
     file.unlock().map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file handle validity".to_string(),
+        example: String::new(),
     })?;
 
     Ok(new_seq)
@@ -122,13 +134,16 @@ pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Ve
         return Err(PaperworkError::NotFound {
             resource: "Thread".to_string(),
             name: path.display().to_string(),
-            hint: "Send a message first to create the thread.".to_string(),
+            fix: "send a message first to create the thread".to_string(),
+            example: format!("paperwork post send {} --from <name> <body>", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     let messages = parse_messages(&content)?;
@@ -159,6 +174,8 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     let messages = parse_messages(&content)?;
@@ -207,7 +224,8 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         return Err(PaperworkError::NotFound {
             resource: "Thread".to_string(),
             name: path.display().to_string(),
-            hint: "Cannot edit a non-existent thread.".to_string(),
+            fix: "cannot edit a non-existent thread".to_string(),
+            example: format!("paperwork post send {} --from <name> <body>", path.display()),
         });
     }
 
@@ -218,11 +236,15 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
         })?;
 
     file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "another process may hold the lock; retry shortly".to_string(),
+        example: String::new(),
     })?;
 
     // Read content through the locked file handle
@@ -231,11 +253,15 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
         })?;
     file.read_to_string(&mut content)
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
         })?;
 
     let mut messages = parse_messages(&content)?;
@@ -245,7 +271,8 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         return Err(PaperworkError::NotFound {
             resource: "Message".to_string(),
             name: format!("#{}", seq),
-            hint: "Thread is empty.".to_string(),
+            fix: "thread is empty; send a message first".to_string(),
+            example: format!("paperwork post send {} --from <name> <body>", path.display()),
         });
     }
 
@@ -257,7 +284,8 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             return Err(PaperworkError::NotFound {
                 resource: "Message".to_string(),
                 name: format!("#{}", seq),
-                hint: "Check the seq number with `paperwork post read`.".to_string(),
+                fix: "check the seq number with `paperwork post read`".to_string(),
+                example: format!("paperwork post read {}", path.display()),
             });
         }
     };
@@ -273,7 +301,8 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 "Message #{} was sent by '{}', not '{}'",
                 seq, msg.sender, sender
             ),
-            hint: "You can only edit your own messages.".to_string(),
+            fix: "you can only edit your own messages".to_string(),
+            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), seq, msg.sender),
         });
     }
 
@@ -293,7 +322,8 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 "Message #{} is not your most recent message (your last is #{})",
                 seq, sender_last_seq
             ),
-            hint: "You can only edit your most recent message.".to_string(),
+            fix: "you can only edit your most recent message".to_string(),
+            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), sender_last_seq, sender),
         });
     }
 
@@ -307,7 +337,8 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 "Message #{} is not the final message in thread (last is #{})",
                 seq, last_seq
             ),
-            hint: "You can only edit the final message in a thread.".to_string(),
+            fix: "you can only edit the final message in a thread".to_string(),
+            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), last_seq, sender),
         });
     }
 
@@ -320,21 +351,29 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     file.set_len(0).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
     file.seek(SeekFrom::Start(0))
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
         })?;
     file.write_all(serialized.as_bytes())
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check disk space and file permissions".to_string(),
+            example: String::new(),
         })?;
 
     file.unlock().map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file handle validity".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -347,6 +386,8 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
     let metadata = file.metadata().map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file handle validity".to_string(),
+        example: String::new(),
     })?;
 
     let file_size = metadata.len();
@@ -363,6 +404,8 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
         })?;
 
     let mut buffer = vec![0u8; read_len];
@@ -371,6 +414,8 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
+            fix: "check file integrity".to_string(),
+            example: String::new(),
         })?;
 
     let content = String::from_utf8_lossy(&buffer);

@@ -16,7 +16,8 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
         return Err(PaperworkError::AlreadyExists {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            hint: "Use `paperwork profile edit` to modify an existing profile.".to_string(),
+            fix: "use `paperwork profile edit` to modify an existing profile".to_string(),
+            example: format!("paperwork profile edit {} --model <new-model>", path.display()),
         });
     }
 
@@ -25,6 +26,8 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
         fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
             path: parent.to_path_buf(),
             source: e,
+            fix: "check that the parent directory is writable".to_string(),
+            example: String::new(),
         })?;
     }
 
@@ -41,6 +44,8 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
     fs::write(path, content).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -52,13 +57,16 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork profile create <path>` first.".to_string(),
+            fix: "run `paperwork profile create <path>` first".to_string(),
+            example: format!("paperwork profile create {} --name <agent>", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     parse_profile(&content)
@@ -79,13 +87,16 @@ pub fn edit_profile(
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork profile create <path>` first.".to_string(),
+            fix: "run `paperwork profile create <path>` first".to_string(),
+            example: format!("paperwork profile create {} --name <agent>", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     let mut profile = parse_profile(&content)?;
@@ -110,6 +121,8 @@ pub fn edit_profile(
     fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())

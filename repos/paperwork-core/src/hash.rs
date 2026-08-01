@@ -23,6 +23,8 @@ pub fn hash_file(path: &Path) -> Result<String> {
     let data = fs::read(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the file exists and is readable".to_string(),
+        example: String::new(),
     })?;
     Ok(hash_bytes(&data))
 }

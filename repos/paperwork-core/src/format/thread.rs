@@ -40,20 +40,28 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
         // Parse the header
         let (seq, sender, timestamp_str) = parse_message_header(lines[header_line]).ok_or_else(
             || {
-                PaperworkError::Parse(format!(
-                    "invalid message header at line {}: '{}'",
-                    header_line + 1,
-                    lines[header_line]
-                ))
+                PaperworkError::Parse {
+                    message: format!(
+                        "invalid message header at line {}: '{}'",
+                        header_line + 1,
+                        lines[header_line]
+                    ),
+                    fix: "expected format: ### #<seq> <sender> . <timestamp>".to_string(),
+                    example: "### #1 alice . 2026-01-15T10:30:00Z".to_string(),
+                }
             },
         )?;
 
         // Parse timestamp
         let timestamp = parse_timestamp(&timestamp_str).map_err(|e| {
-            PaperworkError::Parse(format!(
-                "invalid timestamp '{}' in message #{}: {}",
-                timestamp_str, seq, e
-            ))
+            PaperworkError::Parse {
+                message: format!(
+                    "invalid timestamp '{}' in message #{}: {}",
+                    timestamp_str, seq, e
+                ),
+                fix: "use ISO-8601 format: YYYY-MM-DDTHH:MM:SSZ".to_string(),
+                example: "2026-01-15T10:30:00Z".to_string(),
+            }
         })?;
 
         // Determine the content range for this message
@@ -241,10 +249,14 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
 
     // First message should be seq 1
     if messages[0].seq != 1 {
-        return Err(PaperworkError::Validation(format!(
-            "first message has seq {}, expected 1",
-            messages[0].seq
-        )));
+        return Err(PaperworkError::Validation {
+            message: format!(
+                "first message has seq {}, expected 1",
+                messages[0].seq
+            ),
+            fix: "thread messages must start at seq 1".to_string(),
+            example: String::new(),
+        });
     }
 
     for window in messages.windows(2) {
@@ -252,12 +264,16 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
         let curr = &window[1];
 
         if curr.seq != prev.seq + 1 {
-            return Err(PaperworkError::Validation(format!(
-                "sequence gap: message #{} followed by #{} (expected #{})",
-                prev.seq,
-                curr.seq,
-                prev.seq + 1
-            )));
+            return Err(PaperworkError::Validation {
+                message: format!(
+                    "sequence gap: message #{} followed by #{} (expected #{})",
+                    prev.seq,
+                    curr.seq,
+                    prev.seq + 1
+                ),
+                fix: "message sequence numbers must be consecutive with no gaps".to_string(),
+                example: String::new(),
+            });
         }
     }
 

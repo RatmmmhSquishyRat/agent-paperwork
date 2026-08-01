@@ -1,6 +1,6 @@
 //! paperwork-cli: Stateless, path-explicit CLI for Agent Paperwork.
 //!
-//! Thin CLI layer: parses args → calls paperwork_core::ops → formats output.
+//! Thin CLI layer: parses args -> calls paperwork_core::ops -> formats output.
 //! No workspace, no init, no login. Every command takes explicit file paths.
 
 mod cmd;
@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 
 use crate::output::OutputMode;
 
-/// Agent Paperwork — stateless file-based collaboration toolkit for AI agents.
+/// Agent Paperwork - stateless file-based collaboration toolkit for AI agents.
 #[derive(Parser)]
 #[command(name = "paperwork", version, about, long_about = None)]
 struct Cli {
@@ -24,7 +24,7 @@ struct Cli {
     #[arg(long, global = true)]
     plain: bool,
 
-    /// Suppress confirmation messages
+    /// Suppress status line (still outputs fields and body)
     #[arg(short, long, global = true)]
     quiet: bool,
 
@@ -38,7 +38,7 @@ enum Commands {
     #[command(alias = "p")]
     Profile(cmd::profile::ProfileArgs),
 
-    /// Post (group thread) operations — also covers 1:1 conversations
+    /// Post (group thread) operations - also covers 1:1 conversations
     Post(cmd::post::PostArgs),
 
     /// Brief (reading list / knowledge brief) operations
@@ -79,8 +79,19 @@ fn main() {
     };
 
     if let Err(e) = result {
-        output::print_error(&ctx, &e);
-        let code = if e.is::<clap::Error>() { 2 } else { 1 };
-        process::exit(code);
+        // Try to downcast to PaperworkError for structured output
+        if let Some(pw_err) = e.downcast_ref::<paperwork_core::PaperworkError>() {
+            output::emit_err(
+                &ctx,
+                pw_err.category(),
+                &pw_err.to_string(),
+                &pw_err.fix(),
+                &pw_err.example(),
+            );
+        } else {
+            // Generic anyhow error
+            output::emit_err(&ctx, "io", &e.to_string(), "", "");
+        }
+        process::exit(1);
     }
 }

@@ -18,7 +18,8 @@ pub fn contacts_create(path: &Path, title: &str) -> Result<()> {
         return Err(PaperworkError::AlreadyExists {
             resource: "Contacts".to_string(),
             name: path.display().to_string(),
-            hint: "Use `paperwork contacts add` to add entries.".to_string(),
+            fix: "use `paperwork contacts add` to add entries".to_string(),
+            example: format!("paperwork contacts add {} --profile <path>", path.display()),
         });
     }
 
@@ -26,6 +27,8 @@ pub fn contacts_create(path: &Path, title: &str) -> Result<()> {
         fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
             path: parent.to_path_buf(),
             source: e,
+            fix: "check that the parent directory is writable".to_string(),
+            example: String::new(),
         })?;
     }
 
@@ -33,6 +36,8 @@ pub fn contacts_create(path: &Path, title: &str) -> Result<()> {
     fs::write(path, content).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -47,13 +52,16 @@ pub fn contacts_add(path: &Path, profile_path: &str) -> Result<()> {
         return Err(PaperworkError::NotFound {
             resource: "Contacts".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork contacts create <path>` first.".to_string(),
+            fix: "run `paperwork contacts create <path>` first".to_string(),
+            example: format!("paperwork contacts create {}", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     let title = parse_contacts_title(&content)?;
@@ -73,6 +81,8 @@ pub fn contacts_add(path: &Path, profile_path: &str) -> Result<()> {
     fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -84,13 +94,16 @@ pub fn contacts_read(path: &Path) -> Result<Vec<ContactEntry>> {
         return Err(PaperworkError::NotFound {
             resource: "Contacts".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork contacts create <path>` first.".to_string(),
+            fix: "run `paperwork contacts create <path>` first".to_string(),
+            example: format!("paperwork contacts create {}", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     parse_contacts(&content)

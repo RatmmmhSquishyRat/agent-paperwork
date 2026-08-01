@@ -97,19 +97,12 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                 &title,
                 owner.as_deref(),
                 &description,
-            )
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            )?;
 
-            match ctx.mode {
-                OutputMode::Json => {
-                    let result = serde_json::json!({
-                        "path": path.display().to_string(),
-                        "title": title,
-                    });
-                    output::print_json(&result);
-                }
-                _ => output::success(ctx, &format!("Brief created: {}", path.display())),
-            }
+            let env = output::Envelope::new("brief.create", path.display().to_string())
+                .field("path", &path.display().to_string())
+                .field("title", &title);
+            output::emit_ok(ctx, env);
             Ok(())
         }
 
@@ -125,77 +118,62 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                 &entry,
                 regex.as_deref(),
                 note.as_deref(),
-            )
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            )?;
 
-            match ctx.mode {
-                OutputMode::Json => {
-                    let result = serde_json::json!({
-                        "brief": path.display().to_string(),
-                        "entry": entry,
-                    });
-                    output::print_json(&result);
-                }
-                _ => output::success(ctx, &format!("Entry added: {}", entry)),
-            }
+            let conclusion = format!("{} -> {}", entry, path.display());
+            let env = output::Envelope::new("brief.add", conclusion)
+                .field("brief", &path.display().to_string())
+                .field("entry", &entry);
+            output::emit_ok(ctx, env);
             Ok(())
         }
 
         BriefCommand::Remove { path, entry_title } => {
             let path = ensure_suffix(path, ".brief.md");
-            paperwork_core::ops::manifest::brief_remove_entry(&path, &entry_title)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            paperwork_core::ops::manifest::brief_remove_entry(&path, &entry_title)?;
 
-            match ctx.mode {
-                OutputMode::Json => {
-                    let result = serde_json::json!({
-                        "brief": path.display().to_string(),
-                        "removed": entry_title,
-                    });
-                    output::print_json(&result);
-                }
-                _ => output::success(ctx, &format!("Entry removed: {}", entry_title)),
-            }
+            let env = output::Envelope::new("brief.remove", entry_title.clone())
+                .field("brief", &path.display().to_string())
+                .field("removed", &entry_title);
+            output::emit_ok(ctx, env);
             Ok(())
         }
 
-        BriefCommand::Read { path, full } => {
+        BriefCommand::Read { path, full: _ } => {
             let path = ensure_suffix(path, ".brief.md");
-            let manifest = paperwork_core::ops::manifest::brief_read(&path)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let manifest = paperwork_core::ops::manifest::brief_read(&path)?;
 
             match ctx.mode {
-                OutputMode::Json => output::print_json(&manifest),
+                OutputMode::Json => {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("status".to_string(), serde_json::json!("ok"));
+                    obj.insert("command".to_string(), serde_json::json!("brief.read"));
+                    obj.insert("conclusion".to_string(), serde_json::json!(format!("{} entries", manifest.entries.len())));
+                    obj.insert("title".to_string(), serde_json::json!(manifest.name));
+                    obj.insert("owner".to_string(), serde_json::json!(manifest.author));
+                    let entries_json: Vec<serde_json::Value> = manifest.entries.iter().map(|e| {
+                        serde_json::json!({
+                            "title": e.title,
+                            "path": e.path,
+                            "hash": e.hash,
+                        })
+                    }).collect();
+                    obj.insert("entries".to_string(), serde_json::json!(entries_json));
+                    println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+                }
                 OutputMode::Plain => {
-                    let content = std::fs::read_to_string(&path)
-                        .map_err(|e| anyhow::anyhow!("IO error: {}", e))?;
+                    let content = std::fs::read_to_string(&path)?;
                     output::print_plain(&content);
                 }
                 OutputMode::Default => {
-                    output::print_default(&format!("# {}", manifest.name));
-                    if !manifest.author.is_empty() {
-                        output::print_default(&format!("Owner: {}", manifest.author));
-                    }
-                    if !manifest.description.is_empty() {
-                        output::print_default(&manifest.description);
-                    }
-                    output::print_default(&format!("Entries: {}", manifest.entries.len()));
-                    for entry in &manifest.entries {
-                        if full {
-                            output::print_default(&format!(
-                                "  - {} (path: {}, hash: {})",
-                                entry.title, entry.path, entry.hash
-                            ));
-                            if let Some(ref re) = entry.regex {
-                                output::print_default(&format!("    regex: {}", re));
-                            }
-                            if let Some(ref note) = entry.note {
-                                output::print_default(&format!("    note: {}", note));
-                            }
-                        } else {
-                            output::print_default(&format!("  - {}", entry.title));
-                        }
-                    }
+                    let mut env = output::Envelope::new("brief.read", format!("{} entries", manifest.entries.len()))
+                        .field("title", &manifest.name)
+                        .field("owner", &manifest.author);
+                    let body_lines: Vec<String> = manifest.entries.iter().map(|e| {
+                        format!("{}: {}", e.title, e.path)
+                    }).collect();
+                    env = env.body_lines(body_lines);
+                    output::emit_ok(ctx, env);
                 }
             }
             Ok(())
@@ -209,8 +187,10 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     .unwrap_or_else(|| PathBuf::from("."))
             });
 
-            let results = paperwork_core::ops::manifest::brief_verify(&path, &resolved_base)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let results = paperwork_core::ops::manifest::brief_verify(&path, &resolved_base)?;
+
+            let fresh_count = results.iter().filter(|(_, r)| *r == paperwork_core::VerifyResult::Fresh).count();
+            let total = results.len();
 
             match ctx.mode {
                 OutputMode::Json => {
@@ -220,24 +200,29 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                             serde_json::json!({
                                 "title": entry.title,
                                 "path": entry.path,
-                                "status": format!("{:?}", result),
+                                "status": format!("{:?}", result).to_lowercase(),
                             })
                         })
                         .collect();
-                    output::print_json(&json_results);
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("status".to_string(), serde_json::json!("ok"));
+                    obj.insert("command".to_string(), serde_json::json!("brief.verify"));
+                    obj.insert("conclusion".to_string(), serde_json::json!(format!("{}/{} fresh", fresh_count, total)));
+                    obj.insert("results".to_string(), serde_json::json!(json_results));
+                    println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
                 }
                 _ => {
-                    for (entry, result) in &results {
-                        let icon = match result {
-                            paperwork_core::VerifyResult::Fresh => "\u{2713}",
-                            paperwork_core::VerifyResult::Shifted => "~",
-                            paperwork_core::VerifyResult::Stale => "\u{2717}",
+                    let mut env = output::Envelope::new("brief.verify", format!("{}/{} fresh", fresh_count, total));
+                    let body_lines: Vec<String> = results.iter().map(|(entry, result)| {
+                        let status = match result {
+                            paperwork_core::VerifyResult::Fresh => "fresh",
+                            paperwork_core::VerifyResult::Shifted => "shifted",
+                            paperwork_core::VerifyResult::Stale => "stale",
                         };
-                        output::print_default(&format!(
-                            "{} {} ({:?})",
-                            icon, entry.title, result
-                        ));
-                    }
+                        format!("{}: {}", entry.title, status)
+                    }).collect();
+                    env = env.body_lines(body_lines);
+                    output::emit_ok(ctx, env);
                 }
             }
             Ok(())

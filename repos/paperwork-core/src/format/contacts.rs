@@ -25,9 +25,11 @@ pub fn parse_contacts_title(content: &str) -> Result<String> {
             }
         }
     }
-    Err(PaperworkError::Parse(
-        "missing contacts title heading (# <title>)".to_string(),
-    ))
+    Err(PaperworkError::Parse {
+        message: "missing contacts title heading (# <title>)".to_string(),
+        fix: "add a top-level heading with the contacts title".to_string(),
+        example: "# my-team".to_string(),
+    })
 }
 
 /// Parse contacts from Markdown bullet list content.

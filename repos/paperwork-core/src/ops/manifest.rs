@@ -28,7 +28,8 @@ pub fn brief_create(
         return Err(PaperworkError::AlreadyExists {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            hint: "Use `paperwork brief add` to add entries.".to_string(),
+            fix: "use `paperwork brief add` to add entries".to_string(),
+            example: format!("paperwork brief add {} --entry <file>", path.display()),
         });
     }
 
@@ -36,6 +37,8 @@ pub fn brief_create(
         fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
             path: parent.to_path_buf(),
             source: e,
+            fix: "check that the parent directory is writable".to_string(),
+            example: String::new(),
         })?;
     }
 
@@ -51,6 +54,8 @@ pub fn brief_create(
     fs::write(path, content).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -71,13 +76,16 @@ pub fn brief_add_entry(
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork brief create <path>` first.".to_string(),
+            fix: "run `paperwork brief create <path>` first".to_string(),
+            example: format!("paperwork brief create {} --title <title>", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     let mut manifest = parse_manifest(&content)?;
@@ -93,7 +101,8 @@ pub fn brief_add_entry(
         return Err(PaperworkError::AlreadyExists {
             resource: "Brief entry".to_string(),
             name: title,
-            hint: "Use a different entry path or remove the existing entry first.".to_string(),
+            fix: "use a different entry path or remove the existing entry first".to_string(),
+            example: format!("paperwork brief remove {} --entry-title <title>", path.display()),
         });
     }
 
@@ -125,6 +134,8 @@ pub fn brief_add_entry(
     fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -136,13 +147,16 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork brief create <path>` first.".to_string(),
+            fix: "run `paperwork brief create <path>` first".to_string(),
+            example: format!("paperwork brief create {} --title <title>", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     let mut manifest = parse_manifest(&content)?;
@@ -154,7 +168,8 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         return Err(PaperworkError::NotFound {
             resource: "Brief entry".to_string(),
             name: title.to_string(),
-            hint: "Run `paperwork brief read <path>` to see available entries.".to_string(),
+            fix: "run `paperwork brief read <path>` to see available entries".to_string(),
+            example: format!("paperwork brief read {}", path.display()),
         });
     }
 
@@ -162,6 +177,8 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check that the target path is writable".to_string(),
+        example: String::new(),
     })?;
 
     Ok(())
@@ -173,13 +190,16 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            hint: "Run `paperwork brief create <path>` first.".to_string(),
+            fix: "run `paperwork brief create <path>` first".to_string(),
+            example: format!("paperwork brief create {} --title <title>", path.display()),
         });
     }
 
     let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
+        fix: "check file permissions".to_string(),
+        example: String::new(),
     })?;
 
     parse_manifest(&content)

@@ -170,15 +170,27 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
     }
 
     let name = name.ok_or_else(|| {
-        PaperworkError::Parse("missing title heading (# <title>)".to_string())
+        PaperworkError::Parse {
+            message: "missing title heading (# <title>)".to_string(),
+            fix: "add a top-level heading with the brief title".to_string(),
+            example: "# onboarding".to_string(),
+        }
     })?;
 
     let author = author.ok_or_else(|| {
-        PaperworkError::Parse(format!("missing - Owner: line for brief '{}'", name))
+        PaperworkError::Parse {
+            message: format!("missing - Owner: line for brief '{}'", name),
+            fix: "add a '- Owner: <agent>' bullet line".to_string(),
+            example: "- Owner: alice".to_string(),
+        }
     })?;
 
     let created = created.ok_or_else(|| {
-        PaperworkError::Parse(format!("missing or invalid - Created: line for brief '{}'", name))
+        PaperworkError::Parse {
+            message: format!("missing or invalid - Created: line for brief '{}'", name),
+            fix: "add a '- Created: <ISO-8601>' bullet line".to_string(),
+            example: "- Created: 2026-01-15T10:00:00Z".to_string(),
+        }
     })?;
 
     Ok(Manifest {
