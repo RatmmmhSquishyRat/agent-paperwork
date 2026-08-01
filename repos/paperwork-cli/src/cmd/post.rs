@@ -260,8 +260,8 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             let title = messages.first()
                 .map(|m| {
                     m.body.strip_prefix("[Thread created: ")
-                        .and_then(|s| s.split(" |").next())
-                        .and_then(|s| s.strip_suffix(']'))
+                        .map(|s| s.split(" |").next().unwrap_or(s))
+                        .map(|s| s.trim_end_matches(']'))
                         .unwrap_or(&m.body)
                         .to_string()
                 })

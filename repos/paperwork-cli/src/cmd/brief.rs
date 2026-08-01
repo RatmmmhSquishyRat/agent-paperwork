@@ -139,7 +139,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
             Ok(())
         }
 
-        BriefCommand::Read { path, full: _ } => {
+        BriefCommand::Read { path, full } => {
             let path = ensure_suffix(path, ".brief.md");
             let manifest = paperwork_core::ops::manifest::brief_read(&path)?;
 
@@ -152,11 +152,19 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     obj.insert("title".to_string(), serde_json::json!(manifest.name));
                     obj.insert("owner".to_string(), serde_json::json!(manifest.author));
                     let entries_json: Vec<serde_json::Value> = manifest.entries.iter().map(|e| {
-                        serde_json::json!({
-                            "title": e.title,
-                            "path": e.path,
-                            "hash": e.hash,
-                        })
+                        let mut entry_obj = serde_json::Map::new();
+                        entry_obj.insert("title".to_string(), serde_json::json!(e.title));
+                        entry_obj.insert("path".to_string(), serde_json::json!(e.path));
+                        entry_obj.insert("hash".to_string(), serde_json::json!(e.hash));
+                        if full {
+                            if let Some(ref re) = e.regex {
+                                entry_obj.insert("regex".to_string(), serde_json::json!(re));
+                            }
+                            if let Some(ref note) = e.note {
+                                entry_obj.insert("note".to_string(), serde_json::json!(note));
+                            }
+                        }
+                        serde_json::Value::Object(entry_obj)
                     }).collect();
                     obj.insert("entries".to_string(), serde_json::json!(entries_json));
                     println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
@@ -170,7 +178,18 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                         .field("title", &manifest.name)
                         .field("owner", &manifest.author);
                     let body_lines: Vec<String> = manifest.entries.iter().map(|e| {
-                        format!("{}: {}", e.title, e.path)
+                        if full {
+                            let mut line = format!("{}: {} (hash: {})", e.title, e.path, &e.hash[..e.hash.len().min(12)]);
+                            if let Some(ref re) = e.regex {
+                                line.push_str(&format!(" regex: {}", re));
+                            }
+                            if let Some(ref note) = e.note {
+                                line.push_str(&format!(" note: {}", note));
+                            }
+                            line
+                        } else {
+                            format!("{}: {}", e.title, e.path)
+                        }
                     }).collect();
                     env = env.body_lines(body_lines);
                     output::emit_ok(ctx, env);
