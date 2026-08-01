@@ -46,8 +46,8 @@ enum PostCommand {
         #[arg(long = "reply-to")]
         reply_to: Option<u64>,
 
-        /// Names mentioned in the message
-        #[arg(long = "mention", num_args = 0..)]
+        /// Names mentioned (comma-separated)
+        #[arg(long = "mention", value_delimiter = ',')]
         mention: Vec<String>,
     },
 
