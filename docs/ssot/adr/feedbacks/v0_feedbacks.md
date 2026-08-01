@@ -12,3 +12,7 @@
 - brief根本就和身份profile没有半毛钱关系, 最多给一个owner name.
 
 因此, 没有所谓.paperwork文件夹. 有的就是能够通过cli一个个创建文件, 修改文件, 使用文件, 仅此而已.
+
+## 追加feedback
+
+的确使用追随profile的文件来存储DM是一个糟糕的做法, GDM本身已经能够涵盖DM的功能了, 因此DM应当删除.

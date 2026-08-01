@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "repos/paperwork-core",
+    "repos/paperwork-cli",
+]
+resolver = "2"

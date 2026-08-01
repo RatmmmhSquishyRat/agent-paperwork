@@ -1,8 +1,15 @@
 [package]
 name = "paperwork-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Core library for Agent Paperwork - file-based agent collaboration toolkit"
+description = "Core library for Agent Paperwork — stateless, file-based collaboration primitives for AI agents"
+license = "MIT"
+repository = "https://github.com/RatmmmhSquishyRat/agent-paperwork"
+homepage = "https://github.com/RatmmmhSquishyRat/agent-paperwork"
+readme = "README.md"
+keywords = ["agent", "collaboration", "file-based", "cli", "markdown"]
+categories = ["command-line-utilities", "text-processing"]
+rust-version = "1.74"
 
 [dependencies]
 regex = "1"
