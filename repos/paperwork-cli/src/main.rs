@@ -48,10 +48,6 @@ enum Commands {
     /// Contacts operations
     #[command(alias = "c")]
     Contacts(cmd::contacts::ContactsArgs),
-
-    /// Notification operations
-    #[command(alias = "n")]
-    Notify(cmd::notify::NotifyArgs),
 }
 
 fn main() {
@@ -75,7 +71,6 @@ fn main() {
         Commands::Post(args) => cmd::post::run(&ctx, args),
         Commands::Brief(args) => cmd::brief::run(&ctx, args),
         Commands::Contacts(args) => cmd::contacts::run(&ctx, args),
-        Commands::Notify(args) => cmd::notify::run(&ctx, args),
     };
 
     if let Err(e) = result {

@@ -63,6 +63,14 @@ enum PostCommand {
         /// End at seq M (inclusive)
         #[arg(long)]
         to: Option<u64>,
+
+        /// Filter: only show messages mentioning this name
+        #[arg(long)]
+        mention: Option<String>,
+
+        /// Filter: only show messages replying to this seq
+        #[arg(long = "reply-to")]
+        reply_to: Option<u64>,
     },
 
     /// Get a summary of a post thread
@@ -135,8 +143,20 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             reply_to,
             mention,
         } => {
+            // Reply carries implicit @: auto-add original sender to mentions
+            let mut mentions = mention;
+            if let Some(reply_seq) = reply_to {
+                if let Ok(msgs) = paperwork_core::ops::thread::thread_read(&path, Some(reply_seq), Some(reply_seq)) {
+                    if let Some(original) = msgs.first() {
+                        if !mentions.contains(&original.sender) && original.sender != from {
+                            mentions.push(original.sender.clone());
+                        }
+                    }
+                }
+            }
+
             let seq =
-                paperwork_core::ops::thread::thread_send(&path, &from, &[], &body, reply_to, &mention)
+                paperwork_core::ops::thread::thread_send(&path, &from, &[], &body, reply_to, &mentions)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
 
             match ctx.mode {
@@ -153,9 +173,17 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             Ok(())
         }
 
-        PostCommand::Read { path, from, to } => {
-            let messages = paperwork_core::ops::thread::thread_read(&path, from, to)
+        PostCommand::Read { path, from, to, mention, reply_to } => {
+            let mut messages = paperwork_core::ops::thread::thread_read(&path, from, to)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            // Apply filters
+            if let Some(ref name) = mention {
+                messages.retain(|m| m.mentions.iter().any(|mn| mn == name));
+            }
+            if let Some(seq) = reply_to {
+                messages.retain(|m| m.reply_to == Some(seq));
+            }
 
             match ctx.mode {
                 OutputMode::Json => output::print_json(&messages),

@@ -260,45 +260,6 @@ fn contacts_create_add_read() {
         .stdout(predicate::str::contains("agent.md"));
 }
 
-// ─── Notify ─────────────────────────────────────────────────────────────────
-
-#[test]
-fn notify_push_and_read() {
-    let dir = TempDir::new().unwrap();
-    let notify_path = dir.path().join("alice.notify.md");
-
-    cmd()
-        .args([
-            "notify", "push", notify_path.to_str().unwrap(),
-            "--from", "bob",
-            "--thread", "some/thread.md",
-            "--seq", "5",
-            "--type", "mention",
-            "--snippet", "Hey @alice",
-        ])
-        .assert()
-        .success();
-
-    cmd()
-        .args(["--json", "notify", "read", notify_path.to_str().unwrap()])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("bob"))
-        .stdout(predicate::str::contains("Mention"));
-}
-
-#[test]
-fn notify_read_empty() {
-    let dir = TempDir::new().unwrap();
-    let notify_path = dir.path().join("empty.notify.md");
-
-    cmd()
-        .args(["--json", "notify", "read", notify_path.to_str().unwrap()])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("[]"));
-}
-
 // ─── Global flags ───────────────────────────────────────────────────────────
 
 #[test]

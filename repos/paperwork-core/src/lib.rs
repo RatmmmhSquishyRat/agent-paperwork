@@ -34,7 +34,7 @@ pub struct ContactEntry {
     pub summary: String,
 }
 
-/// A message in a DM or post thread.
+/// A message in a post thread.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub seq: u64,
@@ -42,6 +42,7 @@ pub struct Message {
     pub timestamp: DateTime<Utc>,
     pub to: Vec<String>,
     pub reply_to: Option<u64>,
+    pub mentions: Vec<String>,
     pub body: String,
 }
 

@@ -46,8 +46,6 @@ pub fn thread_send(
     reply_to: Option<u64>,
     mentions: &[String],
 ) -> Result<u64> {
-    let _ = mentions; // Used by CLI for notification hooks; not stored in thread format.
-
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
@@ -83,6 +81,7 @@ pub fn thread_send(
         timestamp: Utc::now(),
         to: to.to_vec(),
         reply_to,
+        mentions: mentions.to_vec(),
         body: body.to_string(),
     };
 

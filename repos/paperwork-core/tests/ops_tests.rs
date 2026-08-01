@@ -1,7 +1,6 @@
 //! Integration tests for the stateless, path-explicit operations layer.
 
 use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 use std::thread as std_thread;
 

@@ -74,7 +74,7 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
         };
 
         // Extract metadata and body from content range
-        let (to, reply_to, body) =
+        let (to, reply_to, mentions, body) =
             parse_message_content(&lines[content_start..content_end], seq)?;
 
         messages.push(Message {
@@ -83,6 +83,7 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
             timestamp,
             to,
             reply_to,
+            mentions,
             body,
         });
     }
@@ -104,12 +105,14 @@ fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
 }
 
 /// Parse message content (metadata lines + body) from lines after header.
+#[allow(clippy::type_complexity)]
 fn parse_message_content(
     lines: &[&str],
     seq: u64,
-) -> Result<(Vec<String>, Option<u64>, String)> {
+) -> Result<(Vec<String>, Option<u64>, Vec<String>, String)> {
     let mut to: Vec<String> = Vec::new();
     let mut reply_to: Option<u64> = None;
+    let mut mentions: Vec<String> = Vec::new();
     let mut body_lines: Vec<&str> = Vec::new();
     let mut in_body = false;
     let mut metadata_done = false;
@@ -132,6 +135,9 @@ fn parse_message_content(
                     }
                     "Reply-To" => {
                         reply_to = parse_reply_to(&value);
+                    }
+                    "Mentions" => {
+                        mentions = parse_to_field(&value);
                     }
                     _ => {
                         // Unknown metadata key - treat as body start
@@ -167,7 +173,7 @@ fn parse_message_content(
     // Validate: To field should be present (warning level, not error for flexibility)
     let _ = seq; // Used for error context if needed
 
-    Ok((to, reply_to, body))
+    Ok((to, reply_to, mentions, body))
 }
 
 /// Parse the To field value.
@@ -214,13 +220,20 @@ pub fn serialize_message(msg: &Message) -> String {
         .map(|r| format!("#{}", r))
         .unwrap_or_else(|| "—".to_string());
 
+    let mentions_line = if msg.mentions.is_empty() {
+        String::new()
+    } else {
+        format!("**Mentions**: {}  \n", msg.mentions.join(", "))
+    };
+
     format!(
-        "---\n\n### #{} — {} · {}\n\n**To**: {}  \n**Reply-To**: {}\n\n{}\n\n",
+        "---\n\n### #{} — {} · {}\n\n**To**: {}  \n**Reply-To**: {}\n{}\n{}\n\n",
         msg.seq,
         msg.sender,
         msg.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
         to_str,
         reply_to_str,
+        mentions_line,
         msg.body
     )
 }
@@ -447,6 +460,7 @@ Ok
             timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
             to: vec!["bob".to_string()],
             reply_to: None,
+            mentions: vec![],
             body: "Hello, World!".to_string(),
         };
 
@@ -464,6 +478,7 @@ Ok
             timestamp: make_timestamp(2026, 7, 29, 23, 59, 59),
             to: vec!["alice".to_string()],
             reply_to: Some(3),
+            mentions: vec![],
             body: "Reply body".to_string(),
         };
 
@@ -480,6 +495,7 @@ Ok
             timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
             to: vec![], // empty = "all"
             reply_to: None,
+            mentions: vec![],
             body: "Broadcast message".to_string(),
         };
 
@@ -508,6 +524,7 @@ Ok
                 timestamp: make_timestamp(2026, 1, 1, 0, 0, 0),
                 to: vec![],
                 reply_to: None,
+                mentions: vec![],
                 body: String::new(),
             },
             Message {
@@ -516,6 +533,7 @@ Ok
                 timestamp: make_timestamp(2026, 1, 1, 0, 1, 0),
                 to: vec![],
                 reply_to: None,
+                mentions: vec![],
                 body: String::new(),
             },
             Message {
@@ -524,6 +542,7 @@ Ok
                 timestamp: make_timestamp(2026, 1, 1, 0, 2, 0),
                 to: vec![],
                 reply_to: None,
+                mentions: vec![],
                 body: String::new(),
             },
         ];
@@ -540,6 +559,7 @@ Ok
                 timestamp: make_timestamp(2026, 1, 1, 0, 0, 0),
                 to: vec![],
                 reply_to: None,
+                mentions: vec![],
                 body: String::new(),
             },
             Message {
@@ -548,6 +568,7 @@ Ok
                 timestamp: make_timestamp(2026, 1, 1, 0, 1, 0),
                 to: vec![],
                 reply_to: None,
+                mentions: vec![],
                 body: String::new(),
             },
         ];
@@ -566,6 +587,7 @@ Ok
             timestamp: make_timestamp(2026, 1, 1, 0, 0, 0),
             to: vec![],
             reply_to: None,
+            mentions: vec![],
             body: String::new(),
         }];
 
@@ -626,6 +648,7 @@ Multi-recipient message
                 timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
                 to: vec!["bob".to_string()],
                 reply_to: None,
+                mentions: vec![],
                 body: "First".to_string(),
             },
             Message {
@@ -634,6 +657,7 @@ Multi-recipient message
                 timestamp: make_timestamp(2026, 1, 15, 10, 35, 0),
                 to: vec!["alice".to_string()],
                 reply_to: Some(1),
+                mentions: vec![],
                 body: "Second".to_string(),
             },
         ];
@@ -668,6 +692,7 @@ And **another bold** line.
             timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
             to: vec!["bob".to_string()],
             reply_to: None,
+            mentions: vec![],
             body: String::new(),
         };
 

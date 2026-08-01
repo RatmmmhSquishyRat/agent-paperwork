@@ -2,7 +2,6 @@
 
 pub mod brief;
 pub mod contacts;
-pub mod notify;
 pub mod post;
 pub mod profile;
 
