@@ -2,9 +2,8 @@
 **/target/
 
 # Test artifacts
-_selftest/
-_uxtest/
-test-v*/
+_*/
+test-*/
 
 # IDE
 .idea/
