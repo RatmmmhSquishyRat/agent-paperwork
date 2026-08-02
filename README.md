@@ -1,178 +1,230 @@
 # paperwork
 
-**Stateless, file-based collaboration toolkit for AI agents.**
+Stateless, file-based collaboration toolkit for AI agents.
 
-Unix philosophy applied to agent coordination: everything is a file, everything is append-only, everything is human-readable. No server, no database, no daemon, no login.
+[![crates.io](https://img.shields.io/crates/v/paperwork-cli.svg)](https://crates.io/crates/paperwork-cli)
+[![crates.io](https://img.shields.io/crates/v/paperwork-core.svg)](https://crates.io/crates/paperwork-core)
+[![license](https://img.shields.io/crates/l/paperwork-cli.svg)](./LICENSE)
 
-## Why
-
-AI agents working together need minimal primitives:
-- **Identity** — who am I, what's my scope
-- **Communication** — async append-only threads
-- **Knowledge transfer** — codified reading lists with staleness detection
-
-All achievable with filesystem semantics alone. `paperwork` provides a thin CLI over these file formats.
-
-## Design Principles
-
-| Principle | Meaning |
-|-----------|---------|
-| Stateless | No config, no workspace, no memory. SSOT = the files themselves |
-| Path-explicit | Every command takes explicit file paths |
-| Independent files | No CLI-managed cross-references between files |
-| Append-only | Threads grow; no insert, no delete |
-| Human-readable | All managed files are richly-marked Markdown |
-| Agent-safe | Non-interactive, `--json` for machine consumption |
+Everything is a file. Everything is append-only. Everything is human-readable.
+No server, no database, no daemon, no login, no workspace.
 
 ## Install
 
 ```bash
-cargo install --path repos/paperwork-cli
+cargo install paperwork-cli
 ```
 
-Or build from source:
-```bash
-cargo build --release --manifest-path repos/paperwork-cli/Cargo.toml
-```
+Provides the `paperwork` binary. Requires Rust 1.74+.
 
 ## Commands
 
 ```
-paperwork profile   — Agent identity files
-paperwork post      — Append-only conversation threads (the only communication primitive)
-paperwork brief     — Reading lists with regex-anchored staleness detection
-paperwork contacts  — Registry of profile paths (a special brief)
+paperwork profile    Agent identity files
+paperwork post       Append-only conversation threads
+paperwork brief      Reading lists with staleness detection
+paperwork contacts   Registry of profile paths
+paperwork validate   Check file structure integrity
 ```
 
 ## Quick Start
 
 ```bash
-# Create agent profiles (just files, anywhere)
-paperwork profile create ./agents/alice.md --name alice --model gpt-4o
-paperwork profile create ./agents/bob.md --name bob --model claude-4
+# Profiles (auto-suffixes to .profile.md)
+paperwork profile create alice --name alice --model gpt-4o
+paperwork profile create bob --name bob --model claude-4
 
-# Start a thread (auto-creates file)
-paperwork post create ./threads/design.md --title "Architecture Discussion"
-paperwork post send ./threads/design.md --from alice "I propose we use Rust."
-paperwork post send ./threads/design.md --from bob --reply-to 1 "Agreed. What about the CLI framework?"
+# Thread (auto-suffixes to .post.md, auto-creates on first send)
+paperwork post create standup --title "Daily Standup" --participants alice,bob
+paperwork post send standup --from alice "Proposing Rust for the backend."
+paperwork post send standup --from bob --reply-to 2 "Agreed."
 
 # Reply carries implicit @mention of original sender
-paperwork post send ./threads/design.md --from alice --reply-to 2 "clap derive."
+paperwork post send standup --from alice --reply-to 3 --mention bob "clap derive."
 
-# Filter by mention or reply
-paperwork post read ./threads/design.md --mention alice
-paperwork post read ./threads/design.md --reply-to 1
+# Multi-line content via stdin
+cat report.md | paperwork post send standup --from alice --stdin
 
-# Create a reading guide (brief)
-paperwork brief create ./guides/onboarding.md --title "Project Onboarding"
-paperwork brief add ./guides/onboarding.md --entry "src/main.rs" --regex "fn main"
-paperwork brief verify ./guides/onboarding.md --base-dir .
+# Filter
+paperwork post read standup --mention alice
+paperwork post read standup --reply-to 2
 
-# Contacts: just a list of profile paths
-paperwork contacts create ./team.md --title "Team"
-paperwork contacts add ./team.md --profile ./agents/alice.md
-paperwork contacts read ./team.md
+# Brief (reading guide with staleness detection)
+paperwork brief create onboarding --title "Project Onboarding" --owner alice
+paperwork brief add onboarding --entry "src/main.rs" --regex "fn main"
+paperwork brief verify onboarding
+
+# Contacts (reads profiles for summaries)
+paperwork contacts create team --title "Team"
+paperwork contacts add team --profile ./alice.profile.md
+paperwork contacts read team
+
+# Validate file structure
+paperwork validate standup.post.md
 ```
+
+## Output Protocol
+
+Designed for agent consumption. Pure ASCII, no ANSI, no Unicode symbols.
+
+### Success (stdout)
+
+```
+ok post.send #4 -> standup.post.md
+seq: 4
+path: standup.post.md
+sender: alice
+```
+
+### Error (stderr)
+
+```
+error not-found: thread 'standup.post.md' does not exist
+fix: send a message to auto-create, or run post create
+example: paperwork post send standup --from alice "first message"
+```
+
+### Rules
+
+- Line 1 is always `ok` or `error` — instant status
+- Fields are `key: value` — machine-parseable without JSON
+- Body separator `---` only in read commands
+- Errors carry `fix:` + `example:` — self-correct in one retry
+
+### Modes
+
+| Flag | Behavior |
+|------|----------|
+| (default) | Structured envelope (above) |
+| `--json` | JSON with same fields + `"status": "ok"/"error"` |
+| `--plain` | Raw file content |
+| `-q` | Suppress status line, keep fields/body |
 
 ## File Formats
 
-All managed files are **richly-marked Markdown** — readable both raw and through CLI.
+All managed files use type suffixes: `.profile.md`, `.post.md`, `.brief.md`, `.contacts.md`.
 
-### Thread (post) file
+### Post thread (`standup.post.md`)
 
 ```markdown
 ---
 
-### #1 — alice · 2026-07-30T10:00:00Z
+### #1 system . 2026-08-01T10:00:00Z
 
-**To**: all
-**Reply-To**: —
+- To: all
 
-I propose we use Rust.
+````markdown
+[Thread created: Daily Standup | participants: alice, bob]
+````
 
 ---
 
-### #2 — bob · 2026-07-30T10:01:00Z
+### #2 alice . 2026-08-01T10:00:05Z
 
-**To**: all
-**Reply-To**: #1
-**Mentions**: alice
+- To: all
 
+````markdown
+Proposing Rust for the backend.
+````
+
+---
+
+### #3 bob . 2026-08-01T10:01:00Z
+
+- To: all
+- Reply-To: #2
+- Mentions: alice
+
+````markdown
 Agreed. What about the CLI framework?
-
----
+````
 ```
 
-### Profile file
+Message bodies are wrapped in 4-backtick fenced code blocks.
+This makes parsing unambiguous — any Markdown inside (headings, lists, triple-backtick fences, `---`) is safe.
+
+### Profile (`alice.profile.md`)
 
 ```markdown
 # alice
 
-**Model**: gpt-4o
-**Description**: Parser module implementer
+- Model: gpt-4o
+- Description: Parser module implementer
 
 ## Scope
 
-**Read**: `src/**`, `docs/**`
-**Write**: `src/parser/**`
-**Owns**: `src/parser/**`
+- Read: `src/**`, `docs/**`
+- Write: `src/parser/**`
+- Owns: `src/parser/**`
 ```
 
-### Brief (manifest) file
+### Brief (`onboarding.brief.md`)
 
 ```markdown
-# Manifest: onboarding
+# Project Onboarding
 
-**Author**: alice
-**Created**: 2026-07-30T10:00:00Z
-**Description**: How to read this project
+- Owner: alice
+- Created: 2026-08-01T10:00:00Z
+- Description: How to read this project
 
 ## Entries
 
 ### main.rs
 
-**Path**: `src/main.rs`
-**Hash**: `42b6647...`
-**Regex**: `fn main`
+- Path: `src/main.rs`
+- Hash: `42b664743ddb6056...`
+- Regex: `fn main`
 
----
+> Entry point of the application.
 ```
 
-## Brief Verification (Staleness Detection)
+### Contacts (`team.contacts.md`)
 
-Each brief entry stores a regex anchor + SHA-256 hash. `paperwork brief verify` reports:
+```markdown
+# Team
+
+- ./alice.profile.md
+- ./bob.profile.md
+```
+
+## Brief Verification
+
+Each entry stores a regex anchor + SHA-256 hash. `paperwork brief verify` reports:
 
 | State | Meaning |
 |-------|---------|
-| **Fresh** | Regex matches + hash matches — use directly |
-| **Shifted** | Regex matches + hash differs — structure holds, content changed |
-| **Stale** | Regex fails — needs re-curation |
+| fresh | Regex matches + hash matches — use directly |
+| shifted | Regex matches + hash differs — content changed, structure holds |
+| stale | Regex fails — needs re-curation |
 
 ## Architecture
 
 ```
 repos/
-├── paperwork-core/   # Library: format parsing + path-explicit operations
-└── paperwork-cli/    # Binary: thin CLI layer (clap → core → output)
+  paperwork-core/    Library: format parsers + path-explicit operations
+  paperwork-cli/     Binary: thin CLI (clap -> core -> envelope output)
 ```
 
-- **paperwork-core**: Pure Rust library. Format parsers/serializers + filesystem operations. No CLI dependency. Consumable by other tools (IDE plugins, agent harnesses).
-- **paperwork-cli**: Thin binary. Parses args → calls core → formats output. Three output modes: default (Markdown), `--json`, `--plain`.
+- [paperwork-core](https://crates.io/crates/paperwork-core) — Pure Rust library. Consumable by IDE plugins, agent harnesses, other tools.
+- [paperwork-cli](https://crates.io/crates/paperwork-cli) — Thin binary. Installs the `paperwork` command.
 
-## Global Flags
+## Design Principles
 
-| Flag | Effect |
-|------|--------|
-| `--json` | Structured JSON output |
-| `--plain` | Raw file content |
-| `-q, --quiet` | Suppress confirmation messages |
+| Principle | Meaning |
+|-----------|---------|
+| Stateless | No config, no workspace, no memory. SSOT = the files |
+| Path-explicit | Every command takes explicit file paths |
+| Independent | No CLI-managed cross-references between files |
+| Append-only | Threads grow; no insert, no delete |
+| Human-readable | All files are richly-marked Markdown |
+| Agent-first | Structured output, actionable errors, bounded responses |
 
 ## What This Is NOT
 
-- ❌ Not a chat app (no real-time, no server)
-- ❌ Not a project manager (no tasks, no boards)
-- ❌ Not enforced access control (scope is honor-system)
-- ❌ Not stateful (no `.paperwork/` folder, no init, no login)
+- Not a chat app (no real-time, no server)
+- Not a project manager (no tasks, no boards)
+- Not enforced access control (scope is honor-system)
+- Not stateful (no `.paperwork/` folder, no init, no login)
 
 ## License
 
