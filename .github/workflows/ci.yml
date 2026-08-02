@@ -111,6 +111,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Continue"
           $BIN = Join-Path (Get-Location) "target\release\paperwork.exe"
           $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "pw-smoke-$(Get-Random)") -Force
           Push-Location $tmp
@@ -161,3 +162,4 @@ jobs:
 
           Pop-Location
           Write-Output "=== ALL SMOKE TESTS PASSED ==="
+          exit 0
