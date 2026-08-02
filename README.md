@@ -1,73 +1,52 @@
 # paperwork
 
-Stateless, file-based collaboration toolkit for AI agents.
+A simple, fast and stateless file-based collaboration toolkit for AI agents.
 
-[![crates.io](https://img.shields.io/crates/v/paperwork-cli.svg)](https://crates.io/crates/paperwork-cli)
-[![crates.io](https://img.shields.io/crates/v/paperwork-core.svg)](https://crates.io/crates/paperwork-core)
-[![license](https://img.shields.io/crates/l/paperwork-cli.svg)](./LICENSE)
+[Installation](#installation) • [Usage](#usage) • [Output Protocol](#output-protocol) • [File Formats](#file-formats)
 
-Everything is a file. Everything is append-only. Everything is human-readable.
-No server, no database, no daemon, no login, no workspace.
+## Features
 
-## Install
+- **Zero setup**: no init, no login, no config, no workspace. Works from any path on any file.
+- **Agent-first output**: structured `ok`/`error` envelope protocol. Errors carry `fix:` + `example:` for one-retry self-correction.
+- **Append-only threads**: async communication via post files. Reply, @mention, filter — all in one primitive.
+- **Staleness detection**: brief files track regex anchors + SHA-256 hashes. Verify if knowledge is fresh, shifted, or stale.
+- **Pure ASCII output**: no Unicode symbols, no ANSI. Parseable by any agent in any environment.
+- **Human-readable files**: all managed files are richly-marked Markdown with fenced code blocks.
+- **Cross-platform**: single static binary. Linux, macOS, Windows.
 
-```bash
-cargo install paperwork-cli
-```
-
-Provides the `paperwork` binary. Requires Rust 1.74+.
-
-## Commands
-
-```
-paperwork profile    Agent identity files
-paperwork post       Append-only conversation threads
-paperwork brief      Reading lists with staleness detection
-paperwork contacts   Registry of profile paths
-paperwork validate   Check file structure integrity
-```
-
-## Quick Start
+## Usage
 
 ```bash
-# Profiles (auto-suffixes to .profile.md)
+# Profiles
 paperwork profile create alice --name alice --model gpt-4o
-paperwork profile create bob --name bob --model claude-4
+paperwork profile show alice
+paperwork profile list .
 
-# Thread (auto-suffixes to .post.md, auto-creates on first send)
+# Threads (auto-creates .post.md on first send)
 paperwork post create standup --title "Daily Standup" --participants alice,bob
-paperwork post send standup --from alice "Proposing Rust for the backend."
+paperwork post send standup --from alice "Proposing Rust."
 paperwork post send standup --from bob --reply-to 2 "Agreed."
-
-# Reply carries implicit @mention of original sender
-paperwork post send standup --from alice --reply-to 3 --mention bob "clap derive."
-
-# Multi-line content via stdin
-cat report.md | paperwork post send standup --from alice --stdin
-
-# Filter
+paperwork post send standup --from alice --stdin < report.md
 paperwork post read standup --mention alice
-paperwork post read standup --reply-to 2
+paperwork post summary standup
 
-# Brief (reading guide with staleness detection)
-paperwork brief create onboarding --title "Project Onboarding" --owner alice
+# Briefs (reading guides with staleness detection)
+paperwork brief create onboarding --title "Onboarding" --owner alice
 paperwork brief add onboarding --entry "src/main.rs" --regex "fn main"
 paperwork brief verify onboarding
 
-# Contacts (reads profiles for summaries)
+# Contacts
 paperwork contacts create team --title "Team"
 paperwork contacts add team --profile ./alice.profile.md
 paperwork contacts read team
 
-# Validate file structure
+# Validation
 paperwork validate standup.post.md
 ```
 
 ## Output Protocol
 
-Designed for agent consumption. Pure ASCII, no ANSI, no Unicode symbols.
-
-### Success (stdout)
+Every command outputs a structured envelope. Pure ASCII, machine-parseable without JSON.
 
 ```
 ok post.send #4 -> standup.post.md
@@ -76,7 +55,7 @@ path: standup.post.md
 sender: alice
 ```
 
-### Error (stderr)
+On failure (stderr, exit 1):
 
 ```
 error not-found: thread 'standup.post.md' does not exist
@@ -84,118 +63,76 @@ fix: send a message to auto-create, or run post create
 example: paperwork post send standup --from alice "first message"
 ```
 
-### Rules
-
-- Line 1 is always `ok` or `error` — instant status
-- Fields are `key: value` — machine-parseable without JSON
-- Body separator `---` only in read commands
-- Errors carry `fix:` + `example:` — self-correct in one retry
-
-### Modes
-
 | Flag | Behavior |
 |------|----------|
-| (default) | Structured envelope (above) |
-| `--json` | JSON with same fields + `"status": "ok"/"error"` |
+| (default) | Structured envelope |
+| `--json` | JSON with `"status": "ok"/"error"` |
 | `--plain` | Raw file content |
-| `-q` | Suppress status line, keep fields/body |
+| `-q` | Suppress status line, keep fields |
 
 ## File Formats
 
-All managed files use type suffixes: `.profile.md`, `.post.md`, `.brief.md`, `.contacts.md`.
+Managed files use type suffixes: `.profile.md`, `.post.md`, `.brief.md`, `.contacts.md`.
 
-### Post thread (`standup.post.md`)
+Message bodies are wrapped in 4-backtick fences — any Markdown inside is safe:
 
 ```markdown
----
-
-### #1 system . 2026-08-01T10:00:00Z
-
-- To: all
-
-````markdown
-[Thread created: Daily Standup | participants: alice, bob]
-````
-
 ---
 
 ### #2 alice . 2026-08-01T10:00:05Z
 
 - To: all
+- Reply-To: #1
+- Mentions: bob
 
 ````markdown
-Proposing Rust for the backend.
-````
+I propose we use Rust.
 
----
-
-### #3 bob . 2026-08-01T10:01:00Z
-
-- To: all
-- Reply-To: #2
-- Mentions: alice
-
-````markdown
-Agreed. What about the CLI framework?
+Here's a code block inside:
+```rust
+fn main() {}
+```
 ````
 ```
 
-Message bodies are wrapped in 4-backtick fenced code blocks.
-This makes parsing unambiguous — any Markdown inside (headings, lists, triple-backtick fences, `---`) is safe.
+## Installation
 
-### Profile (`alice.profile.md`)
+### From crates.io
 
-```markdown
-# alice
-
-- Model: gpt-4o
-- Description: Parser module implementer
-
-## Scope
-
-- Read: `src/**`, `docs/**`
-- Write: `src/parser/**`
-- Owns: `src/parser/**`
+```bash
+cargo install paperwork-cli
 ```
 
-### Brief (`onboarding.brief.md`)
+### From release binaries
 
-```markdown
-# Project Onboarding
+Precompiled binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/RatmmmhSquishyRat/agent-paperwork/releases).
 
-- Owner: alice
-- Created: 2026-08-01T10:00:00Z
-- Description: How to read this project
+### From source
 
-## Entries
-
-### main.rs
-
-- Path: `src/main.rs`
-- Hash: `42b664743ddb6056...`
-- Regex: `fn main`
-
-> Entry point of the application.
+```bash
+git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
+cd agent-paperwork
+cargo build --release
+cargo install --path repos/paperwork-cli
 ```
 
-### Contacts (`team.contacts.md`)
+Requires Rust 1.74+.
 
-```markdown
-# Team
+## Development
 
-- ./alice.profile.md
-- ./bob.profile.md
+```bash
+git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
+cd agent-paperwork
+
+# Build
+cargo build
+
+# Test
+cargo test
+
+# Lint
+cargo clippy --all-targets -- -D warnings
 ```
-
-## Brief Verification
-
-Each entry stores a regex anchor + SHA-256 hash. `paperwork brief verify` reports:
-
-| State | Meaning |
-|-------|---------|
-| fresh | Regex matches + hash matches — use directly |
-| shifted | Regex matches + hash differs — content changed, structure holds |
-| stale | Regex fails — needs re-curation |
 
 ## Architecture
 
@@ -205,27 +142,8 @@ repos/
   paperwork-cli/     Binary: thin CLI (clap -> core -> envelope output)
 ```
 
-- [paperwork-core](https://crates.io/crates/paperwork-core) — Pure Rust library. Consumable by IDE plugins, agent harnesses, other tools.
-- [paperwork-cli](https://crates.io/crates/paperwork-cli) — Thin binary. Installs the `paperwork` command.
-
-## Design Principles
-
-| Principle | Meaning |
-|-----------|---------|
-| Stateless | No config, no workspace, no memory. SSOT = the files |
-| Path-explicit | Every command takes explicit file paths |
-| Independent | No CLI-managed cross-references between files |
-| Append-only | Threads grow; no insert, no delete |
-| Human-readable | All files are richly-marked Markdown |
-| Agent-first | Structured output, actionable errors, bounded responses |
-
-## What This Is NOT
-
-- Not a chat app (no real-time, no server)
-- Not a project manager (no tasks, no boards)
-- Not enforced access control (scope is honor-system)
-- Not stateful (no `.paperwork/` folder, no init, no login)
+[paperwork-core](https://crates.io/crates/paperwork-core) is a standalone library consumable by IDE plugins, agent harnesses, or other tools.
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
