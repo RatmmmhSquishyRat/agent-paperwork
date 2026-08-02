@@ -49,7 +49,7 @@ jobs:
       - name: Smoke test (unix)
         if: runner.os != 'Windows'
         run: |
-          BIN=./target/release/paperwork
+          BIN=$(pwd)/target/release/paperwork
           cd $(mktemp -d)
 
           # Profile
@@ -111,7 +111,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $BIN = ".\target\release\paperwork.exe"
+          $BIN = Join-Path (Get-Location) "target\release\paperwork.exe"
           $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "pw-smoke-$(Get-Random)") -Force
           Push-Location $tmp
 
