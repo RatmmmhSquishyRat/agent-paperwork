@@ -1,6 +1,6 @@
 [package]
 name = "paperwork-cli"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Stateless, file-based collaboration CLI for AI agents — everything is a file, append-only, human-readable"
 license = "MIT"
@@ -16,7 +16,7 @@ name = "paperwork"
 path = "src/main.rs"
 
 [dependencies]
-paperwork-core = { version = "0.4", path = "../paperwork-core" }
+paperwork-core = { version = "0.5", path = "../paperwork-core" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
