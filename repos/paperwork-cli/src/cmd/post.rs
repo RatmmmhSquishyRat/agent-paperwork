@@ -177,22 +177,9 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
         } => {
             let path = ensure_suffix(path, ".post.md");
 
-            // Three-stage resolution stage 1 may hit an existing file that is
-            // not a paperwork thread: validate with the thread parser up front
-            // so the format error surfaces instead of corrupting the file
-            // (no re-routing, spec S-PATH-07). Content without any valid
-            // message boundary is rejected the same way `validate` rejects it.
-            if path.is_file() {
-                let pre_existing = paperwork_core::ops::thread::thread_read(&path, None, None)?;
-                let raw = std::fs::read_to_string(&path)?;
-                if pre_existing.is_empty() && !raw.trim().is_empty() {
-                    return Err(paperwork_core::PaperworkError::Parse {
-                        message: format!("{} is not a valid post thread: no valid message boundaries found", path.display()),
-                        fix: "expected --- separators with ### #N sender · timestamp headers; or validate it explicitly".to_string(),
-                        example: format!("paperwork validate {} --type post", path.display()),
-                    }.into());
-                }
-            }
+            // Stage-1 hit on a foreign file -> format error, no re-routing
+            // (spec S-PATH-07, see reject_foreign_thread).
+            reject_foreign_thread(&path)?;
 
             // Resolve body from --stdin or positional
             let body = resolve_body(body, stdin, BodyOwner::Send, &path.display().to_string())?;
@@ -318,6 +305,19 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
         PostCommand::Summary { path } => {
             let path = ensure_suffix(path, ".post.md");
+
+            // Read-only command: when all three resolution stages miss,
+            // report not-found in the same shape as post read
+            // (core thread_summary returns an empty summary instead).
+            if !path.is_file() {
+                return Err(paperwork_core::PaperworkError::NotFound {
+                    resource: "Thread".to_string(),
+                    name: path.display().to_string(),
+                    fix: "send a message first to create the thread".to_string(),
+                    example: format!("paperwork post send {} alice \"Hello\"", path.display()),
+                }.into());
+            }
+
             let summary = paperwork_core::ops::thread::thread_summary(&path)?;
 
             // Extract title from first system message
@@ -390,6 +390,10 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
         } => {
             let path = ensure_suffix(path, ".post.md");
 
+            // Stage-1 hit on a foreign file -> format error, not not-found
+            // (mirrors send; spec S-PATH-07, review M2).
+            reject_foreign_thread(&path)?;
+
             let new_body = resolve_body(new_body, stdin, BodyOwner::Edit, &path.display().to_string())?;
 
             paperwork_core::ops::thread::thread_edit(&path, seq, &name, &new_body)?;
@@ -407,6 +411,29 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 enum BodyOwner {
     Send,
     Edit,
+}
+
+/// Reject a stage-1 path hit on a file that is not a valid paperwork thread.
+///
+/// Three-stage resolution stage 1 may hit an existing file that is not a
+/// thread: validate with the thread parser up front so the format error
+/// surfaces instead of corrupting the file (no re-routing, spec S-PATH-07).
+/// Content without any valid message boundary is rejected the same way
+/// `validate` rejects it. Missing paths pass through (write commands create
+/// them; read-side commands report their own not-found).
+fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
+    if path.is_file() {
+        let pre_existing = paperwork_core::ops::thread::thread_read(path, None, None)?;
+        let raw = std::fs::read_to_string(path)?;
+        if pre_existing.is_empty() && !raw.trim().is_empty() {
+            return Err(paperwork_core::PaperworkError::Parse {
+                message: format!("{} is not a valid post thread: no valid message boundaries found", path.display()),
+                fix: "expected --- separators with ### #N sender . timestamp headers; or validate it explicitly".to_string(),
+                example: format!("paperwork validate {} --type post", path.display()),
+            }.into());
+        }
+    }
+    Ok(())
 }
 
 /// Resolve body from positional arg or --stdin flag.

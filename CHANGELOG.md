@@ -40,16 +40,22 @@ now reports `error format:` instead of silently appending (v0.4 behavior).
 1. `post read` field `showing: n/total` is now always emitted (previously only
    when the default limit was exceeded); `total` counts post-filter messages
    before the limit.
-2. New exit code: usage errors (wrong invocation shape) exit **2** (runtime
-   errors keep exit 1). Scripts checking only `$? != 0` are unaffected; scripts
-   distinguishing failure classes can now separate misuse from runtime errors.
+2. Usage errors (wrong invocation shape) still exit **2** — the exit code
+   follows clap's default and is unchanged from v0.4. What changed: stderr
+   now carries the structured `error usage:` envelope instead of clap's
+   free-form text / usage synopsis, and `--json` usage errors are new
+   (single-line JSON on stdout). Runtime errors keep exit 1.
 3. Error category vocabulary gains a seventh category `usage` (existing six —
    `format`, `validation`, `io`, `not-found`, `already-exists`, `not-allowed` —
    unchanged).
-4. Three additive output fields: `implicit-mention` (singular; `post send` only,
-   present only when a reply auto-mentions the original sender), `window`
-   (`post read`, `#first-#last` of the displayed range, absent for empty
-   threads), and `command` inside `--json` error objects.
+4. Three additive output fields: `implicit-mention` (singular; `post send`
+   only) — new output field surfacing the reply auto-mention behavior that
+   already existed in v0.4 (replies auto-add the original sender to
+   mentions); `window` (`post read`, `#first-#last` of the displayed range,
+   absent for empty threads); and `command` inside `--json` error objects.
+5. `post create` on an existing thread no longer silently appends: v0.4
+   appended a new thread-creation message with exit 0; v0.5 reports
+   `already-exists` with exit 1. Send to the existing thread instead.
 
 ### Added
 
@@ -63,7 +69,6 @@ now reports `error format:` instead of silently appending (v0.4 behavior).
 - `validate --type post|profile|brief|contacts`: explicit parser selection,
   overriding suffix inference
 - `post` hidden alias `po` (does not appear in `--help`)
-- `post create` on an existing thread reports `already-exists`
 - Bodies starting with `-` supported via the `--` boundary
 - `SKILL.md`: agent-oriented grammar cheat sheet with per-tool examples and
   error self-healing hints

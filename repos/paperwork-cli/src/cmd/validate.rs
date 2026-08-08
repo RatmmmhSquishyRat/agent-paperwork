@@ -36,7 +36,7 @@ pub fn command_id(_args: &ValidateArgs) -> &'static str {
 pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
     let path_str = args.path.to_string_lossy().to_string();
 
-    // Detect file type: --type overrides suffix inference (spec §3.5)
+    // Detect file type: --type overrides suffix inference (spec 3.5)
     let file_type = if let Some(kind) = args.kind {
         match kind {
             FileKind::Post => FileType::Post,

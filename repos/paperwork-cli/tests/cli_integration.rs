@@ -588,6 +588,74 @@ fn top_level_parse_failure_command_usage() {
 }
 
 #[test]
+fn missing_subcommand_message_shape() {
+    // B1 (Ryan W1 / QA BUG-2): bare group and top-level invocations must
+    // carry an explicit "missing subcommand" message (never about text),
+    // identical in the default and --json envelopes.
+    let group_out = cmd().args(["post"]).assert().code(2);
+    let group_err = String::from_utf8_lossy(&group_out.get_output().stderr).to_string();
+    assert!(
+        group_err.contains("missing subcommand for group 'post'"),
+        "group-level message wrong: {}",
+        group_err
+    );
+
+    cmd()
+        .args(["--json", "post"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("missing subcommand for group 'post'"));
+
+    let top_out = cmd().output().unwrap();
+    assert_eq!(top_out.status.code(), Some(2));
+    let top_err = String::from_utf8_lossy(&top_out.stderr).to_string();
+    assert!(
+        top_err.contains("missing subcommand: expected one of profile, post, brief, contacts, validate"),
+        "top-level message wrong: {}",
+        top_err
+    );
+
+    cmd()
+        .args(["--json"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "missing subcommand: expected one of profile, post, brief, contacts, validate",
+        ));
+}
+
+#[test]
+fn usage_missing_required_argument_full_message() {
+    // B1 (Ryan W1): the missing-argument list must survive into the message
+    // (no truncation at the first rendered line).
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    let out = cmd()
+        .args(["post", "send", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        err.contains("the following required arguments were not provided: <NAME>"),
+        "message must list the missing arguments: {}",
+        err
+    );
+
+    // --json carries the same complete message
+    cmd()
+        .args(["--json", "post", "send", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "the following required arguments were not provided: <NAME>",
+        ));
+}
+
+#[test]
 fn help_and_version_pass_through_exit_0() {
     // S-OUT-07 (F5 freeze): --help at all levels and -V keep exit 0
     cmd()
@@ -702,9 +770,24 @@ fn path_directory_never_matches_stage1() {
         .args(["post", "read", subdir.to_str().unwrap()])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("error"));
+        .stderr(predicate::str::contains("error not-found:"))
+        .stderr(predicate::str::contains("subdir.post.md"));
 
     assert!(!dir.path().join("subdir.post.md").exists());
+}
+
+#[test]
+fn path_both_missing_not_found_names_suffixed_path() {
+    // S-PATH-04: neither variant exists -> not-found; the error names the
+    // suffixed landing path (not the bare input)
+    let dir = TempDir::new().unwrap();
+
+    cmd()
+        .args(["post", "read", dir.path().join("no-such").to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-found:"))
+        .stderr(predicate::str::contains("no-such.post.md"));
 }
 
 // --- implicit-mention (singular, additive) ---
@@ -1131,4 +1214,257 @@ fn flag_inventory_matches_spec() {
     for flag in ["--regex", "--note"] {
         assert!(brief_help.contains(flag), "brief add must keep {}", flag);
     }
+
+    // Review round C4: remaining verb flag inventories
+    let profile_create_help = {
+        let out = cmd().args(["profile", "create", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(profile_create_help.contains("--model"), "profile create must keep --model");
+    assert!(!profile_create_help.contains("--name"), "profile create must not keep --name");
+
+    let brief_create_help = {
+        let out = cmd().args(["brief", "create", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(brief_create_help.contains("--owner"), "brief create must keep --owner");
+
+    let contacts_create_help = {
+        let out = cmd().args(["contacts", "create", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(contacts_create_help.contains("--title"), "contacts create must keep --title");
+
+    let validate_help = {
+        let out = cmd().args(["validate", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(validate_help.contains("--type"), "validate must keep --type");
+
+    let post_create_help = {
+        let out = cmd().args(["post", "create", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(post_create_help.contains("--participants"), "post create must keep --participants");
+    assert!(!post_create_help.contains("--title"), "post create must not keep --title");
+}
+
+// =====================================================================
+// Review-round additions (A2 / B4 / C3 / C6)
+// =====================================================================
+
+#[test]
+fn ascii_output_contract_guard() {
+    // A2 (pins R-09): usage error and runtime error stderr must be pure
+    // ASCII at the raw-byte level
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    let usage_out = cmd()
+        .args(["post", "send", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(
+        usage_out.stderr.iter().all(u8::is_ascii),
+        "usage error stderr contains non-ASCII bytes"
+    );
+
+    let runtime_out = cmd()
+        .args(["post", "read", "nonexistent/path/file.md"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    assert!(
+        runtime_out.stderr.iter().all(u8::is_ascii),
+        "runtime error stderr contains non-ASCII bytes"
+    );
+}
+
+#[test]
+fn send_body_and_stdin_mutually_exclusive() {
+    // S-SEND-04 (B4): positional body + --stdin -> validation error, exit 1
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "body", "--stdin"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("--stdin"));
+}
+
+#[test]
+fn send_missing_body_no_stdin_is_validation() {
+    // S-SEND-05 (standalone): PATH + NAME but no body/--stdin -> validation
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("paperwork post send"));
+}
+
+#[test]
+fn edit_triple_guardrail_cli() {
+    // S-EDIT-02: wrong sender / not most recent / not final -> not-allowed,
+    // examples carry the v0.5 positional grammar
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    let mut content = thread_message(1, "alice", "all", None, &[], "first");
+    content.push_str(&thread_message(2, "alice", "all", None, &[], "second"));
+    content.push_str(&thread_message(3, "bob", "all", None, &[], "third"));
+    std::fs::write(&path, content).unwrap();
+
+    // (a) wrong sender: #3 was sent by bob
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "alice", "3", "x"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-allowed:"))
+        .stderr(predicate::str::contains("sent by 'bob', not 'alice'"))
+        .stderr(predicate::str::contains("paperwork post edit"));
+
+    // (b) not sender's most recent: alice's last is #2
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "alice", "1", "x"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-allowed:"))
+        .stderr(predicate::str::contains("not your most recent"));
+
+    // (c) not final: #2 is alice's latest but bob's #3 ends the thread
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "alice", "2", "x"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-allowed:"))
+        .stderr(predicate::str::contains("not the final message"))
+        .stderr(predicate::str::contains("\"corrected body\""));
+}
+
+#[test]
+fn quiet_read_keeps_showing_and_window() {
+    // -q suppresses only the status line; showing/window fields survive
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    let mut content = thread_message(1, "alice", "all", None, &[], "a");
+    content.push_str(&thread_message(2, "bob", "all", None, &[], "b"));
+    std::fs::write(&path, content).unwrap();
+
+    cmd()
+        .args(["-q", "post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("showing: 2/2"))
+        .stdout(predicate::str::contains("window: #1-#2"))
+        .stdout(predicate::str::contains("ok post.read").not());
+}
+
+#[test]
+fn plain_read_outputs_file_format() {
+    // --plain emits the serialized thread (file format), no envelope
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "plain body")).unwrap();
+
+    cmd()
+        .args(["--plain", "post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("### #1 alice"))
+        .stdout(predicate::str::contains("ok post.read").not());
+}
+
+#[test]
+fn single_letter_aliases_work() {
+    // p/b/c/v aliases resolve to their canonical groups
+    let dir = TempDir::new().unwrap();
+
+    let profile_path = dir.path().join("a.md");
+    cmd()
+        .args(["p", "create", profile_path.to_str().unwrap(), "alice"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok profile.create"));
+
+    let brief_path = dir.path().join("b.md");
+    cmd()
+        .args(["b", "create", brief_path.to_str().unwrap(), "B"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok brief.create"));
+
+    let contacts_path = dir.path().join("c.md");
+    cmd()
+        .args(["c", "create", contacts_path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.create"));
+
+    let thread_path = dir.path().join("t.post.md");
+    std::fs::write(&thread_path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+    cmd()
+        .args(["v", thread_path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok validate"));
+}
+
+#[test]
+fn post_group_help_lists_verbs() {
+    // `paperwork post --help`: group-level help lists all verbs, exit 0
+    let out = cmd().args(["post", "--help"]).assert().code(0);
+    let help = String::from_utf8_lossy(&out.get_output().stdout).to_string();
+    assert!(help.contains("post"), "group help must mention the group");
+    assert!(help.contains("<COMMAND>"), "group help must show the subcommand slot");
+    for verb in ["create", "send", "read", "summary", "edit"] {
+        assert!(help.contains(verb), "group help must list verb `{}`", verb);
+    }
+}
+
+#[test]
+fn read_mention_filter_zero_hits_on_nonempty_thread() {
+    // Filter miss on a non-empty thread: showing 0/0, no window, exit 0
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    let mut content = thread_message(1, "alice", "all", None, &[], "a");
+    content.push_str(&thread_message(2, "bob", "all", None, &["carol"], "b"));
+    std::fs::write(&path, content).unwrap();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--mention", "nobody"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("showing: 0/0"))
+        .stdout(predicate::str::contains("window").not());
+}
+
+#[test]
+fn implicit_mention_persisted_to_file() {
+    // The auto-added mention must land in the thread file (- Mentions: line)
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "reply"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("implicit-mention: alice"));
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.contains("- Mentions: alice"),
+        "implicit mention not persisted to file"
+    );
 }

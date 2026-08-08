@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::output::OutputMode;
 
-/// Shared context for all commands (stateless — no workspace root).
+/// Shared context for all commands (stateless -- no workspace root).
 pub struct Context {
     /// Output mode.
     pub mode: OutputMode,

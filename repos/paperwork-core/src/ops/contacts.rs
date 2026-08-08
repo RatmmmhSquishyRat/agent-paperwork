@@ -52,7 +52,7 @@ pub fn contacts_add(path: &Path, profile_path: &str) -> Result<()> {
         return Err(PaperworkError::NotFound {
             resource: "Contacts".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork contacts create <path>` first".to_string(),
+            fix: format!("run `paperwork contacts create {}` first", path.display()),
             example: format!("paperwork contacts create {}", path.display()),
         });
     }
@@ -94,7 +94,7 @@ pub fn contacts_read(path: &Path) -> Result<Vec<ContactEntry>> {
         return Err(PaperworkError::NotFound {
             resource: "Contacts".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork contacts create <path>` first".to_string(),
+            fix: format!("run `paperwork contacts create {}` first", path.display()),
             example: format!("paperwork contacts create {}", path.display()),
         });
     }

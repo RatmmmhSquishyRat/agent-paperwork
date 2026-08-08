@@ -17,7 +17,7 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
             resource: "Profile".to_string(),
             name: path.display().to_string(),
             fix: "use `paperwork profile edit` to modify an existing profile".to_string(),
-            example: format!("paperwork profile edit {} --model <new-model>", path.display()),
+            example: format!("paperwork profile edit {} --model gpt-4o", path.display()),
         });
     }
 
@@ -57,7 +57,7 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork profile create <path>` first".to_string(),
+            fix: format!("run `paperwork profile create {} alice` first", path.display()),
             example: format!("paperwork profile create {} alice", path.display()),
         });
     }
@@ -87,7 +87,7 @@ pub fn edit_profile(
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork profile create <path>` first".to_string(),
+            fix: format!("run `paperwork profile create {} alice` first", path.display()),
             example: format!("paperwork profile create {} alice", path.display()),
         });
     }

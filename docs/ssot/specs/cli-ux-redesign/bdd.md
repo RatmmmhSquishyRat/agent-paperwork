@@ -174,7 +174,7 @@
 
 ### S-READ-07 过滤 + limit 组合（total 口径，F3 裁定）
 
-- **Given** 线程共 50 条，其中 alice 发言 25 条
+- **Given** 线程共 50 条，其中 alice 被 mention 25 次（`--mention` 过滤基于 mention-list，而非发言者）
 - **When** 执行 `paperwork post read standup.post.md --mention alice --limit 20`
 - **Then** 字段区含 `showing: 20/25`（total 为过滤后、limit 截断前，而非线程物理总数 50）；`window` 按实际展示的首末 seq（线程基准）；body 仅过滤结果的最后 20 条。
 

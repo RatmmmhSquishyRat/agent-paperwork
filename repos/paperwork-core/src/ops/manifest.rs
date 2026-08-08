@@ -76,7 +76,7 @@ pub fn brief_add_entry(
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork brief create <path>` first".to_string(),
+            fix: format!("run `paperwork brief create {} \"My Brief\"` first", path.display()),
             example: format!("paperwork brief create {} \"My Brief\"", path.display()),
         });
     }
@@ -147,7 +147,7 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork brief create <path>` first".to_string(),
+            fix: format!("run `paperwork brief create {} \"My Brief\"` first", path.display()),
             example: format!("paperwork brief create {} \"My Brief\"", path.display()),
         });
     }
@@ -168,7 +168,7 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         return Err(PaperworkError::NotFound {
             resource: "Brief entry".to_string(),
             name: title.to_string(),
-            fix: "run `paperwork brief read <path>` to see available entries".to_string(),
+            fix: format!("run `paperwork brief read {}` to see available entries", path.display()),
             example: format!("paperwork brief read {}", path.display()),
         });
     }
@@ -190,7 +190,7 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork brief create <path>` first".to_string(),
+            fix: format!("run `paperwork brief create {} \"My Brief\"` first", path.display()),
             example: format!("paperwork brief create {} \"My Brief\"", path.display()),
         });
     }

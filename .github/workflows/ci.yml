@@ -139,6 +139,11 @@ jobs:
           & $BIN post read standup | Select-String "^ok post.read"
           & $BIN post summary standup | Select-String "^ok post.summary"
 
+          # --json status assertion (Daniel #5)
+          $json = & $BIN post read standup --json | Out-String
+          if ($json -match '"status":"ok"') { Write-Output "PASS: json status" }
+          else { Write-Error "FAIL: json status"; exit 1 }
+
           # Stdin
           "piped content" | & $BIN post send standup alice --stdin | Select-String "^ok post.send"
 

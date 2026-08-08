@@ -69,14 +69,18 @@ fn main() {
         Ok(cli) => cli,
         Err(err) => {
             // Pass-through (F5): --help/-h (all levels) and -V keep clap's
-            // original semantics — print and exit 0, never a usage envelope.
+            // original semantics -- print and exit 0, never a usage envelope.
             if matches!(err.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
                 let _ = err.print();
                 process::exit(0);
             }
 
-            // --json awareness: no parse result yet, fall back to an argv scan.
-            let json_mode = std::env::args().any(|a| a == "--json");
+            // --json awareness: no parse result yet, fall back to an argv
+            // scan. Values after `--` are positional payloads, never flags.
+            let json_mode = std::env::args()
+                .skip(1)
+                .take_while(|a| a != "--")
+                .any(|a| a == "--json");
             let unknown = extract_unknown_argument(&err);
             // Suspected body value starting with '-' (short unknown token,
             // not an old long flag): the example must demonstrate `--` (NF-2).
@@ -146,15 +150,61 @@ fn main() {
     }
 }
 
-/// Extract a single-line message from a clap usage error.
+/// Extract the message for a usage envelope.
+///
+/// Collects every rendered line up to the first blank line or the
+/// "For more information" footer, so multi-line messages (e.g. the
+/// MissingRequiredArgument list of missing arguments) are not truncated.
+/// MissingSubcommand gets an explicit "missing subcommand" message (clap's
+/// default rendering shows about text instead); the default and --json
+/// envelopes share this exact message. clap reports a bare group invocation
+/// as DisplayHelpOnMissingArgumentOrSubcommand, which maps to the same shape.
 fn usage_message(err: &clap::Error) -> String {
+    if matches!(
+        err.kind(),
+        ErrorKind::MissingSubcommand | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    ) {
+        return missing_subcommand_message();
+    }
     let rendered = err.render().to_string();
-    let first = rendered.lines().next().unwrap_or("usage error").trim();
-    first
+    let mut parts: Vec<&str> = Vec::new();
+    for line in rendered.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("For more information") {
+            break;
+        }
+        parts.push(trimmed);
+    }
+    let joined = parts.join(" ");
+    joined
         .strip_prefix("error:")
-        .unwrap_or(first)
+        .unwrap_or(&joined)
         .trim()
         .to_string()
+}
+
+/// Explicit "missing subcommand" message for top-level and group-level
+/// MissingSubcommand failures (S-OUT-06).
+fn missing_subcommand_message() -> String {
+    let group = std::env::args()
+        .skip(1)
+        .take_while(|a| a != "--")
+        .find(|a| !a.starts_with('-'));
+    let canonical = match group.as_deref() {
+        Some("profile") | Some("p") => Some("profile"),
+        Some("post") | Some("po") => Some("post"),
+        Some("brief") | Some("b") => Some("brief"),
+        Some("contacts") | Some("c") => Some("contacts"),
+        Some("validate") | Some("v") => Some("validate"),
+        _ => None,
+    };
+    match canonical {
+        Some(g) => format!(
+            "missing subcommand for group '{}'; run 'paperwork {} --help' to list its verbs",
+            g, g
+        ),
+        None => "missing subcommand: expected one of profile, post, brief, contacts, validate".to_string(),
+    }
 }
 
 /// Build the fix line for a usage envelope.
@@ -167,7 +217,7 @@ fn usage_fix(err: &clap::Error, command: &str) -> String {
     match unknown.as_deref() {
         // Long unknown flag (--from, --name, ...): old-grammar migration case
         Some(tok) if tok.starts_with("--") => format!(
-            "{}; this flag no longer exists in v0.5 grammar — give the value as a positional argument",
+            "{}; this flag is not recognized; if it came from pre-v0.5 grammar (--from/--seq/--title/--entry/...), give its value as a positional argument",
             base
         ),
         // Short/dash token: suspected body value starting with '-'
@@ -298,7 +348,7 @@ fn canonical_example(dash_body: bool) -> (&'static str, &'static str) {
         ),
         ("contacts", Some("read")) => ("contacts.read", "paperwork contacts read team.contacts.md"),
         ("contacts", _) => ("usage", "paperwork contacts create team --title \"Core Team\""),
-        ("validate", _) => ("validate", "paperwork validate standup.post.md"),
+        ("validate", _) => ("validate", "paperwork validate mystery.md --type post"),
         _ => ("usage", "paperwork post send standup.post.md alice \"Hello\""),
     }
 }
