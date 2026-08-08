@@ -14,15 +14,26 @@ pub struct BriefArgs {
     command: BriefCommand,
 }
 
+/// Command identifier for the output protocol (brief.<verb>).
+pub fn command_id(args: &BriefArgs) -> &'static str {
+    match &args.command {
+        BriefCommand::Create { .. } => "brief.create",
+        BriefCommand::Add { .. } => "brief.add",
+        BriefCommand::Remove { .. } => "brief.remove",
+        BriefCommand::Read { .. } => "brief.read",
+        BriefCommand::Verify { .. } => "brief.verify",
+    }
+}
+
 #[derive(Subcommand)]
 enum BriefCommand {
     /// Create a new brief
+    #[command(after_help = "Examples:\n  paperwork brief create onboarding \"Codebase Onboarding\" --owner alice")]
     Create {
         /// Path for the new brief file
         path: PathBuf,
 
         /// Brief title
-        #[arg(long)]
         title: String,
 
         /// Owner name
@@ -35,12 +46,12 @@ enum BriefCommand {
     },
 
     /// Add an entry to a brief
+    #[command(after_help = "Examples:\n  paperwork brief add onboarding.brief.md src/main.rs --regex \"fn main\" --note \"Entry point\"")]
     Add {
         /// Path to the brief file
         path: PathBuf,
 
         /// Path to the entry file (relative to brief's directory)
-        #[arg(long)]
         entry: String,
 
         /// Regex pattern for content extraction
@@ -53,16 +64,17 @@ enum BriefCommand {
     },
 
     /// Remove an entry from a brief by title
+    #[command(after_help = "Examples:\n  paperwork brief remove onboarding.brief.md main.rs")]
     Remove {
         /// Path to the brief file
         path: PathBuf,
 
-        /// Title of the entry to remove
-        #[arg(long = "entry-title")]
+        /// Title of the entry to remove (the entry's basename, as stored)
         entry_title: String,
     },
 
     /// Read a brief
+    #[command(after_help = "Examples:\n  paperwork brief read onboarding.brief.md\n  paperwork brief read onboarding.brief.md --full")]
     Read {
         /// Path to the brief file
         path: PathBuf,
@@ -73,6 +85,7 @@ enum BriefCommand {
     },
 
     /// Verify all entries in a brief
+    #[command(after_help = "Examples:\n  paperwork brief verify onboarding.brief.md")]
     Verify {
         /// Path to the brief file
         path: PathBuf,

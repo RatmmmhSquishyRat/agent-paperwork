@@ -14,9 +14,19 @@ pub struct ContactsArgs {
     command: ContactsCommand,
 }
 
+/// Command identifier for the output protocol (contacts.<verb>).
+pub fn command_id(args: &ContactsArgs) -> &'static str {
+    match &args.command {
+        ContactsCommand::Create { .. } => "contacts.create",
+        ContactsCommand::Add { .. } => "contacts.add",
+        ContactsCommand::Read { .. } => "contacts.read",
+    }
+}
+
 #[derive(Subcommand)]
 enum ContactsCommand {
     /// Create a new contacts file
+    #[command(after_help = "Examples:\n  paperwork contacts create team --title \"Core Team\"\n\nNote: title is an OPTIONAL flag here (default \"Contacts\"), unlike post/brief create where it is a positional argument.")]
     Create {
         /// Path for the new contacts file
         path: PathBuf,
@@ -27,16 +37,17 @@ enum ContactsCommand {
     },
 
     /// Add a profile to the contacts file
+    #[command(after_help = "Examples:\n  paperwork contacts add team.contacts.md agents/alice.profile.md")]
     Add {
         /// Path to the contacts file
         path: PathBuf,
 
         /// Path to the profile to add
-        #[arg(long)]
         profile: String,
     },
 
     /// Read all contacts
+    #[command(after_help = "Examples:\n  paperwork contacts read team.contacts.md")]
     Read {
         /// Path to the contacts file
         path: PathBuf,

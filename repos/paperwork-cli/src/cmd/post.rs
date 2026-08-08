@@ -1,4 +1,8 @@
 //! Post (group thread) commands: create, send, read, summary, edit.
+//!
+//! v0.5.0 grammar: PATH is always the first required positional argument;
+//! NAME (the signing actor) is the second required positional for send/edit;
+//! content (BODY / NEW_BODY) is always the last positional argument.
 
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -15,15 +19,26 @@ pub struct PostArgs {
     command: PostCommand,
 }
 
+/// Command identifier for the output protocol (post.<verb>).
+pub fn command_id(args: &PostArgs) -> &'static str {
+    match &args.command {
+        PostCommand::Create { .. } => "post.create",
+        PostCommand::Send { .. } => "post.send",
+        PostCommand::Read { .. } => "post.read",
+        PostCommand::Summary { .. } => "post.summary",
+        PostCommand::Edit { .. } => "post.edit",
+    }
+}
+
 #[derive(Subcommand)]
 enum PostCommand {
     /// Create a new post thread
+    #[command(after_help = "Examples:\n  paperwork post create standup \"Daily Standup\" --participants alice,bob")]
     Create {
         /// Path for the new post thread file
         path: PathBuf,
 
         /// Thread title
-        #[arg(long)]
         title: String,
 
         /// Comma-separated participant names
@@ -32,13 +47,13 @@ enum PostCommand {
     },
 
     /// Send a message to a post thread
+    #[command(after_help = "Examples:\n  paperwork post send standup.post.md alice \"Parser module is 80% done.\"\n  paperwork post send standup alice --reply-to 2 --mention bob \"Tests merged.\"\n  echo \"multi-line body\" | paperwork post send standup.post.md alice --stdin\n  paperwork post send standup.post.md alice -- \"-fix flag text\"")]
     Send {
         /// Path to the post thread file
         path: PathBuf,
 
-        /// Sender name
-        #[arg(long)]
-        from: String,
+        /// Sender name (signature)
+        name: String,
 
         /// Message body (positional, optional if --stdin)
         body: Option<String>,
@@ -57,6 +72,7 @@ enum PostCommand {
     },
 
     /// Read messages from a post thread
+    #[command(after_help = "Examples:\n  paperwork post read standup.post.md --from 5 --to 20\n  paperwork post read standup.post.md --mention alice --limit 20")]
     Read {
         /// Path to the post thread file
         path: PathBuf,
@@ -89,17 +105,16 @@ enum PostCommand {
     },
 
     /// Edit a message in a post thread
+    #[command(after_help = "Examples:\n  paperwork post edit standup.post.md alice 3 \"corrected body\"\n  paperwork post edit standup.post.md alice 3 -- \"-starts with dash\"")]
     Edit {
         /// Path to the post thread file
         path: PathBuf,
 
-        /// Sequence number of the message to edit
-        #[arg(long)]
-        seq: u64,
+        /// Editor name (must match original sender)
+        name: String,
 
-        /// Sender name (must match original sender)
-        #[arg(long)]
-        from: String,
+        /// Sequence number of the message to edit
+        seq: u64,
 
         /// New message body (positional, optional if --stdin)
         new_body: Option<String>,
@@ -118,6 +133,17 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             participants,
         } => {
             let path = ensure_suffix(path, ".post.md");
+
+            // create never appends to an existing thread
+            if path.is_file() {
+                return Err(paperwork_core::PaperworkError::AlreadyExists {
+                    resource: "Thread".to_string(),
+                    name: path.display().to_string(),
+                    fix: "the thread already exists; send to it, or choose a different path".to_string(),
+                    example: format!("paperwork post send {} alice \"Hello\"", path.display()),
+                }.into());
+            }
+
             let body = if participants.is_empty() {
                 format!("[Thread created: {}]", title)
             } else {
@@ -143,7 +169,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
         PostCommand::Send {
             path,
-            from,
+            name,
             body,
             stdin,
             reply_to,
@@ -151,38 +177,69 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
         } => {
             let path = ensure_suffix(path, ".post.md");
 
+            // Three-stage resolution stage 1 may hit an existing file that is
+            // not a paperwork thread: validate with the thread parser up front
+            // so the format error surfaces instead of corrupting the file
+            // (no re-routing, spec S-PATH-07). Content without any valid
+            // message boundary is rejected the same way `validate` rejects it.
+            if path.is_file() {
+                let pre_existing = paperwork_core::ops::thread::thread_read(&path, None, None)?;
+                let raw = std::fs::read_to_string(&path)?;
+                if pre_existing.is_empty() && !raw.trim().is_empty() {
+                    return Err(paperwork_core::PaperworkError::Parse {
+                        message: format!("{} is not a valid post thread: no valid message boundaries found", path.display()),
+                        fix: "expected --- separators with ### #N sender · timestamp headers; or validate it explicitly".to_string(),
+                        example: format!("paperwork validate {} --type post", path.display()),
+                    }.into());
+                }
+            }
+
             // Resolve body from --stdin or positional
-            let body = resolve_body(body, stdin)?;
+            let body = resolve_body(body, stdin, BodyOwner::Send, &path.display().to_string())?;
 
             // Reject empty/whitespace-only body
             if body.trim().is_empty() {
                 return Err(paperwork_core::PaperworkError::Validation {
                     message: "message body is empty".to_string(),
-                    fix: "provide a non-empty message body".to_string(),
-                    example: format!("paperwork post send {} --from {} \"Hello\"", path.display(), from),
+                    fix: "provide a non-empty message body; a body starting with '-' must be placed after -- (e.g. paperwork post send standup.post.md alice -- \"-fix flag text\")".to_string(),
+                    example: format!("paperwork post send {} alice \"Hello\"", path.display()),
+                }.into());
+            }
+
+            // Reject empty/whitespace-only NAME
+            if name.trim().is_empty() {
+                return Err(paperwork_core::PaperworkError::Validation {
+                    message: "sender name (NAME) is empty".to_string(),
+                    fix: "provide a non-empty NAME as the second positional argument (right after PATH)".to_string(),
+                    example: format!("paperwork post send {} alice \"Hello\"", path.display()),
                 }.into());
             }
 
             // Reply carries implicit @: auto-add original sender to mentions
             let mut mentions = mention;
+            let mut implicit_mention: Option<String> = None;
             if let Some(reply_seq) = reply_to {
                 if let Ok(msgs) = paperwork_core::ops::thread::thread_read(&path, Some(reply_seq), Some(reply_seq)) {
                     if let Some(original) = msgs.first() {
-                        if !mentions.contains(&original.sender) && original.sender != from {
+                        if !mentions.contains(&original.sender) && original.sender != name {
                             mentions.push(original.sender.clone());
+                            implicit_mention = Some(original.sender.clone());
                         }
                     }
                 }
             }
 
             let seq =
-                paperwork_core::ops::thread::thread_send(&path, &from, &[], &body, reply_to, &mentions)?;
+                paperwork_core::ops::thread::thread_send(&path, &name, &[], &body, reply_to, &mentions)?;
 
             let conclusion = format!("#{} -> {}", seq, path.display());
-            let env = output::Envelope::new("post.send", conclusion)
+            let mut env = output::Envelope::new("post.send", conclusion)
                 .field("seq", &seq.to_string())
                 .field("path", &path.display().to_string())
-                .field("sender", &from);
+                .field("sender", &name);
+            if let Some(ref im) = implicit_mention {
+                env = env.field("implicit-mention", im);
+            }
             output::emit_ok(ctx, env);
             Ok(())
         }
@@ -208,14 +265,21 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                 messages = messages.into_iter().skip(skip).collect();
             }
 
+            // Window bounds by first/last displayed seq (thread-based)
+            let window = match (messages.first(), messages.last()) {
+                (Some(first), Some(last)) => Some(format!("#{}-#{}", first.seq, last.seq)),
+                _ => None,
+            };
+
             match ctx.mode {
                 OutputMode::Json => {
                     let mut obj = serde_json::Map::new();
                     obj.insert("status".to_string(), serde_json::json!("ok"));
                     obj.insert("command".to_string(), serde_json::json!("post.read"));
                     obj.insert("conclusion".to_string(), serde_json::json!(format!("{} messages", total)));
-                    if total > limit {
-                        obj.insert("showing".to_string(), serde_json::json!(format!("{}/{}", messages.len(), total)));
+                    obj.insert("showing".to_string(), serde_json::json!(format!("{}/{}", messages.len(), total)));
+                    if let Some(ref w) = window {
+                        obj.insert("window".to_string(), serde_json::json!(w));
                     }
                     obj.insert("messages".to_string(), serde_json::json!(messages));
                     println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
@@ -226,9 +290,10 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                     output::print_plain(&content);
                 }
                 OutputMode::Default => {
-                    let mut env = output::Envelope::new("post.read", format!("{} messages", total));
-                    if total > limit {
-                        env = env.field("showing", &format!("{}/{}", messages.len(), total));
+                    let mut env = output::Envelope::new("post.read", format!("{} messages", total))
+                        .field("showing", &format!("{}/{}", messages.len(), total));
+                    if let Some(ref w) = window {
+                        env = env.field("window", w);
                     }
                     let mut body_lines = Vec::new();
                     for msg in &messages {
@@ -318,16 +383,16 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
         PostCommand::Edit {
             path,
+            name,
             seq,
-            from,
             new_body,
             stdin,
         } => {
             let path = ensure_suffix(path, ".post.md");
 
-            let new_body = resolve_body(new_body, stdin)?;
+            let new_body = resolve_body(new_body, stdin, BodyOwner::Edit, &path.display().to_string())?;
 
-            paperwork_core::ops::thread::thread_edit(&path, seq, &from, &new_body)?;
+            paperwork_core::ops::thread::thread_edit(&path, seq, &name, &new_body)?;
 
             let env = output::Envelope::new("post.edit", format!("#{}", seq))
                 .field("seq", &seq.to_string())
@@ -338,19 +403,46 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
     }
 }
 
+/// Which command owns a resolve_body call (error examples differ per verb).
+enum BodyOwner {
+    Send,
+    Edit,
+}
+
 /// Resolve body from positional arg or --stdin flag.
-fn resolve_body(positional: Option<String>, stdin: bool) -> Result<String> {
+///
+/// Error examples are verb-specific: edit failures must not show send-form
+/// commands (feasibility review m-2).
+fn resolve_body(positional: Option<String>, stdin: bool, owner: BodyOwner, path: &str) -> Result<String> {
     match (positional, stdin) {
-        (Some(_), true) => Err(paperwork_core::PaperworkError::Validation {
-            message: "both positional body and --stdin provided".to_string(),
-            fix: "use either a positional body argument or --stdin, not both".to_string(),
-            example: "paperwork post send thread.post.md --from alice --stdin".to_string(),
-        }.into()),
-        (None, false) => Err(paperwork_core::PaperworkError::Validation {
-            message: "no message body provided".to_string(),
-            fix: "provide a body as a positional argument or use --stdin".to_string(),
-            example: "paperwork post send thread.post.md --from alice \"Hello\"".to_string(),
-        }.into()),
+        (Some(_), true) => {
+            let example = match owner {
+                BodyOwner::Send => format!("paperwork post send {} alice --stdin", path),
+                BodyOwner::Edit => format!("paperwork post edit {} alice 2 --stdin", path),
+            };
+            Err(paperwork_core::PaperworkError::Validation {
+                message: "both positional body and --stdin provided".to_string(),
+                fix: "use either a positional body argument or --stdin, not both".to_string(),
+                example,
+            }.into())
+        }
+        (None, false) => {
+            let (message, example) = match owner {
+                BodyOwner::Send => (
+                    "no message body provided; if you already gave a body, check that you did not miss the NAME slot (NAME comes right after PATH)".to_string(),
+                    format!("paperwork post send {} alice \"Hello\"", path),
+                ),
+                BodyOwner::Edit => (
+                    "no message body provided".to_string(),
+                    format!("paperwork post edit {} alice 2 \"corrected body\"", path),
+                ),
+            };
+            Err(paperwork_core::PaperworkError::Validation {
+                message,
+                fix: "provide a body as a positional argument or use --stdin; a body starting with '-' must be placed after -- (e.g. paperwork post send standup.post.md alice -- \"-fix flag text\")".to_string(),
+                example,
+            }.into())
+        }
         (Some(body), false) => Ok(body),
         (None, true) => {
             let mut buf = String::new();

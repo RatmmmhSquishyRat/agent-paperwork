@@ -3,22 +3,48 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Args;
+use clap::{Args, ValueEnum};
 
 use crate::cmd::Context;
 use crate::output;
 
+/// Explicit parser selection for `validate --type` (U-15, additive).
+#[derive(ValueEnum, Clone, Copy)]
+pub enum FileKind {
+    Post,
+    Profile,
+    Brief,
+    Contacts,
+}
+
 #[derive(Args)]
+#[command(after_help = "Examples:\n  paperwork validate standup.post.md\n  paperwork validate mystery.md --type post")]
 pub struct ValidateArgs {
     /// Path to the file to validate
     pub path: PathBuf,
+
+    /// Parse as this type instead of inferring from the suffix
+    #[arg(long = "type", value_enum)]
+    pub kind: Option<FileKind>,
+}
+
+/// Command identifier for the output protocol.
+pub fn command_id(_args: &ValidateArgs) -> &'static str {
+    "validate"
 }
 
 pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
     let path_str = args.path.to_string_lossy().to_string();
 
-    // Detect file type from suffix
-    let file_type = if path_str.ends_with(".post.md") {
+    // Detect file type: --type overrides suffix inference (spec §3.5)
+    let file_type = if let Some(kind) = args.kind {
+        match kind {
+            FileKind::Post => FileType::Post,
+            FileKind::Profile => FileType::Profile,
+            FileKind::Brief => FileType::Brief,
+            FileKind::Contacts => FileType::Contacts,
+        }
+    } else if path_str.ends_with(".post.md") {
         FileType::Post
     } else if path_str.ends_with(".profile.md") {
         FileType::Profile
@@ -27,11 +53,11 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
     } else if path_str.ends_with(".contacts.md") {
         FileType::Contacts
     } else {
-        // Unknown suffix
+        // Unknown suffix and no --type given
         return Err(paperwork_core::PaperworkError::Parse {
             message: format!("unknown file type: {}", path_str),
-            fix: "file must end with .post.md, .profile.md, .brief.md, or .contacts.md".to_string(),
-            example: "paperwork validate myfile.post.md".to_string(),
+            fix: "file must end with .post.md/.profile.md/.brief.md/.contacts.md, or pass --type".to_string(),
+            example: "paperwork validate myfile.md --type post".to_string(),
         }.into());
     };
 
@@ -51,7 +77,7 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
                     Err(paperwork_core::PaperworkError::Parse {
                         message: "no valid message boundaries found".to_string(),
                         fix: "expected --- separators with ### #N sender . timestamp headers and ````markdown fenced bodies".to_string(),
-                        example: "paperwork post send myfile --from alice \"hello\"".to_string(),
+                        example: "paperwork post send myfile alice \"hello\"".to_string(),
                     })
                 } else {
                     Ok(())
