@@ -3,6 +3,76 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-08-09
+
+### Changed (Breaking)
+
+CLI grammar redesign: required values are positional; optional values stay flags.
+Grammar: `paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]` —
+PATH is always the first positional argument; content is always last.
+
+**Migration table (old flag -> new positional):**
+
+| Command | v0.4 | v0.5 |
+|---|---|---|
+| `profile create` | `profile create <PATH> --name <NAME>` | `profile create <PATH> <NAME>` |
+| `post create` | `post create <PATH> --title <TITLE>` | `post create <PATH> <TITLE>` |
+| `post send` | `post send <PATH> --from <NAME> <BODY>` | `post send <PATH> <NAME> <BODY>` |
+| `post edit` | `post edit <PATH> --seq <N> --from <NAME> <BODY>` | `post edit <PATH> <NAME> <SEQ> <BODY>` |
+| `brief create` | `brief create <PATH> --title <TITLE>` | `brief create <PATH> <TITLE>` |
+| `brief add` | `brief add <PATH> --entry <ENTRY>` | `brief add <PATH> <ENTRY>` |
+| `brief remove` | `brief remove <PATH> --entry-title <TITLE>` | `brief remove <PATH> <ENTRY-TITLE>` |
+| `contacts add` | `contacts add <PATH> --profile <PROFILE>` | `contacts add <PATH> <PROFILE-PATH>` |
+
+Unchanged: `post read --from/--to` (seq range), `contacts create --title`
+(optional flag with default), all other optional flags (`--model`, `--reply-to`,
+`--mention`, `--limit`, `--stdin`, `--regex`, `--note`, `--owner`, scopes).
+
+Path resolution is now three-stage: (1) the given path wins if it exists as a
+file; (2) otherwise the type-suffixed variant is used if it exists; (3) if
+neither exists, the suffixed path becomes the landing point — physical creation
+still happens only in write commands (send/create/add); read-only commands
+report not-found. Hitting an existing foreign (non-paperwork) file at stage 1
+now reports `error format:` instead of silently appending (v0.4 behavior).
+
+**Consumer-visible behavior changes beyond the argument layer (migration notes):**
+
+1. `post read` field `showing: n/total` is now always emitted (previously only
+   when the default limit was exceeded); `total` counts post-filter messages
+   before the limit.
+2. New exit code: usage errors (wrong invocation shape) exit **2** (runtime
+   errors keep exit 1). Scripts checking only `$? != 0` are unaffected; scripts
+   distinguishing failure classes can now separate misuse from runtime errors.
+3. Error category vocabulary gains a seventh category `usage` (existing six —
+   `format`, `validation`, `io`, `not-found`, `already-exists`, `not-allowed` —
+   unchanged).
+4. Three additive output fields: `implicit-mention` (singular; `post send` only,
+   present only when a reply auto-mentions the original sender), `window`
+   (`post read`, `#first-#last` of the displayed range, absent for empty
+   threads), and `command` inside `--json` error objects.
+
+### Added
+
+- `error usage:` envelope (exit 2) for all clap-level parse failures, carrying
+  `fix:` and a canonical copy-paste `example:`; `--help`/`-V` keep exit 0
+- `--json` usage errors: single-line JSON on stdout with
+  `category:"usage"`, `command`, `example`, `exit_code:2`
+- `command` field in `--json` runtime error objects (additive)
+- `implicit-mention` field: replies auto-add the original sender to mentions
+- `post read`: always-on `showing:` and `window:` fields
+- `validate --type post|profile|brief|contacts`: explicit parser selection,
+  overriding suffix inference
+- `post` hidden alias `po` (does not appear in `--help`)
+- `post create` on an existing thread reports `already-exists`
+- Bodies starting with `-` supported via the `--` boundary
+- `SKILL.md`: agent-oriented grammar cheat sheet with per-tool examples and
+  error self-healing hints
+- English `after_help` examples on every subcommand (including `--` teaching)
+
+### Deprecated
+
+- None.
+
 ## [0.4.0] - 2026-08-01
 
 ### Changed (Breaking)

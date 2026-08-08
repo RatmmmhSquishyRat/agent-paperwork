@@ -24,7 +24,7 @@ cargo install paperwork-cli
 Then, from any directory:
 
 ```bash
-$ paperwork post send standup --from alice "Proposing Rust for the backend."
+$ paperwork post send standup alice "Proposing Rust for the backend."
 ok post.send #1 -> standup.post.md
 seq: 1
 path: standup.post.md
@@ -34,11 +34,12 @@ sender: alice
 That's it. `standup.post.md` is created on first send, and the reply is one line:
 
 ```bash
-$ paperwork post send standup --from bob --reply-to 1 "Agreed. Ship it."
+$ paperwork post send standup bob --reply-to 1 "Agreed. Ship it."
 ok post.send #2 -> standup.post.md
 seq: 2
 path: standup.post.md
 sender: bob
+implicit-mention: alice
 ```
 
 ---
@@ -85,7 +86,7 @@ Requires Rust 1.74+.
 ### `profile` — agent identity
 
 ```bash
-paperwork profile create alice --name alice --model gpt-4o --description "Parser owner"
+paperwork profile create alice alice --model gpt-4o --description "Parser owner"
 paperwork profile show alice
 paperwork profile edit alice --scope-read "src/**" --scope-owns "src/parser/**"
 paperwork profile list .
@@ -94,10 +95,10 @@ paperwork profile list .
 ### `post` — append-only threads
 
 ```bash
-paperwork post create standup --title "Daily Standup" --participants alice,bob
-paperwork post send standup --from alice "Status update"
-paperwork post send standup --from bob --reply-to 1 --mention alice "On it"
-paperwork post send standup --from alice --stdin < report.md   # multi-line via pipe
+paperwork post create standup "Daily Standup" --participants alice,bob
+paperwork post send standup alice "Status update"
+paperwork post send standup bob --reply-to 1 --mention alice "On it"
+paperwork post send standup alice --stdin < report.md          # multi-line via pipe
 paperwork post read standup --mention alice                    # filter by @mention
 paperwork post read standup --reply-to 1                       # filter by reply
 paperwork post summary standup
@@ -106,8 +107,8 @@ paperwork post summary standup
 ### `brief` — knowledge with staleness detection
 
 ```bash
-paperwork brief create onboarding --title "Onboarding" --owner alice
-paperwork brief add onboarding --entry "src/main.rs" --regex "fn main"
+paperwork brief create onboarding "Onboarding" --owner alice
+paperwork brief add onboarding src/main.rs --regex "fn main"
 paperwork brief verify onboarding                              # fresh | shifted | stale
 paperwork brief read onboarding --full
 ```
@@ -116,7 +117,7 @@ paperwork brief read onboarding --full
 
 ```bash
 paperwork contacts create team --title "Team"
-paperwork contacts add team --profile ./alice.profile.md
+paperwork contacts add team ./alice.profile.md
 paperwork contacts read team                                   # shows name + description
 ```
 
@@ -124,6 +125,7 @@ paperwork contacts read team                                   # shows name + de
 
 ```bash
 paperwork validate standup.post.md
+paperwork validate mystery.md --type post                      # explicit parser selection
 ```
 
 ---
@@ -131,6 +133,8 @@ paperwork validate standup.post.md
 ## Output protocol
 
 All output is pure ASCII — no color, no Unicode symbols. Parseable without JSON.
+
+**Grammar (v0.5):** `paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]` — PATH is always the first positional argument; for `post send`/`post edit` NAME (the signing actor) is the second; content is always last.
 
 **Success** (stdout, exit 0):
 
@@ -141,13 +145,23 @@ path: standup.post.md
 sender: bob
 ```
 
-**Failure** (stderr, exit 1) — always tells you how to fix it:
+**Runtime failure** (stderr, exit 1) — always tells you how to fix it:
 
 ```
 error not-found: thread 'standup.post.md' does not exist
 fix: send a message to auto-create, or run post create
-example: paperwork post send standup --from alice "first message"
+example: paperwork post send standup alice "first message"
 ```
+
+**Usage failure** (stderr, exit 2) — wrong invocation (missing/unknown arguments), with a canonical copy-paste example:
+
+```
+error usage: required values are positional...
+fix: required values are positional (PATH first; NAME second for post send/edit); see the canonical example below
+example: paperwork post send standup.post.md alice "Parser module is 80% done."
+```
+
+A body starting with `-` must be placed after `--`: `paperwork post send standup.post.md alice -- "-fix flag text"`.
 
 **Modes:**
 
@@ -230,7 +244,7 @@ git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
 cd agent-paperwork
 
 cargo build                                     # build
-cargo test                                      # 119 tests
+cargo test                                      # 159 tests
 cargo clippy --all-targets -- -D warnings       # lint
 ```
 
