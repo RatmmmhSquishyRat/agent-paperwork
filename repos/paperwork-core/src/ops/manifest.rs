@@ -29,7 +29,7 @@ pub fn brief_create(
             resource: "Brief".to_string(),
             name: path.display().to_string(),
             fix: "use `paperwork brief add` to add entries".to_string(),
-            example: format!("paperwork brief add {} --entry <file>", path.display()),
+            example: format!("paperwork brief add {} src/main.rs", path.display()),
         });
     }
 
@@ -77,7 +77,7 @@ pub fn brief_add_entry(
             resource: "Brief".to_string(),
             name: path.display().to_string(),
             fix: "run `paperwork brief create <path>` first".to_string(),
-            example: format!("paperwork brief create {} --title <title>", path.display()),
+            example: format!("paperwork brief create {} \"My Brief\"", path.display()),
         });
     }
 
@@ -102,7 +102,7 @@ pub fn brief_add_entry(
             resource: "Brief entry".to_string(),
             name: title,
             fix: "use a different entry path or remove the existing entry first".to_string(),
-            example: format!("paperwork brief remove {} --entry-title <title>", path.display()),
+            example: format!("paperwork brief remove {} main.rs", path.display()),
         });
     }
 
@@ -148,7 +148,7 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
             fix: "run `paperwork brief create <path>` first".to_string(),
-            example: format!("paperwork brief create {} --title <title>", path.display()),
+            example: format!("paperwork brief create {} \"My Brief\"", path.display()),
         });
     }
 
@@ -191,7 +191,7 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
             fix: "run `paperwork brief create <path>` first".to_string(),
-            example: format!("paperwork brief create {} --title <title>", path.display()),
+            example: format!("paperwork brief create {} \"My Brief\"", path.display()),
         });
     }
 

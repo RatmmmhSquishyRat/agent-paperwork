@@ -58,7 +58,7 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
             fix: "run `paperwork profile create <path>` first".to_string(),
-            example: format!("paperwork profile create {} --name <agent>", path.display()),
+            example: format!("paperwork profile create {} alice", path.display()),
         });
     }
 
@@ -88,7 +88,7 @@ pub fn edit_profile(
             resource: "Profile".to_string(),
             name: path.display().to_string(),
             fix: "run `paperwork profile create <path>` first".to_string(),
-            example: format!("paperwork profile create {} --name <agent>", path.display()),
+            example: format!("paperwork profile create {} alice", path.display()),
         });
     }
 

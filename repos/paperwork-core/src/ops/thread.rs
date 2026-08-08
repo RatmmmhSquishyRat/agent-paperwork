@@ -135,7 +135,7 @@ pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Ve
             resource: "Thread".to_string(),
             name: path.display().to_string(),
             fix: "send a message first to create the thread".to_string(),
-            example: format!("paperwork post send {} --from <name> <body>", path.display()),
+            example: format!("paperwork post send {} alice \"Hello\"", path.display()),
         });
     }
 
@@ -225,7 +225,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             resource: "Thread".to_string(),
             name: path.display().to_string(),
             fix: "cannot edit a non-existent thread".to_string(),
-            example: format!("paperwork post send {} --from <name> <body>", path.display()),
+            example: format!("paperwork post send {} alice \"Hello\"", path.display()),
         });
     }
 
@@ -272,7 +272,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             resource: "Message".to_string(),
             name: format!("#{}", seq),
             fix: "thread is empty; send a message first".to_string(),
-            example: format!("paperwork post send {} --from <name> <body>", path.display()),
+            example: format!("paperwork post send {} alice \"Hello\"", path.display()),
         });
     }
 
@@ -302,7 +302,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 seq, msg.sender, sender
             ),
             fix: "you can only edit your own messages".to_string(),
-            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), seq, msg.sender),
+            example: format!("paperwork post edit {} {} {} \"corrected body\"", path.display(), msg.sender, seq),
         });
     }
 
@@ -323,7 +323,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 seq, sender_last_seq
             ),
             fix: "you can only edit your most recent message".to_string(),
-            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), sender_last_seq, sender),
+            example: format!("paperwork post edit {} {} {} \"corrected body\"", path.display(), sender, sender_last_seq),
         });
     }
 
@@ -338,7 +338,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 seq, last_seq
             ),
             fix: "you can only edit the final message in a thread".to_string(),
-            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), last_seq, sender),
+            example: format!("paperwork post edit {} {} {} \"corrected body\"", path.display(), sender, last_seq),
         });
     }
 
