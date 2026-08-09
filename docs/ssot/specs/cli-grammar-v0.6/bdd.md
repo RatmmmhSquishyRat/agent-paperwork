@@ -214,7 +214,7 @@
 
 - **Given** 线程共 4 条消息，发送者均非 carol
 - **When** 执行 `paperwork post read standup.post.md --mention carol`
-- **Then** exit 0；`showing: 0/4`（total 为过滤前全量口径，冻结语义）；`window` 字段不显示（空 window 冻结行为，与 v0.5 bdd S-READ-06 一致）；body 为空。
+- **Then** exit 0；`showing: 0/0`（total 为过滤后、limit 前口径，冻结语义；勘误 Ray m1：本行曾误写 0/4 过滤前口径，与 v0.5 bdd S-READ-06 冻结条款及实现 read_mention_filter_zero_hits_on_nonempty_thread 矛盾，代码从冻结口径）；`window` 字段不显示（空 window 冻结行为，与 v0.5 bdd S-READ-06 一致）；body 为空。
 
 ### S-READ-07 过滤+limit 的 total 口径（rework 补录 Nora ISSUE-m3，对等 v0.5 bdd S-READ-07）
 

@@ -109,7 +109,7 @@ paperwork profile create <PATH> --name <NAME> [--model] [--description] [--scope
 
 ```
 paperwork brief create <PATH> --title <T> [--owner] [--description]
-paperwork brief add    <PATH> --entry <E> [--regex] [--note]
+paperwork brief add    <PATH> --entry <E> [--regex <PATTERN>] [--note <TEXT>]
 paperwork brief remove <PATH> --entry-title <T>
 paperwork brief read   <PATH> [--full]
 paperwork brief verify <PATH> [--base-dir <DIR>]

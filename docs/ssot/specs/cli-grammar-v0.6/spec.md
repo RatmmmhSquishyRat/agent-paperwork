@@ -51,7 +51,7 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 | profile create | `profile create <PATH> --name <NAME> [--model] [--description] [--scope-read/write/owns]` | NAME 位置参数 -> `--name` 必填 flag（回到具名形态；v0.6_feedbacks §2.4 补记） |
 | profile show/edit/list | `<PATH>` / `<PATH> [--field..]` / `<DIR>` | 不变 |
 | brief create | `brief create <PATH> --title <T> [--owner] [--description]` | TITLE 位置参数 -> `--title` 必填 flag |
-| brief add | `brief add <PATH> --entry <E> [--regex] [--note]` | ENTRY 位置参数 -> `--entry` 必填 flag |
+| brief add | `brief add <PATH> --entry <E> [--regex <PATTERN>] [--note <TEXT>]` | ENTRY 位置参数 -> `--entry` 必填 flag（勘误：--regex/--note 为带值 flag，QA BUG-4） |
 | brief remove | `brief remove <PATH> --entry-title <T>` | ENTRY-TITLE 位置参数 -> `--entry-title` 必填 flag |
 | brief read/verify | `<PATH> [--full]` / `<PATH> [--base-dir]` | 不变 |
 | contacts create | `contacts create <PATH> [--title]` | 不变（title 有默认值，属可选） |
@@ -134,7 +134,7 @@ paperwork profile list <DIR>
 
 ```
 paperwork brief create <PATH> --title <T> [--owner] [--description]
-paperwork brief add <PATH> --entry <E> [--regex] [--note]
+paperwork brief add <PATH> --entry <E> [--regex <PATTERN>] [--note <TEXT>]
 paperwork brief remove <PATH> --entry-title <T>
 paperwork brief read <PATH> [--full]
 paperwork brief verify <PATH> [--base-dir <DIR>]
