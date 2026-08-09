@@ -142,37 +142,47 @@ jobs:
           $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "pw-smoke-$(Get-Random)") -Force
           Push-Location $tmp
 
+          # Hardened assertion helper (review Ethan m-1): bare Select-String
+          # never fails the step on a miss; pipe every smoke output through
+          # Assert-Contains so a mismatch exits 1, symmetric with the unix
+          # `set -e` + grep branch.
+          function Assert-Contains([string]$Pattern, [string]$Label) {
+              begin { $found = $false }
+              process { if ($_ -match $Pattern) { $found = $true } }
+              end { if (-not $found) { Write-Error "FAIL: $Label"; exit 1 } }
+          }
+
           # Profile
-          & $BIN profile create alice --name alice --model gpt-4o | Select-String "^ok profile.create"
-          & $BIN profile show alice | Select-String "^ok profile.show"
+          & $BIN profile create alice --name alice --model gpt-4o | Assert-Contains "^ok profile.create" "profile create"
+          & $BIN profile show alice | Assert-Contains "^ok profile.show" "profile show"
 
           # Post (first send creates the thread and writes the preamble)
-          & $BIN post send standup --title "Test" --author alice --message "Hello world" | Select-String "^ok post.send"
-          & $BIN post send standup --author bob --reply-to 1 --mention alice --message "Reply" | Select-String "^ok post.send"
-          & $BIN post read standup | Select-String "^ok post.read"
-          & $BIN post summary standup | Select-String "^ok post.summary"
-          & $BIN post edit standup --author bob --seq 2 --message "Edited reply" | Select-String "^ok post.edit"
+          & $BIN post send standup --title "Test" --author alice --message "Hello world" | Assert-Contains "^ok post.send" "post send (create)"
+          & $BIN post send standup --author bob --reply-to 1 --mention alice --message "Reply" | Assert-Contains "^ok post.send" "post send (reply)"
+          & $BIN post read standup | Assert-Contains "^ok post.read" "post read"
+          & $BIN post summary standup | Assert-Contains "^ok post.summary" "post summary"
+          & $BIN post edit standup --author bob --seq 2 --message "Edited reply" | Assert-Contains "^ok post.edit" "post edit"
 
           # D3: on-disk body fences carry the `md` info string (T-CI-02)
           if (Select-String -Path "standup.post.md" -Pattern '```md' -SimpleMatch -Quiet) { Write-Output "PASS: fence info md" }
           else { Write-Error "FAIL: fence info md"; exit 1 }
 
           # Stdin
-          "piped content" | & $BIN post send standup --author alice --stdin | Select-String "^ok post.send"
+          "piped content" | & $BIN post send standup --author alice --stdin | Assert-Contains "^ok post.send" "post send (stdin)"
 
           # Brief
           Set-Content "main.rs" -Value "fn main() {}"
-          & $BIN brief create guide --title "Guide" --owner alice | Select-String "^ok brief.create"
-          & $BIN brief add guide --entry "main.rs" --regex "fn main" | Select-String "^ok brief.add"
-          & $BIN brief verify guide | Select-String "^ok brief.verify"
+          & $BIN brief create guide --title "Guide" --owner alice | Assert-Contains "^ok brief.create" "brief create"
+          & $BIN brief add guide --entry "main.rs" --regex "fn main" | Assert-Contains "^ok brief.add" "brief add"
+          & $BIN brief verify guide | Assert-Contains "^ok brief.verify" "brief verify"
 
           # Contacts
-          & $BIN contacts create team --title "Team" | Select-String "^ok contacts.create"
-          & $BIN contacts add team --profile ./alice.profile.md | Select-String "^ok contacts.add"
-          & $BIN contacts read team | Select-String "alice"
+          & $BIN contacts create team --title "Team" | Assert-Contains "^ok contacts.create" "contacts create"
+          & $BIN contacts add team --profile ./alice.profile.md | Assert-Contains "^ok contacts.add" "contacts add"
+          & $BIN contacts read team | Assert-Contains "alice" "contacts read"
 
           # Validate
-          & $BIN validate standup.post.md | Select-String "^ok validate"
+          & $BIN validate standup.post.md | Assert-Contains "^ok validate" "validate"
 
           # Error handling
           $err = & $BIN post read nonexistent 2>&1 | Out-String

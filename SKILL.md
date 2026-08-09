@@ -23,6 +23,10 @@ Rules to remember:
    `team` -> `team.contacts.md`. An existing file at the given path always wins.
 5. A body starting with `-` is passed directly via `--message`:
    `paperwork post send standup.post.md --author alice --message "-fix flag text"`.
+   Note: with the space form (`-m <value>` / `--message <value>`) the NEXT
+   token is always consumed as the body — a body that looks like a flag
+   (e.g. the literal `--stdin`) is written verbatim. To make the intent
+   explicit, use the equals form: `-m="--stdin"` / `--message="--stdin"`.
 
 Global flags: `--json` (JSON output), `--plain` (raw file content),
 `-q/--quiet` (drop the status line, keep fields).
