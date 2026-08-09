@@ -83,18 +83,29 @@ paperwork brief create onboarding --title "Codebase Onboarding" --owner alice
 paperwork brief add onboarding.brief.md --entry src/main.rs --regex "fn main" --note "Entry point"
 paperwork brief verify onboarding.brief.md          # fresh | shifted | stale
 paperwork brief read onboarding.brief.md --full
+paperwork brief read onboarding.brief.md --entry-title main.rs  # single-entry details (path/hash/regex/note)
 paperwork brief remove onboarding.brief.md --entry-title main.rs  # remove by stored basename
 ```
 
 Entry titles are stored as basenames: add `src/main.rs`, remove `main.rs`.
+`brief read --entry-title <T>` prints only that entry with the full detail
+field set; a miss exits 1 with `not-found`.
 
 ### contacts — registry of profiles (`*.contacts.md`)
 
 ```bash
 paperwork contacts create team --title "Core Team"  # --title is optional here (default "Contacts")
 paperwork contacts add team.contacts.md --profile agents/alice.profile.md
+paperwork contacts remove team.contacts.md --profile agents/alice.profile.md
+paperwork contacts update team.contacts.md --profile agents/alice.profile.md --new-profile agents/carol.profile.md
 paperwork contacts read team.contacts.md
 ```
+
+The key for `remove`/`update` is the profile path exactly as stored in the
+contacts file, not the link label (`contacts read` lists the stored paths).
+`contacts update` re-binds an entry's destination path; it is not an `edit`
+(there is no `edit` verb in this group: `edit` means changing a file's own
+content, `update` means swapping the entry's target profile).
 
 ### validate — structural integrity check
 

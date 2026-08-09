@@ -112,6 +112,7 @@ paperwork brief create onboarding --title "Onboarding" --owner alice
 paperwork brief add onboarding --entry src/main.rs --regex "fn main"
 paperwork brief verify onboarding                              # fresh | shifted | stale
 paperwork brief read onboarding --full
+paperwork brief read onboarding --entry-title main.rs          # details of a single entry
 ```
 
 ### `contacts` — registry of profiles
@@ -119,8 +120,12 @@ paperwork brief read onboarding --full
 ```bash
 paperwork contacts create team --title "Team"
 paperwork contacts add team --profile ./alice.profile.md
+paperwork contacts remove team --profile ./alice.profile.md
+paperwork contacts update team --profile ./alice.profile.md --new-profile ./carol.profile.md
 paperwork contacts read team                                   # shows name + description
 ```
+
+The key for `contacts remove`/`update` is the profile path exactly as stored in the contacts file, not the link label. `contacts update` re-binds an entry's destination path; it is not an `edit` (this group has no `edit` verb: `edit` changes a file's own content, `update` swaps the entry's target profile).
 
 ### `validate` — structural integrity check
 
