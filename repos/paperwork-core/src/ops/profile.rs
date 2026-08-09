@@ -57,8 +57,8 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            fix: format!("run `paperwork profile create {} alice` first", path.display()),
-            example: format!("paperwork profile create {} alice", path.display()),
+            fix: format!("run `paperwork profile create {} --name alice` first", path.display()),
+            example: format!("paperwork profile create {} --name alice", path.display()),
         });
     }
 
@@ -87,8 +87,8 @@ pub fn edit_profile(
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            fix: format!("run `paperwork profile create {} alice` first", path.display()),
-            example: format!("paperwork profile create {} alice", path.display()),
+            fix: format!("run `paperwork profile create {} --name alice` first", path.display()),
+            example: format!("paperwork profile create {} --name alice", path.display()),
         });
     }
 

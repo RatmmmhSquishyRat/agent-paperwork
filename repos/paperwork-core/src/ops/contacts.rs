@@ -19,7 +19,7 @@ pub fn contacts_create(path: &Path, title: &str) -> Result<()> {
             resource: "Contacts".to_string(),
             name: path.display().to_string(),
             fix: "use `paperwork contacts add` to add entries".to_string(),
-            example: format!("paperwork contacts add {} agents/alice.profile.md", path.display()),
+            example: format!("paperwork contacts add {} --profile agents/alice.profile.md", path.display()),
         });
     }
 
