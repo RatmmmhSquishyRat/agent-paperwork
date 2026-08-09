@@ -24,7 +24,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
         path: path.to_path_buf(),
         source: e,
         fix: "check that the file exists and is readable".to_string(),
-        example: String::new(),
+        example: "paperwork brief add onboarding.brief.md --entry src/main.rs".to_string(),
     })?;
     Ok(hash_bytes(&data))
 }

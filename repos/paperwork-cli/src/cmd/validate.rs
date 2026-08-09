@@ -1,4 +1,4 @@
-//! Validate command: check Markdown structure of a file by type (spec §8).
+//! Validate command: check Markdown structure of a file by type (spec section 8).
 //!
 //! For `.post.md` the checks run in order: parse (>= 1 message) -> seq
 //! monotonicity -> fence closure -> suspected-header heuristic (warning only).
@@ -25,8 +25,8 @@ pub enum FileKind {
     Contacts,
 }
 
-/// Suspected message header heuristic (spec §8 step 4): `##` + whitespace +
-/// `#<digit>`. Regex-based so multi-space variants (`##  #1 …`) are caught,
+/// Suspected message header heuristic (spec section 8 step 4): `##` + whitespace +
+/// `#<digit>`. Regex-based so multi-space variants (`##  #1 ...`) are caught,
 /// aligned with `MESSAGE_HEADER_RE`'s `\s+` lenient stance (R9, review N2).
 static SUSPECTED_HEADER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^##\s+#\d").expect("valid regex"));
@@ -87,7 +87,7 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
 
     match file_type {
         FileType::Post => {
-            // Step 1: parse; empty content or zero messages -> Parse (spec §8;
+            // Step 1: parse; empty content or zero messages -> Parse (spec section 8;
             // the v0.4 empty-file exemption is removed, BDD:VAL-07).
             let messages = paperwork_core::format::thread::parse_messages(&content)?;
             if messages.is_empty() {
@@ -129,7 +129,7 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
     Ok(())
 }
 
-/// Fence closure check (spec §8 step 3 / validate_markdown). Unclosed fences
+/// Fence closure check (spec section 8 step 3 / validate_markdown). Unclosed fences
 /// are reported as `Parse` (category `format`) with the opening line number.
 fn fence_check(content: &str) -> Result<()> {
     let issues = paperwork_core::format::validate_markdown(content);
@@ -139,11 +139,11 @@ fn fence_check(content: &str) -> Result<()> {
     Err(paperwork_core::PaperworkError::Parse {
         message: issues.join("; "),
         fix: "close every code fence with a backtick-only line at least as long as the opening fence".to_string(),
-        example: String::new(),
+        example: "paperwork validate standup.post.md --type post".to_string(),
     }.into())
 }
 
-/// Suspected message header heuristic (spec §8 step 4, R9).
+/// Suspected message header heuristic (spec section 8 step 4, R9).
 ///
 /// A flush-left line that looks like `## #<digits>` but does not strictly
 /// match the message header grammar (and is not inside a fence) is reported

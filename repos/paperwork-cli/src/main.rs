@@ -29,11 +29,11 @@ use crate::output::OutputMode;
 )]
 struct Cli {
     /// Output as JSON
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "plain")]
     json: bool,
 
     /// Output raw file content
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "json")]
     plain: bool,
 
     /// Suppress status line (still outputs fields and body)
@@ -80,10 +80,7 @@ fn main() {
 
             // --json awareness: no parse result yet, fall back to an argv
             // scan. Values after `--` are positional payloads, never flags.
-            let json_mode = std::env::args()
-                .skip(1)
-                .take_while(|a| a != "--")
-                .any(|a| a == "--json");
+            let json_mode = argv_wants_json();
             let (command, example) = canonical_example();
             let message = usage_message(&err);
             let fix = usage_fix(&err, command);
@@ -140,8 +137,17 @@ fn main() {
                 &pw_err.example(),
             );
         } else {
-            // Generic anyhow error
-            output::emit_err(&ctx, command_id, "io", &e.to_string(), "", "");
+            // Generic anyhow error (io class). Carry the standard three-line
+            // envelope: fix + a canonical example (QA BUG-3).
+            let (_, example) = canonical_example();
+            output::emit_err(
+                &ctx,
+                command_id,
+                "io",
+                &e.to_string(),
+                "check the file path and permissions, then retry the command",
+                example,
+            );
         }
         process::exit(1);
     }
@@ -214,17 +220,34 @@ fn usage_fix(err: &clap::Error, command: &str) -> String {
     let base = "required values are named flags (--author/--message for post send/edit); see the canonical example below";
     let unknown = extract_unknown_argument(err);
     match unknown.as_deref() {
+        // Unknown long flag on post read: identity-style flags from older
+        // grammar do not exist on the read side; the spec S-READ-09
+        // replacement path is the --mention filter (review Ray M2).
+        Some(tok) if tok.starts_with("--") && command == "post.read" && tok == "--author" => format!(
+            "{}; post read has no --author flag; to locate messages by a sender, filter on mentions via --mention (e.g. paperwork post read standup.post.md --mention alice)",
+            base
+        ),
+        Some(tok) if tok.starts_with("--") && command == "post.read" => format!(
+            "{}; this flag is not recognized by post read; its filters are --from/--to/--mention/--reply-to/--limit",
+            base
+        ),
         // Long unknown flag (--from as identity, pre-v0.6 leftovers, ...):
         // old-grammar migration case. v0.6 re-legalized --seq/--title/
         // --entry/--entry-title/--name/--profile, so they no longer appear
         // in the teaching list.
         Some(tok) if tok.starts_with("--") => format!(
-            "{}; this flag is not recognized; if it came from older grammar, give the value via the matching named flag (e.g. --author for the sender)",
+            "{}; this flag is not recognized; if it came from older grammar, give the value via the matching named flag",
             base
         ),
-        // Short/dash token: suspected body value starting with '-'
-        Some(_) if matches!(command, "post.send" | "post.edit") => format!(
+        // Dash token (review Kim m1): the body-teaching branch only applies
+        // to tokens that really start with '-'; bare extra positionals get
+        // the generic named-flag teaching below.
+        Some(tok) if tok.starts_with('-') && matches!(command, "post.send" | "post.edit") => format!(
             "{}; if a body value starts with '-', pass it via --message (e.g. paperwork post send standup.post.md --author alice --message \"-fix flag text\")",
+            base
+        ),
+        Some(_) if matches!(command, "post.send" | "post.edit") => format!(
+            "{}; values are given via their named flags, not as bare tokens",
             base
         ),
         Some(_) => format!(
@@ -243,6 +266,52 @@ fn extract_unknown_argument(err: &clap::Error) -> Option<String> {
     let rest = &rendered[start..];
     let end = rest.find('\'')?;
     Some(rest[..end].to_string())
+}
+
+/// Flags whose NEXT argv token is a value, not a flag (review Kim M2).
+///
+/// The usage-path --json probe must not mistake a flag value for a flag:
+/// `paperwork post send g.md --message "--json"` never requests JSON mode.
+/// `--flag=value` forms are self-contained and need no skipping.
+const VALUE_TAKING_FLAGS: &[&str] = &[
+    "--message", "-m",
+    "--author", "-a",
+    "--seq",
+    "--reply-to",
+    "--mention",
+    "--title",
+    "--name",
+    "--model",
+    "--description",
+    "--entry",
+    "--entry-title",
+    "--profile",
+    "--from",
+    "--to",
+    "--type",
+    "--limit",
+    "--note",
+    "--regex",
+    "--base-dir",
+    "--scope-read",
+    "--scope-write",
+    "--scope-owns",
+];
+
+/// Detect `--json` in argv while skipping tokens consumed as flag values.
+/// Values after `--` are positional payloads, never flags.
+fn argv_wants_json() -> bool {
+    let mut args = std::env::args().skip(1).take_while(|a| a != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--json" {
+            return true;
+        }
+        if !arg.contains('=') && VALUE_TAKING_FLAGS.contains(&arg.as_str()) {
+            // Skip the value token following this flag.
+            args.next();
+        }
+    }
+    false
 }
 
 /// Map the argv (group, verb) pair to the command identifier and a static
@@ -278,7 +347,7 @@ fn canonical_example() -> (&'static str, &'static str) {
     match (group, verb) {
         ("post", Some("send")) => (
             "post.send",
-            "paperwork post send standup.post.md --author alice --message \"Parser module is 80% done.\"",
+            "paperwork post send standup.post.md --author alice --message \"Hello\"",
         ),
         ("post", Some("edit")) => (
             "post.edit",
