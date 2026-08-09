@@ -239,4 +239,17 @@ profile:
 
 ---
 
+## 修复回应销账段（2026-08-09，编排层裁定 F1-F7 落实）
+
+| 发现 | 处置 | 销账证据 |
+|---|---|---|
+| BUG-1 · `contacts add --profile ""` 静默接受 | 已销账（F1，同 Kim M-1） | core `contacts_add`/`contacts_update` 入口 trim 非空护栏（validation exit 1，镜像 post send 空值判定先例）；brief read `--entry-title` 空值同护栏；E15/E16 形态（remove/update 空键）仍为 not-found 不变（remove 无写入面，不在护栏范围）；spec §3.5/§3.6 + bdd S-BRIEF-10/S-CONTACTS-15 行为变更登记；release 二进制实测：`contacts add --profile ""` / `contacts update --new-profile "  "` / `brief read --entry-title ""` 三命令均 exit 1 + `error validation:` 信封（fix 教学 + canonical example，纯 ASCII），拒绝调用零写入 |
+| OBS-1 · 用户数据回显非 ASCII 字节 | 无需代码改，登记销账 | 维持原定性：纯 ASCII 契约适用域为 CLI 自有文本（help/信封结构/fix/example），用户数据回显不在约束内；「在 spec 冻结条款中写明该边界」作为下轮 spec 修订待办登记（见 §6 遗留表 OBS-1 行） |
+| OBS-2 · spec 修订稿未随实现提交 | 已销账（F3） | 主工作区已修订治理文档同步进 worktree 并随本修复批提交（spec/bdd/tdd/impl_plan/design/README + v0.7_feedbacks + 研究文档两份 + 四份文档评审）；测试注释引用的场景号（S-BRIEF-07~09、S-CONTACTS-06~14、S-LOCK-01~03、S-SHORT-02 26 项清单）已实测在 worktree SSOT 中真实存在，引用链闭合 |
+| 登记备查 · io 信封 zh-CN OS 文案 | 挂起维持 | 维持 v0.6 §8 处置（非阻塞，后续轮次）；本轮 F5 已把写失败 fix 文案回填英文基线原文，但 OS 层错误串本地化面未触及，登记不变 |
+
+修复后门禁：`cargo test --workspace` 274 全绿（新增 4 用例计入）；clippy `-D warnings` 零警告；ops_tests.rs 与 master 零 diff；空键三类命令实测 exit 1；幂等 add 实测零重写（字节 + mtime 双稳定）；`paperwork -V` = 0.5.0 不变，无 bump/tag/publish/CHANGELOG 发布段。判定维持「可验收稳定候选」（本轮延续不发布约束），BUG-1 已销账后可供发布轮复核。
+
+---
+
 *End of QA review book.*
