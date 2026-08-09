@@ -444,6 +444,7 @@ dependencies = [
  "assert_cmd",
  "chrono",
  "clap",
+ "fs2",
  "paperwork-core",
  "predicates",
  "regex",

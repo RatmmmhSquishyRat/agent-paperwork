@@ -5,15 +5,15 @@
 //! `--message` or `--stdin` (body channel, exactly one required),
 //! `--seq` (edit target, required for edit).
 //!
-//! Format v2 (spec §5): thread creation is folded into the first `post send`;
+//! Format v2 (spec section 5): thread creation is folded into the first `post send`;
 //! writes the preamble (H1 title only, owner ruling D1) together with the
 //! first message inside the same lock. The CLI always passes
-//! `Some(ThreadMeta)`; the ops layer guards on in-lock file size (spec §5.7,
+//! `Some(ThreadMeta)`; the ops layer guards on in-lock file size (spec section 5.7,
 //! OQ-1: ignored silently when the file is non-empty).
 //!
 //! Reference state is body-text only (owner ruling D2): `--reply-to N` /
 //! `--mention a,b` are sugar flags whose values are injected into the body
-//! as `@#N` / `@name` tokens before calling core (spec §11 OQ-4); the
+//! as `@#N` / `@name` tokens before calling core (spec section 11 OQ-4); the
 //! `--to` / `--participants` flags are deleted (D1/D2).
 
 use std::io::Read as _;
@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use fs2::FileExt;
 
 use crate::cmd::{ensure_suffix, Context};
 use crate::output::{self, OutputMode};
@@ -44,7 +45,7 @@ pub fn command_id(args: &PostArgs) -> &'static str {
 #[derive(Subcommand)]
 enum PostCommand {
     /// Send a message to a post thread (first send creates the thread)
-    #[command(after_help = "Examples:\n  paperwork post send standup.post.md --author alice --message \"Parser module is 80% done.\"\n  paperwork post send standup.post.md -a alice -m \"Tests merged.\" --reply-to 2 --mention bob\n  echo \"multi-line body\" | paperwork post send standup.post.md --author alice --stdin\n  paperwork post send standup.post.md --author alice --message \"-starts with dash is fine\"\n  paperwork post send new-topic.post.md --author alice --message \"kickoff\" --title \"New Topic\"\n  # --title (thread title, honoured on first write only, silently ignored on existing threads);\n  # --reply-to / --mention are sugar flags: their values are injected into the body as @#N / @name tokens.")]
+    #[command(after_help = "Examples:\n  paperwork post send standup.post.md --author alice --message \"Parser module is 80% done.\"\n  paperwork post send standup.post.md -a alice -m \"Tests merged.\" --reply-to 2 --mention bob\n  echo \"multi-line body\" | paperwork post send standup.post.md --author alice --stdin\n  paperwork post send standup.post.md --author alice --message \"-starts with dash is fine\"\n  paperwork post send new-topic.post.md --author alice --message \"kickoff\" --title \"New Topic\"\n  # --title (thread title, honoured on first write only, silently ignored on existing threads);\n  # --reply-to / --mention are sugar flags: their values are injected into the body as @#N / @name tokens;\n  # a body that looks like a flag (e.g. literal \"--stdin\") is taken verbatim after -m/--message; use the equals form -m=\"--stdin\" / --message=\"--stdin\" to make the intent explicit.")]
     Send {
         /// Path to the post thread file
         path: PathBuf,
@@ -69,12 +70,12 @@ enum PostCommand {
         stdin: bool,
 
         /// Seq number being replied to (injected as an `@#N` body token,
-        /// spec §11 OQ-4)
+        /// spec section 11 OQ-4)
         #[arg(long = "reply-to")]
         reply_to: Option<u64>,
 
         /// Names mentioned (comma-separated; injected as `@name` body
-        /// tokens, spec §11 OQ-4)
+        /// tokens, spec section 11 OQ-4)
         #[arg(long = "mention", value_delimiter = ',')]
         mention: Vec<String>,
 
@@ -118,7 +119,7 @@ enum PostCommand {
     },
 
     /// Edit a message in a post thread
-    #[command(after_help = "Examples:\n  paperwork post edit standup.post.md --author alice --seq 3 --message \"corrected body\"\n  paperwork post edit standup.post.md --author alice --seq 3 --message \"-starts with dash is fine\"")]
+    #[command(after_help = "Examples:\n  paperwork post edit standup.post.md --author alice --seq 3 --message \"corrected body\"\n  paperwork post edit standup.post.md --author alice --seq 3 --message \"-starts with dash is fine\"\n  # a body that looks like a flag (e.g. literal \"--stdin\") is taken verbatim after -m/--message; use the equals form -m=\"--stdin\" / --message=\"--stdin\" to make the intent explicit.")]
     Edit {
         /// Path to the post thread file
         path: PathBuf,
@@ -161,7 +162,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             title,
         } => {
             // Default title derives from the original path argument
-            // (spec §5.7: strip .post.md, else strip .md, else keep as-is).
+            // (spec section 5.7: strip .post.md, else strip .md, else keep as-is).
             let default_title = default_title(&path);
             let path = ensure_suffix(path, ".post.md");
 
@@ -194,7 +195,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             // Validate every --mention value at the flag layer (review MJ-2):
             // values are injected verbatim as `@name` body tokens, so shapes
-            // that the spec §5.4 derivation would silently mangle or drop are
+            // that the spec section 5.4 derivation would silently mangle or drop are
             // rejected up front instead of writing corrupted references.
             for value in &mention {
                 validate_mention_value(value, &author)?;
@@ -231,7 +232,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             // Preamble metadata: the CLI always passes Some(meta); the ops
             // layer writes it only when the file is empty inside the lock
-            // (spec §5.7, OQ-1). Preamble is the H1 title only (D1).
+            // (spec section 5.7, OQ-1). Preamble is the H1 title only (D1).
             let meta = paperwork_core::ThreadMeta {
                 title: title.unwrap_or(default_title),
             };
@@ -254,12 +255,19 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
         PostCommand::Read { path, from, to, mention, reply_to, limit } => {
             let path = ensure_suffix(path, ".post.md");
+
+            // Symmetric foreign-thread guard (review Kim M1): a stage-1 hit
+            // on a file that is not a post thread reports `format`
+            // (exit 1) instead of silently returning 0 messages (exit 0).
+            // Missing paths pass through to thread_read's not-found.
+            reject_foreign_thread(&path)?;
+
             let all_messages = paperwork_core::ops::thread::thread_read(&path, from, to)?;
 
             // Apply filters
             let mut messages = all_messages;
             if let Some(ref name) = mention {
-                // Filter on parse-time derived mentions (D2; spec §5.4).
+                // Filter on parse-time derived mentions (D2; spec section 5.4).
                 messages.retain(|m| m.mentions.iter().any(|mn| mn == name));
             }
             if let Some(seq) = reply_to {
@@ -344,11 +352,16 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                 }.into());
             }
 
+            // Symmetric foreign-thread guard (review Kim M1): mirror the
+            // write side so a stage-1 hit on a non-thread file reports
+            // `format` (exit 1) instead of an empty garbage summary.
+            reject_foreign_thread(&path)?;
+
             let summary = paperwork_core::ops::thread::thread_summary(&path)?;
 
             // Title comes straight from the preamble (ops thread_meta);
             // participants are derived from the message sender set (D1,
-            // spec §5.4) and carried by the summary.
+            // spec section 5.4) and carried by the summary.
             let meta = paperwork_core::ops::thread::thread_meta(&path)?;
             let title = meta.title;
             let participants = summary.participants.join(", ");
@@ -406,6 +419,17 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             let new_body = resolve_body(message, stdin, BodyOwner::Edit, &path.display().to_string())?;
 
+            // Reject empty/whitespace-only body (symmetric with send,
+            // review Kim m2): editing a message to a blank body is a
+            // silent-corruption surface, refuse it the same way send does.
+            if new_body.trim().is_empty() {
+                return Err(paperwork_core::PaperworkError::Validation {
+                    message: "message body is empty".to_string(),
+                    fix: "provide a non-empty --message value (bodies starting with '-' are accepted) or pipe content via --stdin".to_string(),
+                    example: format!("paperwork post edit {} --author {} --seq {} --message \"corrected body\"", path.display(), author, seq),
+                }.into());
+            }
+
             paperwork_core::ops::thread::thread_edit(&path, seq, &author, &new_body)?;
 
             let env = output::Envelope::new("post.edit", format!("#{}", seq))
@@ -431,10 +455,47 @@ enum BodyOwner {
 /// Content without any valid message boundary is rejected the same way
 /// `validate` rejects it. Missing paths pass through (write commands create
 /// them; read-side commands report their own not-found).
+///
+/// Concurrency (QA BUG-2): the pre-read runs under an fs2 exclusive lock
+/// acquired on the SAME handle that performs the read. Under Windows
+/// mandatory byte-range locking, reading a byte range another process has
+/// locked fails instantly with ERROR_LOCK_VIOLATION (os error 33); the old
+/// lock-less pre-read raced concurrent `thread_send` writers and
+/// intermittently failed sends, losing messages. Taking the lock first
+/// blocks until the writer finishes (exactly like the write path), and
+/// reading through the locking handle avoids the violation. Lock/seq
+/// semantics are unchanged: core `thread_send`/`thread_edit` still acquire
+/// their own lock and own seq allocation, so this check remains advisory
+/// (the same TOCTOU window as before).
 fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
     if path.is_file() {
-        let pre_existing = paperwork_core::ops::thread::thread_read(path, None, None)?;
-        let raw = std::fs::read_to_string(path)?;
+        let file = std::fs::File::open(path).map_err(|e| paperwork_core::PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check that the file is readable".to_string(),
+            example: String::new(),
+        })?;
+        file.lock_exclusive().map_err(|e| paperwork_core::PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "another process may hold the lock; retry shortly".to_string(),
+            example: String::new(),
+        })?;
+
+        // Read through the locking handle: on Windows a cross-handle read
+        // into a locked byte range fails with os error 33 even inside the
+        // same process.
+        let mut raw = String::new();
+        let mut reader = &file;
+        reader.read_to_string(&mut raw).map_err(|e| paperwork_core::PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check that the file is readable".to_string(),
+            example: String::new(),
+        })?;
+        file.unlock().ok();
+
+        let pre_existing = paperwork_core::format::thread::parse_messages(&raw)?;
         if pre_existing.is_empty() && !raw.trim().is_empty() {
             return Err(paperwork_core::PaperworkError::Parse {
                 message: format!("{} is not a valid post thread: no valid message boundaries found", path.display()),
@@ -446,7 +507,7 @@ fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Default preamble title (spec §5.7): strip the `.post.md` suffix, else
+/// Default preamble title (spec section 5.7): strip the `.post.md` suffix, else
 /// strip the `.md` suffix, else keep the file name as-is.
 fn default_title(path: &Path) -> String {
     let name = path
@@ -473,8 +534,8 @@ fn clean_list(values: Vec<String>) -> Vec<String> {
 
 /// Validate a single `--mention` flag value (review MJ-2).
 ///
-/// Each value is injected verbatim as an `@name` body token (spec §11 OQ-4)
-/// and must survive the spec §5.4 derivation unchanged:
+/// Each value is injected verbatim as an `@name` body token (spec section 11 OQ-4)
+/// and must survive the spec section 5.4 derivation unchanged:
 /// - non-empty;
 /// - no whitespace / `@` / `(` / `)` (the token scan would truncate it);
 /// - not `#<pure digits>` (that shape derives as a reply reference, and the
@@ -511,11 +572,11 @@ fn validate_mention_value(value: &str, from: &str) -> anyhow::Result<()> {
     }
 }
 
-/// Inject reference tokens into the body head (spec §11 OQ-4, D2).
+/// Inject reference tokens into the body head (spec section 11 OQ-4, D2).
 ///
 /// `--reply-to N` yields `@#N`; each mention yields `@name`. All tokens sit
 /// on a single first line separated by single spaces, followed by a blank
-/// line, then the original body — so the spec §5.4 derivation rules can
+/// line, then the original body - so the spec section 5.4 derivation rules can
 /// recover reply-to and mentions from the persisted body text.
 fn inject_reference_tokens(body: &str, reply_to: Option<u64>, mentions: &[String]) -> String {
     let mut tokens: Vec<String> = Vec::new();
