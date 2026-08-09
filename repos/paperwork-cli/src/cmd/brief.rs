@@ -179,7 +179,7 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                         .field("owner", &manifest.author);
                     let body_lines: Vec<String> = manifest.entries.iter().map(|e| {
                         if full {
-                            let mut line = format!("{}: {} (hash: {})", e.title, e.path, &e.hash[..e.hash.len().min(12)]);
+                            let mut line = format!("{}: {} (hash: {})", e.title, e.path, e.hash);
                             if let Some(ref re) = e.regex {
                                 line.push_str(&format!(" regex: {}", re));
                             }

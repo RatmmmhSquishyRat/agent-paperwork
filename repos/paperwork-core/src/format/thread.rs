@@ -1,24 +1,150 @@
-//! Thread message parsing and serialization.
+//! Thread (post) parsing and serialization — Managed File Format v2 (spec §5).
 //!
-//! Format spec (see tests for examples):
-//! - Message boundary: horizontal rule followed by H3 header
-//! - Metadata: bullet list (- To:, - Reply-To:, - Mentions:)
-//! - Body: wrapped in 4-backtick markdown fence
-//!
-//! CRITICAL: Message boundary = horizontal rule line immediately followed
-//! (within 2 lines) by a valid H3 header. A horizontal rule inside a 4-backtick
-//! fenced code block is NEVER a boundary.
+//! Owner rulings D1–D3 (2026-08-09):
+//! - preamble: H1 title only (D1); any other preamble content (prose,
+//!   attribute-shaped lines such as the historical `- participants:`,
+//!   non-matching H2s) is leniently ignored;
+//! - message header (fence-aware, flush left): `## #<seq> <sender> (<RFC3339>)`;
+//! - no message attribute zone (D2): `- reply-to:` / `- mentions:` / `- to:`
+//!   lines no longer exist; reference state is derived from the body text at
+//!   read time (`@somebody` → mention, `@#N` → reply) and never persisted;
+//! - body: dynamic-length backtick fence (spec §3.4) with info string `md`
+//!   on the write side (D3); the parse side leniently accepts any info
+//!   string, `md`/`markdown` included; first fence wins.
 
 use chrono::{DateTime, Utc};
+use regex::Regex;
+use std::sync::LazyLock;
 
-use crate::{Message, PaperworkError, Result};
+use crate::{Message, PaperworkError, Result, ThreadMeta};
 
-use super::{extract_bullet_key, find_message_boundaries, normalize_line_endings, parse_message_header};
+use super::{compute_fence_length, fence_close_matches, fence_open_len, normalize_line_endings};
 
-/// Parse all messages from thread content.
+/// Message header regex (spec §5.3, exact).
 ///
-/// Uses boundary-anchored parsing: only `---` + valid H3 header pairs
-/// trigger message splits. `---` inside 4-backtick fences is ignored.
+/// Whitespace-lenient (R9): `\s+` between fields, trailing whitespace
+/// tolerated; the header MUST be flush left (any leading whitespace degrades
+/// it to preamble/body). The sender token excludes whitespace and parentheses.
+pub static MESSAGE_HEADER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^##\s+#(\d+)\s+([^\s()]+)\s+\((.+)\)\s*$").expect("valid regex"));
+
+/// Mention token scan (spec §5.4 derivation): `@` followed by a run of
+/// characters that are neither whitespace, `@`, nor parentheses.
+static MENTION_TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"@([^\s@()]+)").expect("valid regex"));
+
+/// Reply-reference scan (spec §5.4 derivation): `@#<digits>`.
+static REPLY_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"@#(\d+)").expect("valid regex"));
+
+/// A mention token shaped `#<pure digits>` is a reply reference, not a
+/// mention (spec §5.4).
+fn is_reply_shaped_token(token: &str) -> bool {
+    let Some(digits) = token.strip_prefix('#') else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Derive `reply_to` from body text (spec §5.4): the first parseable
+/// `@#(\d+)` reference wins; later references are ignored. The referenced
+/// target's existence is NOT validated (lenient). Unparseable (overflowing)
+/// digit runs are skipped leniently.
+pub fn derive_reply_to(body: &str) -> Option<u64> {
+    REPLY_REF_RE
+        .captures_iter(body)
+        .filter_map(|caps| caps[1].parse::<u64>().ok())
+        .next()
+}
+
+/// Derive `mentions` from body text (spec §5.4): scan `@([^\s@()]+)` in
+/// order of appearance, deduplicate keeping first occurrence, drop
+/// reply-shaped `#<digits>` tokens, and exclude the sender's self-mentions.
+/// Bare `@` without a valid token derives nothing and never errors.
+pub fn derive_mentions(body: &str, sender: &str) -> Vec<String> {
+    let mut mentions: Vec<String> = Vec::new();
+    for caps in MENTION_TOKEN_RE.captures_iter(body) {
+        let token = caps[1].to_string();
+        if is_reply_shaped_token(&token) || token == sender || mentions.contains(&token) {
+            continue;
+        }
+        mentions.push(token);
+    }
+    mentions
+}
+
+/// Derive both body-text references (spec §5.4, invariant I10).
+pub fn derive_message_refs(body: &str, sender: &str) -> (Option<u64>, Vec<String>) {
+    (derive_reply_to(body), derive_mentions(body, sender))
+}
+
+/// Seq of a message header line, if it is a *valid* header.
+///
+/// A regex-matched line whose seq does not fit `u64` (overflow) — or whose
+/// seq is 0 — is treated as NOT a message header per the lenient semantics
+/// (§3.6): the H2 falls into the preamble. This matches the tail-scan skip
+/// behavior (§5.5) and never produces seq 0 (review M1).
+/// Shared predicate (review MJ-1): every header-recognizing scan — the
+/// parse side AND the `thread_edit` preamble carry-over — must agree on
+/// what counts as a message header.
+pub fn header_seq(line: &str) -> Option<u64> {
+    let seq: u64 = MESSAGE_HEADER_RE.captures(line)?.get(1)?.as_str().parse().ok()?;
+    (seq != 0).then_some(seq)
+}
+
+/// Locate fence-aware message header line indices (spec §3.3/§5.3).
+fn header_indices(lines: &[&str]) -> Vec<usize> {
+    let mut indices = Vec::new();
+    let mut open: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+            continue;
+        }
+        if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+            continue;
+        }
+        if header_seq(line).is_some() {
+            indices.push(i);
+        }
+    }
+    indices
+}
+
+/// Parse the thread preamble (spec §5.2, owner ruling D1).
+///
+/// The preamble is everything before the first fence-aware message header.
+/// Only the H1 title is mapped (`ThreadMeta { title }`); a missing H1 yields
+/// an empty title (lenient). All other preamble content — prose, attribute-
+/// shaped lines including the historical `- participants:`, non-matching H2s
+/// — is ignored (§3.6).
+pub fn parse_preamble(content: &str) -> ThreadMeta {
+    let content = normalize_line_endings(content);
+    if content.trim().is_empty() {
+        return ThreadMeta::default();
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let preamble_end = header_indices(&lines).first().copied().unwrap_or(lines.len());
+
+    let mut meta = ThreadMeta::default();
+    for line in &lines[..preamble_end] {
+        if let Some(title) = line.strip_prefix("# ") {
+            meta.title = title.trim().to_string();
+            break;
+        }
+    }
+
+    meta
+}
+
+/// Parse all messages from thread content (fence-aware, spec §5.3/§5.4).
+///
+/// `reply_to` / `mentions` are derived from each message's body text at
+/// parse time (spec §5.4); the `to` field no longer exists (D2).
 pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
     let content = normalize_line_endings(content);
 
@@ -28,59 +154,45 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
     }
 
     let lines: Vec<&str> = content.lines().collect();
-    let boundaries = find_message_boundaries(&lines);
+    let headers = header_indices(&lines);
 
-    if boundaries.is_empty() {
+    if headers.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut messages = Vec::new();
 
-    for (idx, &(_boundary_line, header_line)) in boundaries.iter().enumerate() {
-        // Parse the header
-        let (seq, sender, timestamp_str) = parse_message_header(lines[header_line]).ok_or_else(
-            || {
-                PaperworkError::Parse {
-                    message: format!(
-                        "invalid message header at line {}: '{}'",
-                        header_line + 1,
-                        lines[header_line]
-                    ),
-                    fix: "expected format: ### #<seq> <sender> . <timestamp>".to_string(),
-                    example: "### #1 alice . 2026-01-15T10:30:00Z".to_string(),
-                }
-            },
-        )?;
+    for (idx, &header_line) in headers.iter().enumerate() {
+        let seq = header_seq(lines[header_line]).expect("filtered by header_indices");
+        let caps = MESSAGE_HEADER_RE.captures(lines[header_line]).expect("matched");
+        let sender = caps[2].to_string();
+        let timestamp_str = caps[3].to_string();
 
-        // Parse timestamp
         let timestamp = parse_timestamp(&timestamp_str).map_err(|e| {
             PaperworkError::Parse {
                 message: format!(
                     "invalid timestamp '{}' in message #{}: {}",
                     timestamp_str, seq, e
                 ),
-                fix: "use ISO-8601 format: YYYY-MM-DDTHH:MM:SSZ".to_string(),
+                fix: "use RFC 3339 format: YYYY-MM-DDTHH:MM:SSZ".to_string(),
                 example: "2026-01-15T10:30:00Z".to_string(),
             }
         })?;
 
-        // Determine the content range for this message
         let content_start = header_line + 1;
-        let content_end = if idx + 1 < boundaries.len() {
-            boundaries[idx + 1].0 // Next boundary line
+        let content_end = if idx + 1 < headers.len() {
+            headers[idx + 1]
         } else {
             lines.len()
         };
 
-        // Extract metadata and body from content range
-        let (to, reply_to, mentions, body) =
-            parse_message_content(&lines[content_start..content_end])?;
+        let body = parse_message_body(&lines[content_start..content_end]);
+        let (reply_to, mentions) = derive_message_refs(&body, &sender);
 
         messages.push(Message {
             seq,
             sender,
             timestamp,
-            to,
             reply_to,
             mentions,
             body,
@@ -90,158 +202,133 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
     Ok(messages)
 }
 
-/// Parse timestamp from ISO-8601 string.
+/// Parse timestamp from RFC 3339 string (spec §3.5).
+///
+/// Accepts any RFC 3339 offset (normalized to UTC); a timezone-less
+/// `%Y-%m-%dT%H:%M:%S` is treated as UTC.
 fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
-    // Try parsing with Z suffix
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
     }
-    // Try parsing without timezone (assume UTC)
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
         return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
     }
-    Err(format!("cannot parse '{}' as ISO-8601 timestamp", s))
+    Err(format!("cannot parse '{}' as RFC 3339 timestamp", s))
 }
 
-/// Parse message content (metadata bullets + fenced body) from lines after header.
-#[allow(clippy::type_complexity)]
-fn parse_message_content(lines: &[&str]) -> Result<(Vec<String>, Option<u64>, Vec<String>, String)> {
-    let mut to: Vec<String> = Vec::new();
-    let mut reply_to: Option<u64> = None;
-    let mut mentions: Vec<String> = Vec::new();
-    let mut body = String::new();
-
-    let mut in_fence = false;
+/// Extract the body of a message: the first fenced block after the header
+/// (spec §5.4, owner ruling D2).
+///
+/// There is NO attribute zone (D2): anything between the header and the
+/// first fence (historical attribute-shaped lines, prose) is ignored
+/// leniently. Body normalization (R12): the lines between the opening and
+/// closing fence lines, leading/trailing blank lines removed, joined with
+/// `\n`. A missing fence yields an empty body (lenient). Only the first
+/// fence of a message is the body; later fences are ignored. The fence
+/// info string is irrelevant to the parser (D3 lenience: `md`, `markdown`
+/// or anything else is accepted).
+fn parse_message_body(lines: &[&str]) -> String {
     let mut body_lines: Vec<&str> = Vec::new();
 
-    for line in lines {
-        let trimmed = line.trim();
+    let mut in_body_fence = false;
+    let mut body_found = false;
+    let mut body_open_len = 0usize;
 
-        if in_fence {
-            // Check for closing 4-backtick fence
-            if trimmed == "````" {
-                in_fence = false;
+    for line in lines {
+        if in_body_fence {
+            if fence_close_matches(line, body_open_len) {
+                in_body_fence = false;
             } else {
                 body_lines.push(line);
             }
             continue;
         }
 
-        // Check for opening 4-backtick fence
-        if trimmed.starts_with("````") {
-            in_fence = true;
-            continue;
-        }
-
-        // Try to extract bullet metadata (only before fence)
-        if body.is_empty() && body_lines.is_empty() {
-            if let Some((key, value)) = extract_bullet_key(trimmed) {
-                match key.as_str() {
-                    "To" => {
-                        to = parse_to_field(&value);
-                    }
-                    "Reply-To" => {
-                        reply_to = parse_reply_to(&value);
-                    }
-                    "Mentions" => {
-                        mentions = parse_to_field(&value);
-                    }
-                    _ => {}
-                }
-                continue;
+        if let Some(n) = fence_open_len(line) {
+            if !body_found {
+                // First fence of the message: the body.
+                body_found = true;
+                in_body_fence = true;
+                body_open_len = n;
             }
+            // Later fences: ignored (content after the body is discarded).
+            continue;
         }
     }
 
-    // Trim trailing empty lines from body
+    // Normalize: strip leading/trailing blank lines (R12).
     while body_lines.last().is_some_and(|l| l.trim().is_empty()) {
         body_lines.pop();
     }
-
-    // Trim leading empty lines from body
     while body_lines.first().is_some_and(|l| l.trim().is_empty()) {
         body_lines.remove(0);
     }
 
-    body = body_lines.join("\n");
-
-    Ok((to, reply_to, mentions, body))
+    body_lines.join("\n")
 }
 
-/// Parse the To field value.
-/// "all" → empty Vec (broadcast)
-/// "alice" → vec!["alice"]
-/// "alice, bob" → vec!["alice", "bob"]
-fn parse_to_field(value: &str) -> Vec<String> {
-    let trimmed = value.trim();
-    if trimmed == "all" || trimmed.is_empty() {
-        return Vec::new();
-    }
-    trimmed
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Parse the Reply-To field value.
-/// "#5" → Some(5)
-/// "—" → None
-fn parse_reply_to(value: &str) -> Option<u64> {
-    let trimmed = value.trim();
-    if trimmed == "—" || trimmed.is_empty() {
-        return None;
-    }
-    if let Some(seq_str) = trimmed.strip_prefix('#') {
-        seq_str.parse().ok()
+/// Validate a sender token on the write side (spec §5.6).
+///
+/// Non-empty, no whitespace (space/tab/newline), no `(` or `)`.
+pub fn validate_sender(sender: &str) -> Result<()> {
+    let valid = !sender.is_empty()
+        && !sender.chars().any(|c| c.is_whitespace() || c == '(' || c == ')');
+    if valid {
+        Ok(())
     } else {
-        trimmed.parse().ok()
+        Err(PaperworkError::Validation {
+            message: format!("invalid sender '{}': must be a single token without spaces or parentheses", sender),
+            fix: "sender must be a single token without spaces or parentheses".to_string(),
+            example: "paperwork post send standup --from alice \"Hello\"".to_string(),
+        })
     }
 }
 
-/// Serialize a single message to Markdown.
+/// Serialize the thread preamble (spec §5.9, owner ruling D1).
+///
+/// Title only — no `- participants:` line and no other attributes.
+pub fn serialize_preamble(meta: &ThreadMeta) -> String {
+    format!("# {}\n\n", meta.title)
+}
+
+/// Serialize a single message (spec §5.9, canonical single-space header).
+///
+/// No attribute lines between the header and the fence (D2); the body fence
+/// info string is strictly `md` on the write side (D3). `reply_to` /
+/// `mentions` are read-time derivations and are never serialized.
 pub fn serialize_message(msg: &Message) -> String {
-    let to_str = if msg.to.is_empty() {
-        "all".to_string()
-    } else {
-        msg.to.join(", ")
-    };
-
-    let mut out = String::new();
-    out.push_str("---\n\n");
-    out.push_str(&format!(
-        "### #{} {} · {}\n\n",
+    let mut out = format!(
+        "## #{} {} ({})\n\n",
         msg.seq,
         msg.sender,
         msg.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-    ));
-    out.push_str(&format!("- To: {}\n", to_str));
+    );
 
-    if let Some(r) = msg.reply_to {
-        out.push_str(&format!("- Reply-To: #{}\n", r));
-    }
-
-    if !msg.mentions.is_empty() {
-        out.push_str(&format!("- Mentions: {}\n", msg.mentions.join(", ")));
-    }
-
-    out.push_str("\n````markdown\n");
-    out.push_str(&msg.body);
-    if !msg.body.is_empty() && !msg.body.ends_with('\n') {
+    let fence_len = compute_fence_length(&msg.body);
+    let fence = "`".repeat(fence_len);
+    out.push_str(&format!("{}md\n", fence));
+    if !msg.body.is_empty() {
+        out.push_str(&msg.body);
         out.push('\n');
     }
-    out.push_str("````\n\n");
+    out.push_str(&format!("{}\n\n", fence));
 
     out
 }
 
-/// Serialize multiple messages to a complete thread.
-pub fn serialize_thread(messages: &[Message]) -> String {
+/// Serialize messages only (no preamble; subset output, spec §8 POST-31).
+pub fn serialize_messages(messages: &[Message]) -> String {
     messages.iter().map(serialize_message).collect()
 }
 
-/// Validate that message sequence numbers are monotonically increasing with no gaps.
-/// Returns Ok if valid, Err with description of the problem.
+/// Serialize a complete thread: preamble + messages (spec §5.9).
+pub fn serialize_thread(meta: &ThreadMeta, messages: &[Message]) -> String {
+    let mut out = serialize_preamble(meta);
+    out.push_str(&serialize_messages(messages));
+    out
+}
+
+/// Validate that message sequence numbers start at 1 and are consecutive.
 pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
     if messages.is_empty() {
         return Ok(());
@@ -263,13 +350,17 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
         let prev = &window[0];
         let curr = &window[1];
 
-        if curr.seq != prev.seq + 1 {
+        // checked_add guards the theoretical overflow at u64::MAX (N3).
+        let expected = prev.seq.checked_add(1);
+        if expected != Some(curr.seq) {
+            let expected_note = match expected {
+                Some(e) => format!(" (expected #{})", e),
+                None => String::new(),
+            };
             return Err(PaperworkError::Validation {
                 message: format!(
-                    "sequence gap: message #{} followed by #{} (expected #{})",
-                    prev.seq,
-                    curr.seq,
-                    prev.seq + 1
+                    "sequence gap: message #{} followed by #{}{}",
+                    prev.seq, curr.seq, expected_note
                 ),
                 fix: "message sequence numbers must be consecutive with no gaps".to_string(),
                 example: String::new(),
@@ -289,480 +380,452 @@ mod tests {
         Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
     }
 
+    /// Build a message whose derived refs are NOT computed — callers must
+    /// fill `reply_to` / `mentions` exactly as the body text derives them
+    /// (serialization never writes them; parsing re-derives them).
+    fn msg(seq: u64, sender: &str, body: &str) -> Message {
+        let (reply_to, mentions) = derive_message_refs(body, sender);
+        Message {
+            seq,
+            sender: sender.to_string(),
+            timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
+            reply_to,
+            mentions,
+            body: body.to_string(),
+        }
+    }
+
+    // T-FT-01 (POST-01, D1/D2/D3)
     #[test]
-    fn test_parse_single_message() {
-        let content = r#"---
+    fn test_parse_full_thread() {
+        let content = "# Daily Standup\n\n## #1 alice (2026-08-01T19:38:22Z)\n\n```md\nParser module is 80% done.\n```\n\n## #2 bob (2026-08-01T19:38:22Z)\n\n```md\n@alice @#1 tests merged, all green.\n```\n";
 
-### #1 alice · 2026-01-15T10:30:00Z
+        let meta = parse_preamble(content);
+        assert_eq!(meta.title, "Daily Standup");
 
-- To: bob
-
-````markdown
-Hello, Bob!
-````
-"#;
         let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages.len(), 1);
+        assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].seq, 1);
         assert_eq!(messages[0].sender, "alice");
-        assert_eq!(messages[0].to, vec!["bob"]);
-        assert_eq!(messages[0].reply_to, None);
-        assert_eq!(messages[0].body, "Hello, Bob!");
+        assert_eq!(messages[0].body, "Parser module is 80% done.");
+        // body-text derivation (D2): reply-to + mention from the body
+        assert_eq!(messages[1].reply_to, Some(1));
+        assert_eq!(messages[1].mentions, vec!["alice"]);
+        assert_eq!(messages[1].body, "@alice @#1 tests merged, all green.");
     }
 
+    // D1: a historical `- participants:` preamble line is ignored leniently.
     #[test]
-    fn test_parse_multi_message() {
-        let content = r#"---
+    fn test_preamble_participants_line_ignored() {
+        let content = "# Standup\n\n- participants: alice, bob\n\nSome prose.\n";
+        let meta = parse_preamble(content);
+        assert_eq!(meta, ThreadMeta { title: "Standup".to_string() });
+    }
 
-### #1 alice · 2026-01-15T10:30:00Z
+    // D2: attribute-shaped lines in the message zone carry no semantics.
+    #[test]
+    fn test_message_attribute_lines_ignored() {
+        let content = "# t\n\n## #2 bob (2026-01-15T10:30:00Z)\n\n- reply-to: #1\n- mentions: alice\n- to: charlie\n\n```md\nplain body\n```\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages[0].reply_to, None);
+        assert!(messages[0].mentions.is_empty());
+        assert_eq!(messages[0].body, "plain body");
+    }
 
-- To: bob
+    // T-FT-02 (POST-02, D2): serialization carries no attribute lines.
+    #[test]
+    fn test_serialize_no_attribute_lines() {
+        let message = msg(1, "alice", "@bob hello");
+        let serialized = serialize_message(&message);
+        assert!(!serialized.contains("- to:"));
+        assert!(!serialized.contains("- reply-to:"));
+        assert!(!serialized.contains("- mentions:"));
+        // derived refs live only in the parsed model, never on disk
+        assert_eq!(message.mentions, vec!["bob"]);
+    }
 
-````markdown
-First message
-````
+    // §5.4 mentions derivation: order of appearance + dedup.
+    #[test]
+    fn test_derive_mentions_order_and_dedup() {
+        assert_eq!(
+            derive_mentions("@bob ping\n@carol @bob again @dave", "alice"),
+            vec!["bob", "carol", "dave"]
+        );
+        // reply-shaped tokens never count as mentions
+        assert_eq!(derive_mentions("@#1 @bob", "alice"), vec!["bob"]);
+        assert!(derive_mentions("@#7", "alice").is_empty());
+    }
 
----
+    // §5.4 mentions derivation: sender self-mentions are excluded.
+    #[test]
+    fn test_derive_mentions_self_exclusion() {
+        assert!(derive_mentions("@alice doing this myself", "alice").is_empty());
+        assert_eq!(
+            derive_mentions("@alice @bob @alice", "alice"),
+            vec!["bob"]
+        );
+        // self-reply references are NOT excluded (only mentions are)
+        assert_eq!(derive_reply_to("@#3 following up"), Some(3));
+    }
 
-### #2 bob · 2026-01-15T10:35:00Z
+    // §5.4 reply-to derivation: first `@#N` wins, the rest are ignored and
+    // the target's existence is never validated.
+    #[test]
+    fn test_derive_reply_to_first_wins() {
+        assert_eq!(derive_reply_to("@#2 then @#3 and @#4"), Some(2));
+        assert_eq!(derive_reply_to("no refs here"), None);
+        // lenient: overflowing digit runs are skipped, the next one wins
+        assert_eq!(
+            derive_reply_to("@#99999999999999999999999999 @#5"),
+            Some(5)
+        );
+    }
 
-- To: alice
-- Reply-To: #1
+    // §5.4 (BDD:POST-33/34): bare / malformed `@` derives nothing, no error.
+    #[test]
+    fn test_derive_bare_at_tokens() {
+        assert!(derive_mentions("trailing @", "alice").is_empty());
+        assert!(derive_mentions("@ spaced out", "alice").is_empty());
+        assert!(derive_mentions("paren @) close", "alice").is_empty());
+        assert!(derive_mentions("", "alice").is_empty());
+        assert_eq!(derive_reply_to("just @ and #1"), None);
+    }
 
-````markdown
-Second message
-````
+    // T-FT-04 (POST-04)
+    #[test]
+    fn test_parse_bad_timestamp() {
+        let content = "# t\n\n## #1 alice (not-a-timestamp)\n\n```md\nx\n```\n";
+        let result = parse_messages(content);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("invalid timestamp"));
+        assert!(err.fix().contains("RFC 3339"));
+    }
 
----
-
-### #3 alice · 2026-01-15T10:40:00Z
-
-- To: bob
-- Reply-To: #2
-
-````markdown
-Third message
-````
-"#;
+    // T-FT-05 (POST-05)
+    #[test]
+    fn test_fence_fake_header() {
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nreal body\n## #99 mallory (2026-01-01T00:00:00Z)\nstill body\n```\n\n## #2 bob (2026-01-15T10:31:00Z)\n\n```md\nsecond\n```\n";
         let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages.len(), 3);
+        assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].seq, 1);
+        assert!(messages[0].body.contains("## #99 mallory (2026-01-01T00:00:00Z)"));
         assert_eq!(messages[1].seq, 2);
-        assert_eq!(messages[2].seq, 3);
-        assert_eq!(messages[0].body, "First message");
-        assert_eq!(messages[1].body, "Second message");
-        assert_eq!(messages[2].body, "Third message");
+        assert!(!messages.iter().any(|m| m.seq == 99));
     }
 
+    // T-FT-06 (POST-06, D3): dynamic fence length; write side emits `md`.
     #[test]
-    fn test_parse_message_with_reply() {
-        let content = r#"---
+    fn test_dynamic_fence_roundtrip() {
+        for k in 3usize..=6 {
+            let run = "`".repeat(k);
+            let body = format!("code with {} run", run);
+            let message = msg(1, "alice", &body);
+            let serialized = serialize_message(&message);
+            // the fence grows and the info string stays `md`
+            let expected_open = format!("{}md\n", "`".repeat(k + 1));
+            assert!(
+                serialized.contains(&expected_open),
+                "k={} should open with {} backticks + md",
+                k,
+                k + 1
+            );
+            assert!(!serialized.contains("markdown"));
+            let parsed = parse_messages(&serialized).expect("roundtrip parse");
+            assert_eq!(parsed[0].body, body);
+        }
 
-### #2 bob · 2026-01-15T10:35:00Z
+        // no backticks → exactly 3, info `md`
+        let message = msg(1, "alice", "plain");
+        let serialized = serialize_message(&message);
+        assert!(serialized.contains("```md\n"));
+        assert!(!serialized.contains("````"));
 
-- To: alice
-- Reply-To: #1
+        // closing line longer than opening line is accepted (CommonMark)
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nbody text\n`````\n";
+        let parsed = parse_messages(content).expect("parse");
+        assert_eq!(parsed[0].body, "body text");
+    }
 
-````markdown
-Replying to your message
-````
-"#;
+    // T-FT-07 (POST-07)
+    #[test]
+    fn test_sender_not_boundary() {
+        let content = "# t\n\n## #1 two words (2026-01-15T10:30:00Z)\n\n## #2 bob(x) (2026-01-15T10:31:00Z)\n";
         let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages[0].reply_to, Some(1));
+        assert_eq!(messages.len(), 0);
+        // both H2s fall into the preamble
+        let meta = parse_preamble(content);
+        assert_eq!(meta.title, "t");
     }
 
+    // T-FT-08 (POST-08)
     #[test]
-    fn test_parse_message_no_reply() {
-        let content = r#"---
-
-### #1 alice · 2026-01-15T10:30:00Z
-
-- To: bob
-
-````markdown
-No reply
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages[0].reply_to, None);
+    fn test_parse_empty() {
+        assert_eq!(parse_preamble(""), ThreadMeta::default());
+        assert!(parse_messages("").expect("parse").is_empty());
+        assert_eq!(parse_preamble("   \n\n  "), ThreadMeta::default());
+        assert!(parse_messages("   \n\n  ").expect("parse").is_empty());
     }
 
+    // T-FT-09 (POST-09)
     #[test]
-    fn test_parse_message_multiline_body() {
-        let content = r#"---
-
-### #1 alice · 2026-01-15T10:30:00Z
-
-- To: bob
-
-````markdown
-Line 1
-Line 2
-Line 3
-Line 4
-Line 5
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages[0].body, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
+    fn test_parse_preamble_only() {
+        let content = "# Standup\n\nSome trailing prose.\n";
+        let meta = parse_preamble(content);
+        assert_eq!(meta.title, "Standup");
+        assert!(parse_messages(content).expect("parse").is_empty());
     }
 
+    // T-FT-10 (POST-12)
     #[test]
-    fn test_parse_message_body_with_hr() {
-        // CRITICAL TEST: Body containing --- inside fence should NOT split the message
-        let content = r#"---
-
-### #1 alice · 2026-01-15T10:30:00Z
-
-- To: bob
-
-````markdown
-Here is some text
-
----
-
-This is still part of the body!
-````
-
----
-
-### #2 bob · 2026-01-15T10:35:00Z
-
-- To: alice
-- Reply-To: #1
-
-````markdown
-Got it
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages.len(), 2);
-        assert!(messages[0].body.contains("---"));
-        assert!(messages[0].body.contains("This is still part of the body!"));
-        assert_eq!(messages[1].body, "Got it");
-    }
-
-    #[test]
-    fn test_parse_message_body_with_h3() {
-        // Body containing H3 that doesn't match message pattern (inside fence)
-        let content = r#"---
-
-### #1 alice · 2026-01-15T10:30:00Z
-
-- To: bob
-
-````markdown
-### This is a body heading
-
-Some text under it
-````
-
----
-
-### #2 bob · 2026-01-15T10:35:00Z
-
-- To: alice
-
-````markdown
-Ok
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages.len(), 2);
-        assert!(messages[0].body.contains("### This is a body heading"));
-    }
-
-    #[test]
-    fn test_serialize_message_roundtrip() {
-        let msg = Message {
-            seq: 1,
-            sender: "alice".to_string(),
-            timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
-            to: vec!["bob".to_string()],
-            reply_to: None,
-            mentions: vec![],
-            body: "Hello, World!".to_string(),
-        };
-
-        let serialized = serialize_message(&msg);
-        let parsed = parse_messages(&serialized).expect("should parse serialized");
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0], msg);
-    }
-
-    #[test]
-    fn test_serialize_message_with_reply_roundtrip() {
-        let msg = Message {
-            seq: 5,
-            sender: "bob".to_string(),
-            timestamp: make_timestamp(2026, 7, 29, 23, 59, 59),
-            to: vec!["alice".to_string()],
-            reply_to: Some(3),
-            mentions: vec![],
-            body: "Reply body".to_string(),
-        };
-
-        let serialized = serialize_message(&msg);
-        let parsed = parse_messages(&serialized).expect("should parse serialized");
-        assert_eq!(parsed[0], msg);
-    }
-
-    #[test]
-    fn test_serialize_message_broadcast() {
-        let msg = Message {
-            seq: 1,
-            sender: "alice".to_string(),
-            timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
-            to: vec![], // empty = "all"
-            reply_to: None,
-            mentions: vec![],
-            body: "Broadcast message".to_string(),
-        };
-
-        let serialized = serialize_message(&msg);
-        assert!(serialized.contains("- To: all"));
-
-        let parsed = parse_messages(&serialized).expect("should parse");
-        assert_eq!(parsed[0].to, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_parse_empty_thread() {
-        let messages = parse_messages("").expect("should parse empty");
-        assert!(messages.is_empty());
-
-        let messages = parse_messages("   \n\n  ").expect("should parse whitespace");
-        assert!(messages.is_empty());
-    }
-
-    #[test]
-    fn test_seq_monotonicity_valid() {
-        let messages = vec![
-            Message {
-                seq: 1,
-                sender: "a".to_string(),
-                timestamp: make_timestamp(2026, 1, 1, 0, 0, 0),
-                to: vec![],
-                reply_to: None,
-                mentions: vec![],
-                body: String::new(),
-            },
-            Message {
-                seq: 2,
-                sender: "b".to_string(),
-                timestamp: make_timestamp(2026, 1, 1, 0, 1, 0),
-                to: vec![],
-                reply_to: None,
-                mentions: vec![],
-                body: String::new(),
-            },
-            Message {
-                seq: 3,
-                sender: "a".to_string(),
-                timestamp: make_timestamp(2026, 1, 1, 0, 2, 0),
-                to: vec![],
-                reply_to: None,
-                mentions: vec![],
-                body: String::new(),
-            },
-        ];
-
-        assert!(validate_seq_monotonicity(&messages).is_ok());
-    }
-
-    #[test]
-    fn test_seq_gap_detection() {
-        let messages = vec![
-            Message {
-                seq: 1,
-                sender: "a".to_string(),
-                timestamp: make_timestamp(2026, 1, 1, 0, 0, 0),
-                to: vec![],
-                reply_to: None,
-                mentions: vec![],
-                body: String::new(),
-            },
-            Message {
-                seq: 3, // Gap! Missing 2
-                sender: "b".to_string(),
-                timestamp: make_timestamp(2026, 1, 1, 0, 1, 0),
-                to: vec![],
-                reply_to: None,
-                mentions: vec![],
-                body: String::new(),
-            },
-        ];
-
-        let result = validate_seq_monotonicity(&messages);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("gap"));
-    }
-
-    #[test]
-    fn test_seq_wrong_start() {
-        let messages = vec![Message {
-            seq: 5, // Should start at 1
-            sender: "a".to_string(),
-            timestamp: make_timestamp(2026, 1, 1, 0, 0, 0),
-            to: vec![],
-            reply_to: None,
-            mentions: vec![],
-            body: String::new(),
-        }];
-
-        let result = validate_seq_monotonicity(&messages);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("expected 1"));
-    }
-
-    #[test]
-    fn test_parse_crlf_thread() {
-        let content = "---\r\n\r\n### #1 alice · 2026-01-15T10:30:00Z\r\n\r\n- To: bob\r\n\r\n````markdown\r\nCRLF body\r\n````\r\n";
+    fn test_parse_crlf() {
+        let content = "# t\r\n\r\n## #1 alice (2026-01-15T10:30:00Z)\r\n\r\n```md\r\nCRLF body @bob\r\n```\r\n";
         let messages = parse_messages(content).expect("should parse CRLF");
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].body, "CRLF body");
+        assert_eq!(messages[0].body, "CRLF body @bob");
+        assert!(!messages[0].body.contains('\r'));
+        assert_eq!(messages[0].mentions, vec!["bob"]);
+        let meta = parse_preamble(content);
+        assert_eq!(meta.title, "t");
     }
 
+    // T-FT-11 (POST-13)
     #[test]
-    fn test_parse_unicode_message() {
-        let content = r#"---
-
-### #1 alicé · 2026-01-15T10:30:00Z
-
-- To: böb
-
-````markdown
-Héllo Wörld! 🚀
-Unicode: 你好世界
-````
-"#;
+    fn test_parse_unicode() {
+        let content = "# t\n\n## #1 alicé (2026-01-15T10:30:00Z)\n\n```md\nHéllo 🚀 你好世界\n```\n";
         let messages = parse_messages(content).expect("should parse unicode");
         assert_eq!(messages[0].sender, "alicé");
-        assert_eq!(messages[0].to, vec!["böb"]);
         assert!(messages[0].body.contains("🚀"));
         assert!(messages[0].body.contains("你好世界"));
     }
 
-    #[test]
-    fn test_parse_multi_recipient() {
-        let content = r#"---
-
-### #1 alice · 2026-01-15T10:30:00Z
-
-- To: bob, charlie, dave
-
-````markdown
-Multi-recipient message
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages[0].to, vec!["bob", "charlie", "dave"]);
-    }
-
+    // T-FT-12 (POST-14, D1/D2/D3)
     #[test]
     fn test_serialize_thread_roundtrip() {
-        let messages = vec![
-            Message {
-                seq: 1,
-                sender: "alice".to_string(),
-                timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
-                to: vec!["bob".to_string()],
-                reply_to: None,
-                mentions: vec![],
-                body: "First".to_string(),
-            },
-            Message {
-                seq: 2,
-                sender: "bob".to_string(),
-                timestamp: make_timestamp(2026, 1, 15, 10, 35, 0),
-                to: vec!["alice".to_string()],
-                reply_to: Some(1),
-                mentions: vec![],
-                body: "Second".to_string(),
-            },
-        ];
-
-        let serialized = serialize_thread(&messages);
-        let parsed = parse_messages(&serialized).expect("should parse serialized thread");
-        assert_eq!(messages, parsed);
-    }
-
-    #[test]
-    fn test_body_with_bold_text() {
-        let content = r#"---
-
-### #1 alice · 2026-01-15T10:30:00Z
-
-- To: bob
-
-````markdown
-This has **bold text** in the body.
-And **another bold** line.
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert!(messages[0].body.contains("**bold text**"));
-        assert!(messages[0].body.contains("**another bold**"));
-    }
-
-    #[test]
-    fn test_empty_body() {
-        let msg = Message {
-            seq: 1,
-            sender: "alice".to_string(),
-            timestamp: make_timestamp(2026, 1, 15, 10, 30, 0),
-            to: vec!["bob".to_string()],
-            reply_to: None,
-            mentions: vec![],
-            body: String::new(),
+        let meta = ThreadMeta {
+            title: "Daily Standup".to_string(),
         };
+        let m1 = msg(1, "alice", "First");
+        let m2 = msg(2, "bob", "@#1 @alice Second");
+        let m3 = msg(3, "alice", ""); // empty body
+        let m4 = msg(4, "bob", "body with ``` triple backticks");
 
-        let serialized = serialize_message(&msg);
-        let parsed = parse_messages(&serialized).expect("should parse");
+        assert_eq!(m2.reply_to, Some(1));
+        assert_eq!(m2.mentions, vec!["alice"]);
+
+        let serialized = serialize_thread(&meta, &[m1.clone(), m2.clone(), m3.clone(), m4.clone()]);
+        assert!(serialized.starts_with("# Daily Standup\n"));
+        assert!(!serialized.contains("- participants:"));
+        assert!(!serialized.contains("---"));
+        assert!(!serialized.contains('·'));
+        assert!(!serialized.contains('—'));
+        assert!(!serialized.contains("- to:"));
+        assert!(!serialized.contains("markdown"));
+
+        let parsed_meta = parse_preamble(&serialized);
+        assert_eq!(parsed_meta, meta);
+        let parsed = parse_messages(&serialized).expect("roundtrip");
+        assert_eq!(parsed, vec![m1, m2, m3, m4]);
+    }
+
+    // empty body keeps the `md` fence wrapper (spec §5.9)
+    #[test]
+    fn test_serialize_empty_body() {
+        let serialized = serialize_message(&msg(1, "alice", ""));
+        assert!(serialized.contains("```md\n```\n"));
+        let parsed = parse_messages(&serialized).expect("parse");
         assert_eq!(parsed[0].body, "");
     }
 
+    // T-FT-13 (POST-15)
     #[test]
-    fn test_body_with_triple_backtick_fence() {
-        // Body containing ``` inside ```` fence is safe
-        let content = r#"---
+    fn test_preamble_variants() {
+        // variant 1: bare title
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nx\n```\n";
+        assert_eq!(parse_preamble(content).title, "t");
 
-### #1 alice · 2026-01-15T10:30:00Z
+        // variant 2: description prose + extra H2 belong to the preamble
+        let content = "# t\n\nSome description prose.\n\n## Notes\n\nnote text\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nx\n```\n";
+        let meta = parse_preamble(content);
+        assert_eq!(meta.title, "t");
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].seq, 1);
 
-- To: all
-
-````markdown
-Here is code:
-```rust
-fn main() {}
-```
-Done.
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert!(messages[0].body.contains("```rust"));
-        assert!(messages[0].body.contains("fn main() {}"));
-        assert!(messages[0].body.contains("Done."));
+        // variant 3: no H1 (file starts directly with a message header)
+        let content = "## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nx\n```\n";
+        assert_eq!(parse_preamble(content).title, "");
+        assert_eq!(parse_messages(content).expect("parse").len(), 1);
     }
 
+    // T-FT-14 (POST-10, VAL-02)
     #[test]
-    fn test_parse_message_with_mentions() {
-        let content = r#"---
+    fn test_seq_monotonicity() {
+        let ok = vec![msg(1, "a", ""), msg(2, "b", ""), msg(3, "a", "")];
+        assert!(validate_seq_monotonicity(&ok).is_ok());
+        assert!(validate_seq_monotonicity(&[]).is_ok());
 
-### #2 bob · 2026-01-15T10:35:00Z
+        let gap = vec![msg(1, "a", ""), msg(3, "b", "")];
+        let err = validate_seq_monotonicity(&gap).unwrap_err();
+        assert!(err.to_string().contains("gap"));
 
-- To: all
-- Reply-To: #1
-- Mentions: alice
+        let wrong_start = vec![msg(5, "a", "")];
+        let err = validate_seq_monotonicity(&wrong_start).unwrap_err();
+        assert!(err.to_string().contains("expected 1"));
+    }
 
-````markdown
-Reply body
-````
-"#;
-        let messages = parse_messages(content).expect("should parse");
-        assert_eq!(messages[0].mentions, vec!["alice"]);
-        assert_eq!(messages[0].reply_to, Some(1));
+    // T-FT-15 (POST-21)
+    #[test]
+    fn test_preamble_closed_fence_then_header() {
+        let content = "# t\n\nExample code:\n\n```\nlet x = 1;\n```\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nx\n```\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].seq, 1);
+    }
+
+    // T-FT-16 (POST-22)
+    #[test]
+    fn test_preamble_unclosed_fence() {
+        let content = "# t\n\n```md\nswallowed\n## #1 alice (2026-01-15T10:30:00Z)\n## #2 bob (2026-01-15T10:31:00Z)\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages.len(), 0);
+    }
+
+    // T-FT-17 (POST-23)
+    #[test]
+    fn test_body_normalization() {
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\n\n\nfirst\nsecond\n\n\n```\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages[0].body, "first\nsecond");
+    }
+
+    // T-FT-18 (POST-24)
+    #[test]
+    fn test_fence_indent_policy() {
+        // 3 leading spaces: recognized fence
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n   ```md\nindented fence body\n   ```\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages[0].body, "indented fence body");
+
+        // 4 leading spaces: NOT a fence (indented code block); body stays
+        // empty (lenient), following headers still split
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n    ```md\nnot a fence\n\n## #2 bob (2026-01-15T10:31:00Z)\n\n```md\nsecond\n```\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].body, "");
+        assert_eq!(messages[1].body, "second");
+    }
+
+    // T-FT-19 (POST-25, D3): parse side is lenient about the fence info.
+    #[test]
+    fn test_body_fence_info_lenient() {
+        // no info string
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```\nplain fence\n```\n";
+        assert_eq!(parse_messages(content).expect("parse")[0].body, "plain fence");
+
+        // `md` (canonical write form)
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nmd fence\n```\n";
+        assert_eq!(parse_messages(content).expect("parse")[0].body, "md fence");
+
+        // `markdown` (legacy/handwritten form, D3 lenience)
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```markdown\nmarkdown fence\n```\n";
+        assert_eq!(
+            parse_messages(content).expect("parse")[0].body,
+            "markdown fence"
+        );
+
+        // arbitrary info string
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```rust\nfn main() {}\n```\n";
+        assert_eq!(parse_messages(content).expect("parse")[0].body, "fn main() {}");
+
+        // writer side always emits `md`
+        let serialized = serialize_message(&msg(1, "alice", "b"));
+        assert!(serialized.contains("```md\n"));
+        assert!(!serialized.contains("markdown"));
+    }
+
+    // T-FT-20 (POST-26): first fence wins; missing refs derive None.
+    #[test]
+    fn test_multi_fence_first_wins() {
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nfirst fence\n```\n\n```md\nsecond fence\n```\n";
+        let messages = parse_messages(content).expect("parse");
+        assert_eq!(messages[0].body, "first fence");
+        assert_eq!(messages[0].reply_to, None);
+        assert!(messages[0].mentions.is_empty());
+    }
+
+    // T-FT-21 (POST-28)
+    #[test]
+    fn test_header_trailing_garbage() {
+        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z) (备注)\n\n```md\nx\n```\n";
+        let result = parse_messages(content);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("invalid timestamp"));
+        assert_eq!(err.category(), "format");
+    }
+
+    // T-FT-22 (POST-01 supplement, R9)
+    #[test]
+    fn test_header_whitespace_lenient() {
+        // extra spaces between fields + trailing whitespace
+        let content = "# t\n\n##  #1   alice   (2026-01-15T10:30:00Z)  \n\n```md\nx\n```\n";
+        let messages = parse_messages(content).expect("lenient parse");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].seq, 1);
+        assert_eq!(messages[0].sender, "alice");
+
+        // serialization stays canonical single-space
+        let serialized = serialize_message(&messages[0]);
+        assert!(serialized.starts_with("## #1 alice ("));
+    }
+
+    // sender validation (spec §5.6, POST-17 write side)
+    #[test]
+    fn test_validate_sender() {
+        assert!(validate_sender("alice").is_ok());
+        assert!(validate_sender("alicé").is_ok());
+        for bad in ["two words", "bob(x)", "line\nbreak", "", "tab\there"] {
+            let result = validate_sender(bad);
+            assert!(result.is_err(), "sender {:?} must be rejected", bad);
+            assert_eq!(result.unwrap_err().category(), "validation");
+        }
+    }
+
+    // M1: seq overflow → the H2 is leniently treated as preamble content;
+    // seq 0 is never produced.
+    #[test]
+    fn test_seq_overflow_header_is_preamble() {
+        let content = "# t\n\n## #99999999999999999999999999 alice (2026-01-15T10:30:00Z)\n\n```md\nx\n```\n\n## #1 bob (2026-01-15T10:31:00Z)\n\n```md\ny\n```\n";
+        let messages = parse_messages(content).expect("lenient parse");
+        assert!(!messages.iter().any(|m| m.seq == 0), "seq 0 forbidden");
+        // the overflow header fell into the preamble; #1 bob stays a message
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].sender, "bob");
+        assert_eq!(messages[0].body, "y");
+
+        // overflow-only file: zero messages, everything is preamble
+        let content = "# t\n\n## #99999999999999999999999999 alice (2026-01-15T10:30:00Z)\n";
+        let messages = parse_messages(content).expect("lenient parse");
+        assert!(messages.is_empty());
+        assert!(!messages.iter().any(|m| m.seq == 0));
+
+        // seq 0 headers are equally non-headers
+        let content = "# t\n\n## #0 alice (2026-01-15T10:30:00Z)\n";
+        assert!(parse_messages(content).expect("parse").is_empty());
+    }
+
+    // N3: validate_seq_monotonicity uses checked_add (no overflow panic)
+    #[test]
+    fn test_seq_monotonicity_overflow_safe() {
+        // huge seq values never panic in the window comparison
+        let huge_gap = vec![msg(1, "a", ""), msg(u64::MAX, "b", "")];
+        let err = validate_seq_monotonicity(&huge_gap).unwrap_err();
+        assert!(err.to_string().contains("gap"));
+
+        let at_max = vec![msg(u64::MAX, "a", ""), msg(1, "b", "")];
+        let err = validate_seq_monotonicity(&at_max).unwrap_err();
+        assert!(err.to_string().contains("expected 1"));
     }
 }

@@ -27,30 +27,52 @@ pub struct Profile {
     pub scope_owns: Vec<GlobPattern>,
 }
 
-/// A contact entry: a profile path with an optional summary.
+/// A contact entry: a Markdown link to a profile file.
+///
+/// `label` is the link text (profile name); `profile_path` is the link destination.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContactEntry {
+    pub label: String,
     pub profile_path: String,
-    pub summary: String,
+}
+
+/// Thread preamble metadata (title only).
+///
+/// Owner ruling D1: the preamble is reduced to the H1 title — the
+/// `participants` attribute line is abolished; participant lists are derived
+/// from message senders when needed (spec §5.2/§5.4). Parse-only view of the
+/// preamble: `thread_edit` carries the preamble bytes verbatim and never
+/// re-serializes through this type.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThreadMeta {
+    pub title: String,
 }
 
 /// A message in a post thread.
+///
+/// Owner ruling D2: message attribute lines (`- reply-to:` / `- mentions:` /
+/// `- to:`) are abolished; the `to` field is deleted entirely. `reply_to` and
+/// `mentions` are parse-time derivations from the body text (`@#N` / `@name`
+/// tokens, spec §5.4) and are never serialized back to disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub seq: u64,
     pub sender: String,
     pub timestamp: DateTime<Utc>,
-    pub to: Vec<String>,
     pub reply_to: Option<u64>,
     pub mentions: Vec<String>,
     pub body: String,
 }
 
 /// Summary information about a thread.
+///
+/// `participants` is derived from the set of message senders, deduplicated
+/// in first-appearance order (spec §5.4, D1); it is never stored on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub thread_path: String,
     pub message_count: u64,
+    pub participants: Vec<String>,
     pub last_sender: Option<String>,
     pub last_timestamp: Option<DateTime<Utc>>,
     pub snippets: Vec<String>,

@@ -24,14 +24,14 @@ cargo install paperwork-cli
 Then, from any directory:
 
 ```bash
-$ paperwork post send standup --from alice "Proposing Rust for the backend."
+$ paperwork post send standup --title "Daily Standup" --from alice "Proposing Rust for the backend."
 ok post.send #1 -> standup.post.md
 seq: 1
 path: standup.post.md
 sender: alice
 ```
 
-That's it. `standup.post.md` is created on first send, and the reply is one line:
+That's it. `standup.post.md` is created on first send — the preamble (the H1 title) is written in the same lock as message #1 — and the reply is one line:
 
 ```bash
 $ paperwork post send standup --from bob --reply-to 1 "Agreed. Ship it."
@@ -52,7 +52,7 @@ AI agents that work together need three minimal things: **who they are**, **a wa
 | Identity | `profile` | `*.profile.md` | An agent's name, model, and scope |
 | Communication | `post` | `*.post.md` | Append-only threads with reply + @mention |
 | Knowledge | `brief` | `*.brief.md` | Reading lists with staleness detection |
-| Directory | `contacts` | `*.contacts.md` | A list of profile paths |
+| Directory | `contacts` | `*.contacts.md` | A list of agent profiles as Markdown links |
 
 Every output is a **structured, ASCII-only envelope** built for machine parsing — an agent can detect success/failure from the first line and self-correct from the error's `fix:` and `example:` fields without reading docs.
 
@@ -94,14 +94,15 @@ paperwork profile list .
 ### `post` — append-only threads
 
 ```bash
-paperwork post create standup --title "Daily Standup" --participants alice,bob
-paperwork post send standup --from alice "Status update"
+paperwork post send standup --title "Daily Standup" --from alice "Status update"
 paperwork post send standup --from bob --reply-to 1 --mention alice "On it"
 paperwork post send standup --from alice --stdin < report.md   # multi-line via pipe
 paperwork post read standup --mention alice                    # filter by @mention
 paperwork post read standup --reply-to 1                       # filter by reply
 paperwork post summary standup
 ```
+
+`--reply-to N` and `--mention a,b` are sugar: they inject `@#N` / `@name` tokens at the head of the body before writing. References live only in the body text — reply/mention state is re-derived from it on every read.
 
 ### `brief` — knowledge with staleness detection
 
@@ -126,6 +127,8 @@ paperwork contacts read team                                   # shows name + de
 paperwork validate standup.post.md
 ```
 
+Parses by type suffix; for posts it additionally enforces consecutive seq numbers starting at 1 and closed code fences. Warnings (suspected malformed message headers) are reported without failing the check.
+
 ---
 
 ## Output protocol
@@ -144,9 +147,9 @@ sender: bob
 **Failure** (stderr, exit 1) — always tells you how to fix it:
 
 ```
-error not-found: thread 'standup.post.md' does not exist
-fix: send a message to auto-create, or run post create
-example: paperwork post send standup --from alice "first message"
+error not-found: Thread 'standup.post.md' not found
+fix: send a message first to create the thread
+example: paperwork post send standup.post.md --from <name> <body>
 ```
 
 **Modes:**
@@ -162,63 +165,67 @@ example: paperwork post send standup --from alice "first message"
 
 ## File formats
 
-Managed files are richly-marked Markdown, named by type suffix. Message bodies sit inside 4-backtick fences, so any Markdown inside them (headings, lists, triple-backtick blocks, `---`) is safe.
+Managed files are plain Markdown named by type suffix. One shared design language: H1 is the document identity, free prose after the H1 is the description, flat attributes are lowercase `- key: value` bullet lines (omit a line instead of writing a placeholder), references to other managed files are Markdown links, and message bodies sit inside ` ```md ` fences whose length is dynamic — always one backtick longer than the longest backtick run inside, so any Markdown inside them (headings, lists, triple-backtick blocks, `---`) is safe. All structural characters are ASCII.
 
-**`standup.post.md`**
+**`standup.post.md`** — preamble (the H1 title only) followed by H2 messages `## #<seq> <sender> (<RFC3339>)`; no attribute lines — replies and mentions are body-text tokens (`@#N` = reply to message N, `@name` = mention) derived on read:
 
-````markdown
----
+`````markdown
+# Daily Standup
 
-### #1 alice . 2026-08-01T10:00:05Z
+## #1 alice (2026-08-01T10:00:05Z)
 
-- To: all
-
-```markdown
+```md
 Proposing Rust for the backend.
 ```
 
----
+## #2 bob (2026-08-01T10:01:00Z)
 
-### #2 bob . 2026-08-01T10:01:00Z
-
-- To: all
-- Reply-To: #1
-- Mentions: alice
-
-```markdown
-Agreed. Ship it.
+```md
+@#1 @alice Agreed. Ship it.
 ```
-````
+`````
 
-**`alice.profile.md`**
+**`alice.profile.md`** — H1 name, prose description, `- model:` attribute, optional `## Scope` section of `- <permission>: <glob>` lines:
 
 ```markdown
 # alice
 
-- Model: gpt-4o
-- Description: Parser owner
+Parser owner
+
+- model: gpt-4o
 
 ## Scope
 
-- Read: `src/**`
-- Owns: `src/parser/**`
+- read: src/**
+- owns: src/parser/**
 ```
 
-**`onboarding.brief.md`**
+**`onboarding.brief.md`** — H1 title, prose description, `- owner:` / `- created:` attributes, then entry H2 sections with `path` / `hash` / `regex` attributes and a prose note (complex regexes use a ` ```regex ` fence):
 
 ```markdown
 # Onboarding
 
-- Owner: alice
-- Created: 2026-08-01T10:00:00Z
+Reading list for new agents
 
-## Entries
+- owner: alice
+- created: 2026-08-01T10:00:00Z
 
-### main.rs
+## main.rs
 
-- Path: `src/main.rs`
-- Hash: `42b6647…`
-- Regex: `fn main`
+- path: src/main.rs
+- hash: 42b664743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540
+- regex: fn main
+
+Entry point
+```
+
+**`team.contacts.md`** — H1 title and one Markdown link bullet per profile (paths containing spaces are wrapped in angle brackets):
+
+```markdown
+# Team
+
+- [alice](alice.profile.md)
+- [bob](bob.profile.md)
 ```
 
 ---
@@ -230,7 +237,7 @@ git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
 cd agent-paperwork
 
 cargo build                                     # build
-cargo test                                      # 119 tests
+cargo test                                      # 154 tests
 cargo clippy --all-targets -- -D warnings       # lint
 ```
 

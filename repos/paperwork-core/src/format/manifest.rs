@@ -1,33 +1,22 @@
-//! Manifest (brief) parsing and serialization.
+//! Manifest (brief) parsing and serialization — Managed File Format v2 (spec §6).
 //!
-//! Format spec:
-//! ```markdown
-//! # <title>
-//!
-//! - Owner: <agent>
-//! - Created: <ISO-8601>
-//! - Description: <what this brief helps you understand>
-//!
-//! ## Entries
-//!
-//! ### <entry-title>
-//!
-//! - Path: `<relative-path-or-glob>`
-//! - Hash: `<sha256-hex>`
-//! - Regex: `<pattern>` | —
-//!
-//! > Optional note about why this entry matters.
-//! ```
-//!
-//! Regex is stored in fenced code blocks (```regex ... ```) for complex patterns.
-//! Groups are derived automatically from regex named captures at parse time.
+//! - preamble: H1 (title) + optional description prose + `- owner:` / `- created:`;
+//! - entries: fence-aware H2 sections directly after the preamble (no
+//!   `## Entries` wrapper); entry attribute zone extends to the first
+//!   non-attribute non-blank line (blank lines do NOT terminate it);
+//! - `- regex:` inline for simple patterns, ```regex fence for complex ones;
+//! - note = bare prose (no blockquote);
+//! - groups derived from named captures, never persisted.
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
 
 use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
-use super::{extract_bullet_key, normalize_line_endings};
+use super::{
+    compute_fence_length, extract_attribute, fence_close_matches, fence_info, fence_open_len,
+    normalize_line_endings,
+};
 
 /// Extract named capture group names from a regex pattern.
 pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
@@ -37,136 +26,67 @@ pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse a manifest from Markdown content.
+/// Locate fence-aware H2 line indices (entry boundaries, spec §3.3/§6.2).
+fn h2_indices(lines: &[&str]) -> Vec<usize> {
+    let mut indices = Vec::new();
+    let mut open: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+            continue;
+        }
+        if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+            continue;
+        }
+        if line.trim().starts_with("## ") {
+            indices.push(i);
+        }
+    }
+    indices
+}
+
+/// Parse a manifest (brief) from Markdown content (spec §6.2).
 pub fn parse_manifest(content: &str) -> Result<Manifest> {
     let content = normalize_line_endings(content);
     let lines: Vec<&str> = content.lines().collect();
 
+    let headers = h2_indices(&lines);
+    let preamble_end = headers.first().copied().unwrap_or(lines.len());
+
+    // ---- preamble ----
     let mut name: Option<String> = None;
     let mut author: Option<String> = None;
+    let mut owner_present = false;
     let mut created: Option<DateTime<Utc>> = None;
-    let mut description: Option<String> = None;
-    let mut entries: Vec<ManifestEntry> = Vec::new();
+    let mut desc_lines: Vec<String> = Vec::new();
 
-    let mut in_entries = false;
-    let mut current_entry: Option<EntryBuilder> = None;
-    let mut in_regex_block = false;
-    let mut regex_lines: Vec<String> = Vec::new();
-
-    for line in &lines {
+    for line in &lines[..preamble_end] {
         let trimmed = line.trim();
-
-        // Handle regex fenced code block
-        if in_regex_block {
-            if trimmed == "```" {
-                // End of regex block
-                in_regex_block = false;
-                if let Some(ref mut entry) = current_entry {
-                    entry.regex = Some(regex_lines.join("\n"));
-                    entry.groups = extract_regex_groups(&regex_lines.join("\n"));
-                }
-                regex_lines.clear();
-            } else {
-                regex_lines.push(line.to_string());
+        if name.is_none() {
+            if let Some(stripped) = line.strip_prefix("# ") {
+                name = Some(stripped.trim().to_string());
+                continue;
             }
-            continue;
         }
-
-        // Start of regex fenced code block
-        if trimmed == "```regex" {
-            in_regex_block = true;
-            regex_lines.clear();
-            continue;
-        }
-
-        // H1: Title (new format: `# <title>`, no "Manifest: " prefix)
-        if trimmed.starts_with("# ") && !trimmed.starts_with("## ") && !trimmed.starts_with("### ") {
-            let title = trimmed[2..].trim().to_string();
-            // Support both old "# Manifest: X" and new "# X" format
-            name = Some(title.strip_prefix("Manifest: ").unwrap_or(&title).to_string());
-            continue;
-        }
-
-        // H2: Entries section
-        if trimmed == "## Entries" {
-            in_entries = true;
-            continue;
-        }
-
-        // H3: Entry title (only in Entries section)
-        if in_entries && trimmed.starts_with("### ") && !trimmed.starts_with("#### ") {
-            // Save previous entry if exists
-            if let Some(builder) = current_entry.take() {
-                entries.push(builder.build());
-            }
-            current_entry = Some(EntryBuilder::new(trimmed[4..].to_string()));
-            continue;
-        }
-
-        // Horizontal rule (entry separator, optional)
-        if trimmed == "---" {
-            if let Some(builder) = current_entry.take() {
-                entries.push(builder.build());
-            }
-            continue;
-        }
-
-        // Bullet key extraction
-        if let Some((key, value)) = extract_bullet_key(trimmed) {
+        if let Some((key, value)) = extract_attribute(line) {
             match key.as_str() {
-                "Owner" => author = Some(value),
-                "Author" => author = Some(value), // backward compat
-                "Created" => {
-                    created = parse_timestamp(&value).ok();
-                }
-                "Description" => description = Some(value),
-                "Path" => {
-                    if let Some(ref mut entry) = current_entry {
-                        entry.path = Some(strip_backticks(&value));
+                "owner" => {
+                    owner_present = true;
+                    if author.is_none() {
+                        author = Some(value);
                     }
                 }
-                "Hash" => {
-                    if let Some(ref mut entry) = current_entry {
-                        entry.hash = Some(strip_backticks(&value));
-                    }
-                }
-                "Regex" => {
-                    // Inline regex (— means none, or backtick-quoted for simple patterns)
-                    if let Some(ref mut entry) = current_entry {
-                        if value == "—" || value.is_empty() {
-                            entry.regex = None;
-                            entry.groups = Vec::new();
-                        } else if !value.starts_with("```") {
-                            // Simple inline regex (backtick-quoted)
-                            let pattern = strip_backticks(&value);
-                            entry.groups = extract_regex_groups(&pattern);
-                            entry.regex = Some(pattern);
-                        }
-                    }
-                }
+                "created" => created = parse_timestamp(&value).ok(),
                 _ => {}
             }
             continue;
         }
-
-        // Blockquote (note)
-        if trimmed.starts_with("> ") || trimmed == ">" {
-            if let Some(ref mut entry) = current_entry {
-                let note_text = trimmed.strip_prefix("> ").unwrap_or("").to_string();
-                match &mut entry.note {
-                    Some(existing) => {
-                        existing.push('\n');
-                        existing.push_str(&note_text);
-                    }
-                    None => entry.note = Some(note_text),
-                }
-            }
+        if name.is_some() && !trimmed.is_empty() {
+            desc_lines.push(trimmed.to_string());
         }
-    }
-
-    // Don't forget the last entry
-    if let Some(builder) = current_entry.take() {
-        entries.push(builder.build());
     }
 
     let name = name.ok_or_else(|| {
@@ -177,98 +97,184 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
         }
     })?;
 
-    let author = author.ok_or_else(|| {
-        PaperworkError::Parse {
-            message: format!("missing - Owner: line for brief '{}'", name),
-            fix: "add a '- Owner: <agent>' bullet line".to_string(),
-            example: "- Owner: alice".to_string(),
-        }
-    })?;
+    let author = if owner_present {
+        author.unwrap_or_default()
+    } else {
+        return Err(PaperworkError::Parse {
+            message: format!("missing - owner: line for brief '{}'", name),
+            fix: "add a '- owner: <agent>' bullet line".to_string(),
+            example: "- owner: alice".to_string(),
+        });
+    };
 
     let created = created.ok_or_else(|| {
         PaperworkError::Parse {
-            message: format!("missing or invalid - Created: line for brief '{}'", name),
-            fix: "add a '- Created: <ISO-8601>' bullet line".to_string(),
-            example: "- Created: 2026-01-15T10:00:00Z".to_string(),
+            message: format!("missing or invalid - created: line for brief '{}'", name),
+            fix: "add a '- created: <RFC3339>' bullet line".to_string(),
+            example: "- created: 2026-01-15T10:00:00Z".to_string(),
         }
     })?;
+
+    // ---- entries ----
+    let mut entries: Vec<ManifestEntry> = Vec::new();
+    for (idx, &header_line) in headers.iter().enumerate() {
+        let title = lines[header_line].trim()[3..].trim().to_string();
+        let body_end = if idx + 1 < headers.len() {
+            headers[idx + 1]
+        } else {
+            lines.len()
+        };
+        entries.push(parse_entry_body(
+            title,
+            &lines[header_line + 1..body_end],
+        ));
+    }
 
     Ok(Manifest {
         name,
         author,
         created,
-        description: description.unwrap_or_default(),
+        description: desc_lines.join("\n"),
         entries,
     })
 }
 
-/// Parse timestamp from ISO-8601 string.
-fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
+/// Parse one entry body: attribute zone (up to the first non-attribute
+/// non-blank line; blank lines do NOT terminate it — BDD:BRIEF-12), an
+/// optional ```regex fence before the note starts, and bare-prose note.
+fn parse_entry_body(title: String, lines: &[&str]) -> ManifestEntry {
+    let mut path: Option<String> = None;
+    let mut hash: Option<String> = None;
+    let mut regex: Option<String> = None;
+    let mut groups: Vec<String> = Vec::new();
+    let mut note_lines: Vec<&str> = Vec::new();
+
+    let mut attr_zone = true;
+    let mut open_len: Option<usize> = None;
+    let mut collecting_regex = false;
+    let mut regex_lines: Vec<&str> = Vec::new();
+
+    for line in lines {
+        // Inside a fence.
+        if let Some(n) = open_len {
+            if fence_close_matches(line, n) {
+                open_len = None;
+                if collecting_regex {
+                    collecting_regex = false;
+                    let pattern = regex_lines.join("\n");
+                    groups = extract_regex_groups(&pattern);
+                    regex = Some(pattern);
+                    regex_lines.clear();
+                }
+            } else if collecting_regex {
+                regex_lines.push(line);
+            } else {
+                note_lines.push(line);
+            }
+            continue;
+        }
+
+        if attr_zone {
+            if line.trim().is_empty() {
+                // Blank lines do not terminate the attribute zone.
+                continue;
+            }
+            if let Some((key, value)) = extract_attribute(line) {
+                match key.as_str() {
+                    "path" => {
+                        if path.is_none() {
+                            path = Some(value);
+                        }
+                    }
+                    "hash" => {
+                        if hash.is_none() {
+                            hash = Some(value);
+                        }
+                    }
+                    "regex" if regex.is_none() => {
+                        let pattern = value;
+                        groups = extract_regex_groups(&pattern);
+                        regex = Some(pattern);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            if let Some(n) = fence_open_len(line) {
+                if fence_info(line) == "regex" && regex.is_none() {
+                    // ```regex fence as an attribute-zone regex carrier.
+                    open_len = Some(n);
+                    collecting_regex = true;
+                    continue;
+                }
+                // Any other fence line is the first non-attribute content:
+                // the note starts (and the fence content belongs to it).
+                attr_zone = false;
+                open_len = Some(n);
+                note_lines.push(line);
+                continue;
+            }
+            // First non-blank non-attribute line: note starts (BDD:BRIEF-12).
+            attr_zone = false;
+            note_lines.push(line);
+            continue;
+        }
+
+        // Note zone: verbatim lines (attribute-shaped lines belong to the
+        // note and never override attributes); fences still tracked so a
+        // fenced `## ` line cannot split the entry.
+        note_lines.push(line);
+        if let Some(n) = fence_open_len(line) {
+            open_len = Some(n);
+        }
+    }
+
+    // Trim trailing blank lines from the note.
+    while note_lines.last().is_some_and(|l| l.trim().is_empty()) {
+        note_lines.pop();
+    }
+
+    let note = if note_lines.is_empty() {
+        None
+    } else {
+        Some(note_lines.join("\n"))
+    };
+
+    ManifestEntry {
+        title,
+        path: path.unwrap_or_default(),
+        hash: hash.unwrap_or_default(),
+        regex,
+        groups,
+        note,
+    }
+}
+
+/// Parse timestamp from RFC 3339 string (spec §3.5).
+pub(crate) fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
     }
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
         return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
     }
-    Err(format!("cannot parse '{}' as ISO-8601 timestamp", s))
+    Err(format!("cannot parse '{}' as RFC 3339 timestamp", s))
 }
 
-/// Strip surrounding backticks from a value.
-fn strip_backticks(s: &str) -> String {
-    let trimmed = s.trim();
-    if trimmed.starts_with('`') && trimmed.ends_with('`') && trimmed.len() >= 2 {
-        trimmed[1..trimmed.len() - 1].to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Builder for constructing ManifestEntry during parsing.
-struct EntryBuilder {
-    title: String,
-    path: Option<String>,
-    hash: Option<String>,
-    regex: Option<String>,
-    groups: Vec<String>,
-    note: Option<String>,
-}
-
-impl EntryBuilder {
-    fn new(title: String) -> Self {
-        Self {
-            title,
-            path: None,
-            hash: None,
-            regex: None,
-            groups: Vec::new(),
-            note: None,
-        }
-    }
-
-    fn build(self) -> ManifestEntry {
-        ManifestEntry {
-            title: self.title,
-            path: self.path.unwrap_or_default(),
-            hash: self.hash.unwrap_or_default(),
-            regex: self.regex,
-            groups: self.groups,
-            note: self.note,
-        }
-    }
-}
-
-/// Serialize a manifest to Markdown content.
+/// Serialize a manifest to Markdown content (spec §6.3).
 pub fn serialize_manifest(manifest: &Manifest) -> String {
-    let mut out = String::new();
+    let mut out = format!("# {}\n\n", manifest.name);
 
-    out.push_str(&format!("# {}\n\n", manifest.name));
-    out.push_str(&format!("- Owner: {}\n", manifest.author));
+    if !manifest.description.is_empty() {
+        out.push_str(&manifest.description);
+        out.push_str("\n\n");
+    }
+
+    out.push_str(&format!("- owner: {}\n", manifest.author));
     out.push_str(&format!(
-        "- Created: {}\n",
+        "- created: {}\n",
         manifest.created.format("%Y-%m-%dT%H:%M:%SZ")
     ));
-    out.push_str(&format!("- Description: {}\n\n", manifest.description));
-    out.push_str("## Entries\n");
 
     for entry in &manifest.entries {
         out.push_str(&serialize_entry(entry));
@@ -277,39 +283,26 @@ pub fn serialize_manifest(manifest: &Manifest) -> String {
     out
 }
 
-/// Serialize a single manifest entry.
+/// Serialize a single entry (spec §6.3).
 fn serialize_entry(entry: &ManifestEntry) -> String {
-    let mut out = String::new();
+    let mut out = format!("\n## {}\n\n", entry.title);
+    out.push_str(&format!("- path: {}\n", entry.path));
+    out.push_str(&format!("- hash: {}\n", entry.hash));
 
-    out.push_str(&format!("\n### {}\n\n", entry.title));
-    out.push_str(&format!("- Path: `{}`\n", entry.path));
-    out.push_str(&format!("- Hash: `{}`\n", entry.hash));
-
-    // Regex: use fenced code block for complex patterns, — for none
-    match &entry.regex {
-        Some(pattern) => {
-            if pattern.contains('\n') || pattern.contains('`') {
-                // Complex pattern: use fenced code block
-                out.push_str("- Regex:\n");
-                out.push_str("```regex\n");
-                out.push_str(pattern);
-                out.push_str("\n```\n");
-            } else {
-                // Simple pattern: inline backticks
-                out.push_str(&format!("- Regex: `{}`\n", pattern));
-            }
-        }
-        None => {
-            out.push_str("- Regex: —\n");
+    if let Some(pattern) = &entry.regex {
+        if pattern.contains('\n') || pattern.contains('`') {
+            // Complex pattern: ```regex fence (dynamic length, spec §3.4).
+            let fence = "`".repeat(compute_fence_length(pattern));
+            out.push_str(&format!("{}regex\n{}\n{}\n", fence, pattern, fence));
+        } else {
+            out.push_str(&format!("- regex: {}\n", pattern));
         }
     }
 
-    // Note
-    if let Some(ref note) = entry.note {
+    if let Some(note) = &entry.note {
         out.push('\n');
-        for line in note.lines() {
-            out.push_str(&format!("> {}\n", line));
-        }
+        out.push_str(note);
+        out.push('\n');
     }
 
     out
@@ -324,147 +317,162 @@ mod tests {
         Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
     }
 
+    const HASH64: &str =
+        "42b664743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540";
+
+    // T-FB-01 (BRIEF-01)
     #[test]
-    fn test_parse_manifest_entry_full() {
-        let content = r#"# onboarding
-
-- Owner: alice
-- Created: 2026-01-15T10:00:00Z
-- Description: Understanding the codebase structure
-
-## Entries
-
-### Main Entry Point
-
-- Path: `src/main.rs`
-- Hash: `abc123def456`
-- Regex: `fn main\(\)`
-
-> This is where the application starts.
-"#;
-        let manifest = parse_manifest(content).expect("should parse");
-        assert_eq!(manifest.name, "onboarding");
+    fn test_parse_entry_full() {
+        let content = format!(
+            "# Codebase Onboarding\n\nHow to understand this project\n\n- owner: alice\n- created: 2026-08-01T19:40:36Z\n\n## main.rs\n\n- path: src/main.rs\n- hash: {}\n- regex: fn main\n\nEntry point\n",
+            HASH64
+        );
+        let manifest = parse_manifest(&content).expect("should parse");
+        assert_eq!(manifest.name, "Codebase Onboarding");
         assert_eq!(manifest.author, "alice");
-        assert_eq!(manifest.description, "Understanding the codebase structure");
+        assert_eq!(manifest.description, "How to understand this project");
         assert_eq!(manifest.entries.len(), 1);
-
         let entry = &manifest.entries[0];
-        assert_eq!(entry.title, "Main Entry Point");
-        assert_eq!(entry.path, "src/main.rs");
-        assert_eq!(entry.hash, "abc123def456");
-        assert_eq!(entry.regex, Some("fn main\\(\\)".to_string()));
-        assert_eq!(entry.note, Some("This is where the application starts.".to_string()));
+        assert_eq!(entry.title, "main.rs");
+        assert_eq!(entry.path, "src/main.rs"); // bare text, no backtick stripping
+        assert_eq!(entry.hash, HASH64);
+        assert_eq!(entry.regex, Some("fn main".to_string()));
+        assert_eq!(entry.note, Some("Entry point".to_string()));
     }
 
+    // T-FB-02 (BRIEF-02)
     #[test]
-    fn test_parse_manifest_no_regex() {
-        let content = r#"# simple
-
-- Owner: bob
-- Created: 2026-01-15T10:00:00Z
-- Description: Simple manifest
-
-## Entries
-
-### Config File
-
-- Path: `config.toml`
-- Hash: `deadbeef`
-- Regex: —
-"#;
-        let manifest = parse_manifest(content).expect("should parse");
-        assert_eq!(manifest.entries.len(), 1);
+    fn test_no_regex_omitted() {
+        let content = format!(
+            "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## cfg\n\n- path: config.toml\n- hash: {}\n",
+            HASH64
+        );
+        let manifest = parse_manifest(&content).expect("should parse");
         assert_eq!(manifest.entries[0].regex, None);
         assert!(manifest.entries[0].groups.is_empty());
+
+        let serialized = serialize_manifest(&manifest);
+        assert!(!serialized.contains("- regex:"));
+        assert!(!serialized.contains('—'));
     }
 
+    // T-FB-03 (BRIEF-03)
     #[test]
-    fn test_parse_manifest_multi_entry() {
-        let content = r#"# multi
-
-- Owner: alice
-- Created: 2026-01-15T10:00:00Z
-- Description: Multiple entries
-
-## Entries
-
-### Entry One
-
-- Path: `src/one.rs`
-- Hash: `hash1`
-- Regex: —
-
-### Entry Two
-
-- Path: `src/two.rs`
-- Hash: `hash2`
-- Regex: —
-
-### Entry Three
-
-- Path: `src/three.rs`
-- Hash: `hash3`
-- Regex: —
-"#;
-        let manifest = parse_manifest(content).expect("should parse");
-        assert_eq!(manifest.entries.len(), 3);
-        assert_eq!(manifest.entries[0].title, "Entry One");
-        assert_eq!(manifest.entries[1].title, "Entry Two");
-        assert_eq!(manifest.entries[2].title, "Entry Three");
-    }
-
-    #[test]
-    fn test_parse_manifest_regex_with_groups() {
-        let content = r#"# grouped
-
-- Owner: alice
-- Created: 2026-01-15T10:00:00Z
-- Description: Regex with named groups
-
-## Entries
-
-### Function Parser
-
-- Path: `src/**/*.rs`
-- Hash: `abc123`
-- Regex: `fn (?<name>\w+)\((?<args>[^)]*)\)`
-"#;
-        let manifest = parse_manifest(content).expect("should parse");
+    fn test_fenced_regex() {
+        let content = format!(
+            "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## log\n\n- path: data.log\n- hash: {}\n```regex\n(?<year>\\d{{4}})-(?<month>\\d{{2}})\nwith `backtick` and\nmultiple lines\n```\n",
+            HASH64
+        );
+        let manifest = parse_manifest(&content).expect("should parse");
         let entry = &manifest.entries[0];
         assert_eq!(
             entry.regex,
-            Some("fn (?<name>\\w+)\\((?<args>[^)]*)\\)".to_string())
+            Some("(?<year>\\d{4})-(?<month>\\d{2})\nwith `backtick` and\nmultiple lines".to_string())
         );
-        assert_eq!(entry.groups, vec!["name", "args"]);
-    }
-
-    #[test]
-    fn test_parse_manifest_fenced_regex() {
-        let content = r#"# fenced
-
-- Owner: alice
-- Created: 2026-01-15T10:00:00Z
-- Description: Fenced regex block
-
-## Entries
-
-### Complex Pattern
-
-- Path: `data.txt`
-- Hash: `xyz789`
-- Regex:
-```regex
-(?<year>\d{4})-(?<month>\d{2})
-```
-"#;
-        let manifest = parse_manifest(content).expect("should parse");
-        let entry = &manifest.entries[0];
-        assert_eq!(entry.regex, Some("(?<year>\\d{4})-(?<month>\\d{2})".to_string()));
         assert_eq!(entry.groups, vec!["year", "month"]);
+
+        // serialization of a complex regex uses a fence, not inline
+        let serialized = serialize_manifest(&manifest);
+        assert!(serialized.contains("```regex\n"));
+        assert!(!serialized.contains("- regex:"));
+        let reparsed = parse_manifest(&serialized).expect("reparse");
+        assert_eq!(reparsed.entries[0].regex, entry.regex);
     }
 
+    // T-FB-04 (BRIEF-04)
     #[test]
-    fn test_serialize_manifest_roundtrip() {
+    fn test_hash_full_hex() {
+        let content = format!(
+            "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## f\n\n- path: f.rs\n- hash: {}\n",
+            HASH64
+        );
+        let manifest = parse_manifest(&content).expect("should parse");
+        assert_eq!(manifest.entries[0].hash, HASH64);
+        assert_eq!(manifest.entries[0].hash.len(), 64);
+        let serialized = serialize_manifest(&manifest);
+        assert!(serialized.contains(&format!("- hash: {}", HASH64)));
+    }
+
+    // T-FB-05 (BRIEF-05)
+    #[test]
+    fn test_groups_derived() {
+        let content = format!(
+            "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## f\n\n- path: f.rs\n- hash: {}\n- regex: (?<year>\\d{{4}})-(?<month>\\d{{2}})\n",
+            HASH64
+        );
+        let manifest = parse_manifest(&content).expect("should parse");
+        assert_eq!(manifest.entries[0].groups, vec!["year", "month"]);
+
+        let serialized = serialize_manifest(&manifest);
+        assert!(!serialized.contains("groups"));
+        assert!(!serialized.contains("year\", \"month"));
+        let reparsed = parse_manifest(&serialized).expect("reparse");
+        assert_eq!(reparsed.entries[0].groups, vec!["year", "month"]);
+    }
+
+    // T-FB-06 (BRIEF-06)
+    #[test]
+    fn test_missing_required() {
+        // missing owner
+        let content = "# b\n\n- created: 2026-01-15T10:00:00Z\n";
+        let err = parse_manifest(content).unwrap_err();
+        assert!(err.to_string().contains("missing - owner:"));
+        assert_eq!(err.fix(), "add a '- owner: <agent>' bullet line");
+        assert_eq!(err.example(), "- owner: alice");
+
+        // missing created
+        let content = "# b\n\n- owner: alice\n";
+        let err = parse_manifest(content).unwrap_err();
+        assert!(err.to_string().contains("missing or invalid - created:"));
+        assert_eq!(err.fix(), "add a '- created: <RFC3339>' bullet line");
+
+        // invalid created value
+        let content = "# b\n\n- owner: alice\n- created: not-a-date\n";
+        let err = parse_manifest(content).unwrap_err();
+        assert!(err.to_string().contains("missing or invalid - created:"));
+
+        // missing H1
+        let content = "- owner: alice\n- created: 2026-01-15T10:00:00Z\n";
+        let err = parse_manifest(content).unwrap_err();
+        assert!(err.to_string().contains("missing title heading"));
+    }
+
+    // T-FB-07 (BRIEF-07)
+    #[test]
+    fn test_prose_note() {
+        let content = format!(
+            "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## f\n\n- path: file.rs\n- hash: {}\n\nFirst line of note.\nSecond line of note.\n",
+            HASH64
+        );
+        let manifest = parse_manifest(&content).expect("should parse");
+        assert_eq!(
+            manifest.entries[0].note,
+            Some("First line of note.\nSecond line of note.".to_string())
+        );
+        let serialized = serialize_manifest(&manifest);
+        assert!(!serialized.contains("> ")); // no blockquote prefix
+        assert!(serialized.contains("First line of note.\nSecond line of note."));
+    }
+
+    // T-FB-08 (BRIEF-10)
+    #[test]
+    fn test_parse_crlf_unicode() {
+        let lf = format!(
+            "# 入门指南 🚀\n\n- owner: alicé\n- created: 2026-01-15T10:00:00Z\n\n## 入口\n\n- path: src/main.rs\n- hash: {}\n\n中文 note\n",
+            HASH64
+        );
+        let crlf = lf.replace('\n', "\r\n");
+        let a = parse_manifest(&lf).expect("lf");
+        let b = parse_manifest(&crlf).expect("crlf");
+        assert_eq!(a, b);
+        assert_eq!(a.name, "入门指南 🚀");
+        assert_eq!(a.entries[0].title, "入口");
+        assert_eq!(a.entries[0].note, Some("中文 note".to_string()));
+    }
+
+    // T-FB-09 (BRIEF-11)
+    #[test]
+    fn test_roundtrip() {
         let manifest = Manifest {
             name: "roundtrip".to_string(),
             author: "tester".to_string(),
@@ -474,7 +482,7 @@ mod tests {
                 ManifestEntry {
                     title: "Entry A".to_string(),
                     path: "src/a.rs".to_string(),
-                    hash: "hash_a".to_string(),
+                    hash: HASH64.to_string(),
                     regex: Some("fn test".to_string()),
                     groups: vec![],
                     note: Some("Note A".to_string()),
@@ -482,31 +490,42 @@ mod tests {
                 ManifestEntry {
                     title: "Entry B".to_string(),
                     path: "src/b.rs".to_string(),
-                    hash: "hash_b".to_string(),
+                    hash: HASH64.to_string(),
                     regex: None,
                     groups: vec![],
                     note: None,
+                },
+                ManifestEntry {
+                    title: "Entry C".to_string(),
+                    path: "src/c.rs".to_string(),
+                    hash: HASH64.to_string(),
+                    regex: Some("(?<name>\\w+)\nmulti `line`".to_string()),
+                    groups: vec!["name".to_string()],
+                    note: Some("Note C\n- path: not-an-attribute".to_string()),
                 },
             ],
         };
 
         let serialized = serialize_manifest(&manifest);
-        let parsed = parse_manifest(&serialized).expect("should parse serialized");
+        assert!(!serialized.contains("## Entries"));
+        assert!(!serialized.contains('—'));
+        assert!(!serialized.contains("- Owner:"));
+        assert!(!serialized.contains("- Path:"));
+        let parsed = parse_manifest(&serialized).expect("roundtrip");
+        assert_eq!(manifest, parsed);
 
-        assert_eq!(manifest.name, parsed.name);
-        assert_eq!(manifest.author, parsed.author);
-        assert_eq!(manifest.description, parsed.description);
-        assert_eq!(manifest.entries.len(), parsed.entries.len());
-
-        for (orig, parsed) in manifest.entries.iter().zip(parsed.entries.iter()) {
-            assert_eq!(orig.title, parsed.title);
-            assert_eq!(orig.path, parsed.path);
-            assert_eq!(orig.hash, parsed.hash);
-            assert_eq!(orig.regex, parsed.regex);
-            assert_eq!(orig.note, parsed.note);
-        }
+        // no-description variant
+        let no_desc = Manifest {
+            description: String::new(),
+            ..manifest.clone()
+        };
+        assert_eq!(
+            parse_manifest(&serialize_manifest(&no_desc)).expect("roundtrip"),
+            no_desc
+        );
     }
 
+    // T-FB-10 (BRIEF-05, retained)
     #[test]
     fn test_extract_regex_groups() {
         assert_eq!(
@@ -520,46 +539,32 @@ mod tests {
         );
     }
 
+    // T-FB-11 (BRIEF-12)
     #[test]
-    fn test_parse_manifest_missing_name() {
-        let content = r#"- Owner: alice
-- Created: 2026-01-15T10:00:00Z
-"#;
-        let result = parse_manifest(content);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing title heading"));
-    }
-
-    #[test]
-    fn test_parse_manifest_crlf() {
-        let content = "# test\r\n\r\n- Owner: alice\r\n- Created: 2026-01-15T10:00:00Z\r\n- Description: CRLF test\r\n\r\n## Entries\r\n";
-        let manifest = parse_manifest(content).expect("should parse CRLF");
-        assert_eq!(manifest.name, "test");
-        assert_eq!(manifest.author, "alice");
-    }
-
-    #[test]
-    fn test_parse_manifest_multiline_note() {
-        let content = r#"# noted
-
-- Owner: alice
-- Created: 2026-01-15T10:00:00Z
-- Description: Multi-line note
-
-## Entries
-
-### Entry
-
-- Path: `file.rs`
-- Hash: `abc`
-- Regex: —
-
-> First line of note.
-> Second line of note.
-"#;
+    fn test_entry_attribute_zone_boundary() {
+        let content = "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## f\n\n- path: a\n\n- hash: b\nNote starts\n- path: c\n";
         let manifest = parse_manifest(content).expect("should parse");
-        let note = manifest.entries[0].note.as_ref().expect("should have note");
-        assert!(note.contains("First line"));
-        assert!(note.contains("Second line"));
+        let entry = &manifest.entries[0];
+        // blank line did not terminate the attribute zone
+        assert_eq!(entry.path, "a");
+        assert_eq!(entry.hash, "b");
+        // note contains the attribute-shaped line verbatim; it did not
+        // override the path attribute
+        assert_eq!(entry.note, Some("Note starts\n- path: c".to_string()));
+        assert_eq!(entry.path, "a");
+    }
+
+    // fence-aware entry boundaries: an H2 inside a note fence is not a
+    // new entry (spec §3.3, BDD:BRIEF-03 fence awareness)
+    #[test]
+    fn test_h2_inside_fence_not_entry() {
+        let content = "# b\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## f\n\n- path: a\n- hash: b\n\nexample:\n\n```\n## fake entry\n```\n";
+        let manifest = parse_manifest(content).expect("should parse");
+        assert_eq!(manifest.entries.len(), 1);
+        assert!(manifest.entries[0]
+            .note
+            .as_ref()
+            .unwrap()
+            .contains("## fake entry"));
     }
 }
