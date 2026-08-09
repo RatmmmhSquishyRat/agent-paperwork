@@ -1293,6 +1293,28 @@ fn flag_inventory_matches_spec() {
     };
     assert!(validate_help.contains("--type"), "validate must keep --type");
 
+    // contacts CRUD round (spec §3.6): update gains --new-profile (long
+    // form only); brief read gains the optional --entry-title filter.
+    let contacts_update_help = {
+        let out = cmd().args(["contacts", "update", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(contacts_update_help.contains("--profile"), "contacts update must keep --profile");
+    assert!(contacts_update_help.contains("--new-profile"), "contacts update must gain --new-profile");
+
+    let contacts_remove_help = {
+        let out = cmd().args(["contacts", "remove", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(contacts_remove_help.contains("--profile"), "contacts remove must keep --profile");
+
+    let brief_read_help = {
+        let out = cmd().args(["brief", "read", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert!(brief_read_help.contains("--entry-title"), "brief read must gain --entry-title");
+    assert!(brief_read_help.contains("--full"), "brief read must keep --full");
+
     // Format v2 flag surface (D1/D2): send keeps the sugar flags but never
     // gains --to / --participants; --title is the preamble carrier.
     assert!(send_help.contains("--title"), "post send must keep --title");
@@ -2454,16 +2476,68 @@ fn short_form_whitelist_is_exact() {
     };
     assert_eq!(help_short_flags(&root_help), vec!["V", "h", "q"], "root shorts must be exactly {{-q, -h, -V}}");
 
-    // Negative probes (one per group): no short form outside the whitelist.
+    // Negative probes: bdd S-SHORT-02 full 26-flag no-short-form list
+    // (contacts CRUD round: built out from the former 6 one-shot probes,
+    // spec §4 full table + --reply-to/--mention; --new-profile probed with
+    // both -N and -w typo-style shorts). No flag outside the whitelist may
+    // gain a short form.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("x.md");
     for args in [
+        // --seq
         vec!["post", "edit", path.to_str().unwrap(), "-s", "1"],
-        vec!["post", "read", path.to_str().unwrap(), "-l", "5"],
-        vec!["profile", "create", path.to_str().unwrap(), "-n", "alice"],
+        // --stdin
+        vec!["post", "send", path.to_str().unwrap(), "-S", "body"],
+        // --title
         vec!["brief", "create", path.to_str().unwrap(), "-t", "T"],
+        // --to
+        vec!["post", "read", path.to_str().unwrap(), "-o", "5"],
+        // --from
+        vec!["post", "read", path.to_str().unwrap(), "-f", "5"],
+        // --entry
         vec!["brief", "add", path.to_str().unwrap(), "-e", "src/main.rs"],
+        // --entry-title
+        vec!["brief", "remove", path.to_str().unwrap(), "-E", "main.rs"],
+        // --profile
         vec!["contacts", "add", path.to_str().unwrap(), "-p", "a.profile.md"],
+        // --new-profile (-N typo form)
+        vec!["contacts", "update", path.to_str().unwrap(), "--profile", "a.profile.md", "-N", "b.profile.md"],
+        // --new-profile (-w typo form)
+        vec!["contacts", "update", path.to_str().unwrap(), "--profile", "a.profile.md", "-w", "b.profile.md"],
+        // --name
+        vec!["profile", "create", path.to_str().unwrap(), "-n", "alice"],
+        // --model
+        vec!["profile", "create", path.to_str().unwrap(), "-M", "gpt-4"],
+        // --description
+        vec!["profile", "create", path.to_str().unwrap(), "-d", "desc"],
+        // --owner
+        vec!["brief", "create", path.to_str().unwrap(), "-o", "alice"],
+        // --note
+        vec!["brief", "add", path.to_str().unwrap(), "-n", "note"],
+        // --regex
+        vec!["brief", "add", path.to_str().unwrap(), "-r", "fn"],
+        // --scope-read
+        vec!["profile", "create", path.to_str().unwrap(), "-R", "glob"],
+        // --scope-write
+        vec!["profile", "create", path.to_str().unwrap(), "-W", "glob"],
+        // --scope-owns
+        vec!["profile", "create", path.to_str().unwrap(), "-O", "glob"],
+        // --full
+        vec!["brief", "read", path.to_str().unwrap(), "-f"],
+        // --limit
+        vec!["post", "read", path.to_str().unwrap(), "-l", "5"],
+        // --base-dir
+        vec!["brief", "verify", path.to_str().unwrap(), "-b", "."],
+        // --type
+        vec!["validate", path.to_str().unwrap(), "-t", "post"],
+        // --json
+        vec!["post", "read", path.to_str().unwrap(), "-j"],
+        // --plain
+        vec!["post", "read", path.to_str().unwrap(), "-P"],
+        // --reply-to (post send side)
+        vec!["post", "send", path.to_str().unwrap(), "--author", "a", "--message", "m", "-r", "1"],
+        // --mention (post read side)
+        vec!["post", "read", path.to_str().unwrap(), "-M", "alice"],
     ] {
         cmd()
             .args(&args)
@@ -2471,6 +2545,24 @@ fn short_form_whitelist_is_exact() {
             .code(2)
             .stderr(predicate::str::contains("error usage:"))
             .stderr(predicate::str::contains("unexpected argument"));
+    }
+}
+
+#[test]
+fn contacts_group_help_lists_verbs() {
+    // S-SHORT-02 (Daniel M-3): contacts group verb set is exactly
+    // {create, add, remove, update, read}; mirrors the post-group
+    // precedent, with negative assertions for out-of-list verbs.
+    let out = cmd().args(["contacts", "--help"]).assert().code(0);
+    let help = String::from_utf8_lossy(&out.get_output().stdout).to_string();
+    assert!(help.contains("contacts"), "group help must mention the group");
+    assert!(help.contains("<COMMAND>"), "group help must show the subcommand slot");
+    for verb in ["create", "add", "remove", "update", "read"] {
+        assert!(help.contains(verb), "group help must list verb `{}`", verb);
+    }
+    // contacts has no edit/delete/list verb (update != edit, spec §3.6).
+    for out_of_list in ["  edit", "  delete", "  list"] {
+        assert!(!help.contains(out_of_list), "group help must not list out-of-whitelist verb `{}`", out_of_list.trim());
     }
 }
 
@@ -2486,7 +2578,7 @@ fn all_help_output_is_pure_ascii() {
         "profile create", "profile show", "profile edit", "profile list",
         "post send", "post read", "post summary", "post edit",
         "brief create", "brief add", "brief remove", "brief read", "brief verify",
-        "contacts create", "contacts add", "contacts read",
+        "contacts create", "contacts add", "contacts remove", "contacts update", "contacts read",
     ] {
         let mut v: Vec<&str> = verb.split(' ').collect();
         v.push("--help");
@@ -2499,4 +2591,533 @@ fn all_help_output_is_pure_ascii() {
             "--help of {:?} contains non-ASCII bytes", args
         );
     }
+}
+
+// =====================================================================
+// contacts CRUD round (spec cli-grammar-v0.6 §3.5/§3.6/§3.9, bdd
+// S-BRIEF-07~09 / S-CONTACTS-06~14 / §12, 2026-08-09)
+// =====================================================================
+
+/// Fixture: a contacts file seeded with the given profile entries
+/// (relative path strings, stored verbatim as keys).
+fn setup_contacts_cli(dir: &TempDir, title: &str, profiles: &[&str]) -> std::path::PathBuf {
+    let path = dir.path().join("team.contacts.md");
+    std::fs::write(&path, format!("# {}\n", title)).unwrap();
+    for p in profiles {
+        cmd()
+            .args(["contacts", "add", path.to_str().unwrap(), "--profile", p])
+            .assert()
+            .success();
+    }
+    path
+}
+
+#[test]
+fn contacts_remove_success() {
+    // S-CONTACTS-06: ok envelope, field area, file effect, --json keys.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md", "bob.profile.md"]);
+
+    cmd()
+        .args(["contacts", "remove", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.remove"))
+        .stdout(predicate::str::contains("alice.profile.md ->"))
+        .stdout(predicate::str::contains("contacts: "))
+        .stdout(predicate::str::contains("removed: alice.profile.md"));
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("- [bob](bob.profile.md)"), "bob entry must survive");
+    assert!(!content.contains("alice"), "alice entry must be gone");
+
+    // --json carries the same keys (command contacts.remove).
+    cmd()
+        .args(["contacts", "add", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .success();
+    cmd()
+        .args(["--json", "contacts", "remove", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"command\":\"contacts.remove\""))
+        .stdout(predicate::str::contains("\"removed\":\"alice.profile.md\""));
+}
+
+#[test]
+fn contacts_remove_miss_and_label_as_key_are_not_found() {
+    // S-CONTACTS-07: miss and label-as-key both exit 1 not-found with the
+    // key-semantics teaching sentence; the file never changes.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md"]);
+    let before = std::fs::read(&path).unwrap();
+
+    for key in ["ghost.profile.md", "alice"] {
+        cmd()
+            .args(["contacts", "remove", path.to_str().unwrap(), "--profile", key])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("error not-found:"))
+            .stderr(predicate::str::contains("Contacts entry"))
+            .stderr(predicate::str::contains("paperwork contacts read"))
+            .stderr(predicate::str::contains(
+                "the key is the profile path as stored in the contacts file, not the label",
+            ));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "file must not change");
+}
+
+#[test]
+fn contacts_update_success() {
+    // S-CONTACTS-08: label re-derived from NEW H1, order preserved,
+    // updated field verbatim `<OLD> -> <NEW>`.
+    let dir = TempDir::new().unwrap();
+    let carol = dir.path().join("carol.profile.md");
+    cmd()
+        .args(["profile", "create", carol.to_str().unwrap(), "--name", "carol"])
+        .assert()
+        .success();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md", "bob.profile.md"]);
+
+    cmd()
+        .args([
+            "contacts", "update", path.to_str().unwrap(),
+            "--profile", "alice.profile.md",
+            "--new-profile", "carol.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.update alice.profile.md -> carol.profile.md"))
+        .stdout(predicate::str::contains("updated: alice.profile.md -> carol.profile.md"));
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("- [carol](carol.profile.md)"), "label must be re-derived from NEW profile H1");
+    let carol_idx = content.find("- [carol]").unwrap();
+    let bob_idx = content.find("- [bob]").unwrap();
+    assert!(carol_idx < bob_idx, "in-place replacement must preserve entry order");
+
+    // --json carries command contacts.update and the arrow-string field.
+    cmd()
+        .args([
+            "--json", "contacts", "update", path.to_str().unwrap(),
+            "--profile", "bob.profile.md",
+            "--new-profile", "alice.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"command\":\"contacts.update\""))
+        .stdout(predicate::str::contains("\"updated\":\"bob.profile.md -> alice.profile.md\""));
+}
+
+#[test]
+fn contacts_update_error_paths() {
+    // S-CONTACTS-09: OLD miss -> not-found (key teaching); NEW present ->
+    // already-exists; neither writes the file.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md", "bob.profile.md"]);
+    let before = std::fs::read(&path).unwrap();
+
+    cmd()
+        .args([
+            "contacts", "update", path.to_str().unwrap(),
+            "--profile", "ghost.profile.md",
+            "--new-profile", "carol.profile.md",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-found:"))
+        .stderr(predicate::str::contains("the key is the profile path"));
+
+    cmd()
+        .args([
+            "contacts", "update", path.to_str().unwrap(),
+            "--profile", "alice.profile.md",
+            "--new-profile", "bob.profile.md",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error already-exists:"))
+        .stderr(predicate::str::contains("remove the existing entry first"));
+
+    assert_eq!(std::fs::read(&path).unwrap(), before, "no write on error paths");
+}
+
+#[test]
+fn contacts_remove_update_missing_flags_are_usage() {
+    // S-CONTACTS-10: all three forms exit 2 with the verbatim canonical
+    // examples pinned by spec §5.2.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &[]);
+
+    cmd()
+        .args(["contacts", "remove", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(
+            "paperwork contacts remove team.contacts.md --profile alice.profile.md",
+        ));
+
+    let update_example =
+        "paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md";
+    cmd()
+        .args(["contacts", "update", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(update_example));
+
+    cmd()
+        .args(["contacts", "update", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(update_example));
+}
+
+#[test]
+fn contacts_remove_positional_misuse_is_usage() {
+    // S-CONTACTS-11: the v0.5-style positional profile path lands in a
+    // usage envelope (PATH is the only positional slot).
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md"]);
+
+    cmd()
+        .args(["contacts", "remove", path.to_str().unwrap(), "alice.profile.md"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(
+            "paperwork contacts remove team.contacts.md --profile alice.profile.md",
+        ));
+}
+
+#[test]
+fn contacts_remove_last_entry_shape() {
+    // S-CONTACTS-12: removing the last entry leaves the create-initial
+    // shape (title H1 + blank line); validate legal; re-remove not-found.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("solo.contacts.md");
+    std::fs::write(&path, "# Solo\n").unwrap();
+    cmd()
+        .args(["contacts", "add", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["contacts", "remove", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.remove"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Solo\n\n", "must equal the create initial shape");
+
+    cmd()
+        .args(["validate", path.to_str().unwrap(), "--type", "contacts"])
+        .assert()
+        .code(0);
+
+    cmd()
+        .args(["contacts", "remove", path.to_str().unwrap(), "--profile", "alice.profile.md"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-found:"));
+}
+
+#[test]
+fn contacts_special_char_path_roundtrip() {
+    // S-CONTACTS-13: keys match on the UNESCAPED string; space/paren
+    // destinations serialize in angle-bracket form; second op still hits.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("team.contacts.md");
+    std::fs::write(&path, "# Team\n").unwrap();
+    cmd()
+        .args(["contacts", "add", path.to_str().unwrap(), "--profile", "my profile (v2).profile.md"])
+        .assert()
+        .success();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("(<my profile (v2).profile.md>)"), "special path must use the angle-bracket form");
+
+    cmd()
+        .args([
+            "contacts", "update", path.to_str().unwrap(),
+            "--profile", "my profile (v2).profile.md",
+            "--new-profile", "new dir/prof.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.update"));
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("<new dir/prof.profile.md>"), "new destination must use the angle-bracket form");
+
+    cmd()
+        .args(["contacts", "remove", path.to_str().unwrap(), "--profile", "new dir/prof.profile.md"])
+        .assert()
+        .code(0);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Team\n\n");
+
+    cmd()
+        .args(["validate", path.to_str().unwrap(), "--type", "contacts"])
+        .assert()
+        .code(0);
+}
+
+#[test]
+fn contacts_update_nonexistent_new_is_silent_success() {
+    // S-CONTACTS-14: updating to a non-existent NEW still exits 0; the
+    // destination is stored as given and the label falls back to the stem.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md"]);
+
+    cmd()
+        .args([
+            "contacts", "update", path.to_str().unwrap(),
+            "--profile", "alice.profile.md",
+            "--new-profile", "carol",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.update alice.profile.md -> carol"))
+        .stdout(predicate::str::contains("updated: alice.profile.md -> carol"));
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("- [carol](carol)"), "fallback label + destination stored verbatim");
+}
+
+/// Fixture: a brief with two entries (main.rs with regex/note, lib.rs bare).
+fn setup_brief_cli(dir: &TempDir) -> std::path::PathBuf {
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(dir.path().join("lib.rs"), "pub fn lib() {}\n").unwrap();
+    let brief = dir.path().join("onboarding.brief.md");
+    cmd()
+        .args(["brief", "create", brief.to_str().unwrap(), "--title", "Onboarding", "--owner", "alice"])
+        .assert()
+        .success();
+    cmd()
+        .args(["brief", "add", brief.to_str().unwrap(), "--entry", "main.rs", "--regex", "fn main", "--note", "entry point"])
+        .assert()
+        .success();
+    cmd()
+        .args(["brief", "add", brief.to_str().unwrap(), "--entry", "lib.rs"])
+        .assert()
+        .success();
+    brief
+}
+
+#[test]
+fn brief_read_entry_title_selective_details() {
+    // S-BRIEF-07: conclusion stays the full-count `N entries` shape; only
+    // the hit entry is emitted, with the --full field set (Default and
+    // JSON alike, not gated on --full).
+    let dir = TempDir::new().unwrap();
+    let brief = setup_brief_cli(&dir);
+
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap(), "--entry-title", "main.rs"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok brief.read 2 entries"))
+        .stdout(predicate::str::contains("main.rs: main.rs (hash: "))
+        .stdout(predicate::str::contains("regex: fn main"))
+        .stdout(predicate::str::contains("note: entry point"))
+        .stdout(predicate::str::contains("lib.rs:").not());
+
+    cmd()
+        .args(["--json", "brief", "read", brief.to_str().unwrap(), "--entry-title", "main.rs"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"conclusion\":\"2 entries\""))
+        .stdout(predicate::str::contains("\"regex\":\"fn main\""))
+        .stdout(predicate::str::contains("\"note\":\"entry point\""))
+        .stdout(predicate::str::contains("\"hash\":"))
+        .stdout(predicate::str::contains("lib.rs").not());
+}
+
+#[test]
+fn brief_read_entry_title_miss_is_not_found() {
+    // S-BRIEF-08: no match -> not-found exit 1, fix points at brief read.
+    let dir = TempDir::new().unwrap();
+    let brief = setup_brief_cli(&dir);
+
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap(), "--entry-title", "no-such.rs"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-found:"))
+        .stderr(predicate::str::contains("Brief entry"))
+        .stderr(predicate::str::contains("paperwork brief read"));
+}
+
+#[test]
+fn brief_read_entry_title_combines_with_full() {
+    // S-BRIEF-09: --full + --entry-title is legal and equivalent; without
+    // the filter both tiers stay frozen (TOC lists every entry).
+    let dir = TempDir::new().unwrap();
+    let brief = setup_brief_cli(&dir);
+
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap(), "--full", "--entry-title", "main.rs"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok brief.read 2 entries"))
+        .stdout(predicate::str::contains("regex: fn main"))
+        .stdout(predicate::str::contains("lib.rs:").not());
+
+    // Frozen regression: plain TOC still lists both entries.
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok brief.read 2 entries"))
+        .stdout(predicate::str::contains("main.rs"))
+        .stdout(predicate::str::contains("lib.rs"));
+}
+
+#[test]
+fn contacts_crud_error_envelopes_are_ascii() {
+    // S-OUT-05 extension: usage/not-found/already-exists stderr of the new
+    // contacts verbs must be pure ASCII at the raw-byte level.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md", "bob.profile.md"]);
+
+    let outputs = vec![
+        cmd().args(["contacts", "remove", path.to_str().unwrap()]).assert().code(2).get_output().clone(),
+        cmd().args(["contacts", "update", path.to_str().unwrap()]).assert().code(2).get_output().clone(),
+        cmd()
+            .args(["contacts", "remove", path.to_str().unwrap(), "--profile", "ghost.profile.md"])
+            .assert().code(1).get_output().clone(),
+        cmd()
+            .args([
+                "contacts", "update", path.to_str().unwrap(),
+                "--profile", "alice.profile.md", "--new-profile", "bob.profile.md",
+            ])
+            .assert().code(1).get_output().clone(),
+    ];
+    for out in &outputs {
+        assert!(out.stderr.iter().all(u8::is_ascii), "new contacts error stderr contains non-ASCII bytes");
+        assert!(out.stdout.iter().all(u8::is_ascii), "new contacts error stdout contains non-ASCII bytes");
+    }
+}
+
+#[test]
+fn multiprocess_concurrent_contacts_brief_add_no_lost_entries() {
+    // S-LOCK-01: N independent processes add distinct contacts entries
+    // while another N add distinct brief entries; locking serializes them,
+    // nothing is lost, both files stay valid. BUG-5 lesson: set comparison
+    // only, never positional pairing (commit order is nondeterministic).
+    let dir = TempDir::new().unwrap();
+    let bin = assert_cmd::cargo::cargo_bin("paperwork");
+    let n = 8usize;
+
+    let contacts_path = dir.path().join("team.contacts.md");
+    std::fs::write(&contacts_path, "# Team\n").unwrap();
+
+    let brief_path = dir.path().join("onboarding.brief.md");
+    cmd()
+        .args(["brief", "create", brief_path.to_str().unwrap(), "--title", "Onboarding"])
+        .assert()
+        .success();
+    // Brief add snapshots each entry file; pre-create all N targets.
+    for i in 0..n {
+        std::fs::write(dir.path().join(format!("e{}.rs", i)), format!("// entry {}\n", i)).unwrap();
+    }
+
+    let mut children = Vec::new();
+    for i in 0..n {
+        // contacts side: profile paths may not exist (add never validates).
+        children.push(
+            std::process::Command::new(&bin)
+                .args([
+                    "contacts", "add", contacts_path.to_str().unwrap(),
+                    "--profile", &format!("p{}.profile.md", i),
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn contacts add"),
+        );
+        children.push(
+            std::process::Command::new(&bin)
+                .args([
+                    "brief", "add", brief_path.to_str().unwrap(),
+                    "--entry", &format!("e{}.rs", i),
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn brief add"),
+        );
+    }
+    for (idx, child) in children.into_iter().enumerate() {
+        let out = child.wait_with_output().expect("wait for child");
+        assert!(
+            out.status.success(),
+            "concurrent add {} failed: {}",
+            idx,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let contacts_content = std::fs::read_to_string(&contacts_path).unwrap();
+    let entries = paperwork_core::format::contacts::parse_contacts(&contacts_content)
+        .expect("contacts file must parse");
+    let got_profiles: std::collections::BTreeSet<String> =
+        entries.iter().map(|e| e.profile_path.clone()).collect();
+    let want_profiles: std::collections::BTreeSet<String> =
+        (0..n).map(|i| format!("p{}.profile.md", i)).collect();
+    assert_eq!(got_profiles, want_profiles, "contacts entry set must equal the expected union");
+
+    let brief_content = std::fs::read_to_string(&brief_path).unwrap();
+    let manifest = paperwork_core::format::manifest::parse_manifest(&brief_content)
+        .expect("brief file must parse");
+    let got_titles: std::collections::BTreeSet<String> =
+        manifest.entries.iter().map(|e| e.title.clone()).collect();
+    let want_titles: std::collections::BTreeSet<String> =
+        (0..n).map(|i| format!("e{}.rs", i)).collect();
+    assert_eq!(got_titles, want_titles, "brief entry set must equal the expected union");
+
+    cmd().args(["validate", contacts_path.to_str().unwrap(), "--type", "contacts"]).assert().code(0);
+    cmd().args(["validate", brief_path.to_str().unwrap(), "--type", "brief"]).assert().code(0);
+}
+
+#[test]
+fn profile_edit_concurrent_disjoint_fields_union() {
+    // S-LOCK-02 (main variant, non-overlapping fields): both edits exit 0,
+    // the final file is a valid profile whose state is the UNION of both
+    // edits (the second writer re-reads the first writer's result inside
+    // the lock); a lost-write terminal state is forbidden.
+    let dir = TempDir::new().unwrap();
+    let bin = assert_cmd::cargo::cargo_bin("paperwork");
+    let prof = dir.path().join("alice.profile.md");
+    cmd()
+        .args(["profile", "create", prof.to_str().unwrap(), "--name", "alice", "--model", "old-model"])
+        .assert()
+        .success();
+
+    let children = vec![
+        std::process::Command::new(&bin)
+            .args(["profile", "edit", prof.to_str().unwrap(), "--model", "new-model"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn profile edit (model)"),
+        std::process::Command::new(&bin)
+            .args(["profile", "edit", prof.to_str().unwrap(), "--description", "new-desc"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn profile edit (description)"),
+    ];
+    for child in children {
+        let out = child.wait_with_output().expect("wait for child");
+        assert!(out.status.success(), "concurrent profile edit failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    let content = std::fs::read_to_string(&prof).unwrap();
+    assert!(content.contains("- model: new-model"), "model edit must survive");
+    assert!(content.contains("new-desc"), "description edit must survive");
+
+    cmd()
+        .args(["validate", prof.to_str().unwrap(), "--type", "profile"])
+        .assert()
+        .code(0);
 }
