@@ -5,6 +5,7 @@
 - 文档性质：实施计划（分层步骤 + 依赖 + 门禁）
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令，最高优先级）
+  - `docs/ssot/adr/feedbacks/v0.7_feedbacks.md`（本轮 owner 指令：contacts CRUD + 锁统一 + 渐进阅读；文末「本轮增量实施步骤」节的依据）
   - `docs/ssot/dev-principles/实现流程原则.md`（文档闭合后方可实现）
   - `docs/ssot/specs/cli-ux-redesign/impl_plan.md`（v0.5 实施体例与门禁先例）
 - 前置门槛：本目录 spec/design/bdd/tdd 四份文档经对抗评审闭合后方可开始步骤(1)（实现流程原则.md）；实施者 role 文档：`docs/roles/cli-grammar-v0.6-implementer.role.md`（rework 补录 Nora ISSUE-m2，体例仿 v0.5 implementer role）。
@@ -97,3 +98,56 @@
 - **串行链**：(1) -> (2) -> (3) -> (4) -> (5) -> (6)；(7) 由独立 agent 承接。
 - (1) 与 (2)(3) 分属不同 crate，理论上可并行，但 example 文法约定以 spec §2 全表为唯一基准；单 impl agent 顺序执行按编号推进即可。
 - **发布轮（版本 bump / CHANGELOG 发布段 / tag / publish）不在本计划内**：由 owner 在功能稳定后另行裁定并单独立项（v0.6_feedbacks §一 (3)）。
+
+---
+
+## 本轮增量实施步骤（contacts CRUD + 写路径锁统一 + brief 选择性详情；v0.7 feedback 轮，2026-08-09）
+
+- **前置门槛**：本目录 spec（§2 本轮新增行 / §3.5 / §3.6 / §3.9 / §7 第 5 条 / §9）、bdd（S-BRIEF-07~09、S-CONTACTS-06~11、§12、S-SHORT-02 更新）、tdd（§8）经对抗评审闭合后方可开始步骤 R1（实现流程原则.md，口径同文首前置门槛）。
+- **基线**：cli-grammar-v0.6 分支（worktree agent-paperwork-wt-v06grammar）的 v0.6 实施完成态；R1~R6 均在该分支执行；**继续禁止触碰主工作区 repos/**（口径同上全局门禁）。
+- **交付边界**：本轮同样**不含**版本 bump、CHANGELOG 发布段、tag、publish 任何步骤（spec §7 第 4/5 条，v0.7_feedbacks §四）。
+
+### 步骤 R1 core 锁 helper（锁模板抽取）
+
+- **文件**：`repos/paperwork-core/src/ops/`（helper 落点由实现方自决：独立 lock.rs 或 ops/mod.rs 内聚，spec 治理授权，v0.7_feedbacks §2.3）
+- **内容**：抽取 `thread_edit` 六步锁内读改写模板（ops/thread.rs L355-521：开 read+write 句柄 -> `lock_exclusive` -> seek(0) + 经持锁句柄 `read_to_string` -> 变更序列化 -> `set_len(0)` + seek(0) + `write_all` -> `unlock`）；错误路径先解锁再返回（与 thread_edit 既有 `unlock().ok()` 点位同构）；锁获取失败 fast fail 落 `IoContext` exit 1，fix 沿用 `another process may hold the lock; retry shortly`；**Windows 硬性约束：锁内仅允许经持锁句柄读取**（跨句柄读被锁字节区间即时失败 os error 33，QA BUG-2 判例）；崩溃窗口沿用 format-v2 spec §5.7 判例，不引入 temp+rename。
+- **门禁**：cargo build + `cargo test -p paperwork-core`（ops_tests 恒绿）+ clippy 全绿。
+
+### 步骤 R2 contacts 三写路径（core）
+
+- **文件**：`repos/paperwork-core/src/ops/contacts.rs`
+- **内容**：`contacts_add` 改造为 R1 锁内读改写（幂等语义不变）；新增 `contacts_remove`（键 = profile 路径字符串精确匹配；未命中 `NotFound` resource Contacts entry，fix 引导 `contacts read`）与 `contacts_update`（OLD 未命中 `NotFound`；NEW 已存在 `AlreadyExists`；原地替换 destination，label 依 R11 复用 `derive_label` 对 NEW 重派生；条目顺序保留）；序列化复用 `serialize_contacts`，格式零触碰（format-v2 spec L12）。
+- **门禁**：同上 + `tests/ops_contacts_crud_tests.rs` 新建并全绿（tdd §8.1 用例表）。
+
+### 步骤 R3 brief/profile 补锁（core）
+
+- **文件**：`repos/paperwork-core/src/ops/manifest.rs`、`ops/profile.rs`
+- **内容**：`brief_add_entry` / `brief_remove_entry` / `edit_profile` 改为 R1 锁内读改写；行为契约与序列化产物不变（锁内产物与无锁产物逐字节一致，tdd §8.1 锁内序列化等价用例钉住）；`ops_tests.rs` 保持字节级零改动恒绿。
+- **门禁**：同 R2（cli_integration 此阶段允许红，口径同上全局门禁）。
+
+### 步骤 R4 CLI 接线
+
+- **文件**：`repos/paperwork-cli/src/cmd/contacts.rs`、`cmd/brief.rs`、`src/main.rs`、`src/output.rs`（如需）
+- **内容**：contacts remove/update 两新动词接线（`--profile` 必填；update 另 `--new-profile` 必填；均仅长形式，短形式集 {-a,-m,-q} 不变）；brief read 增 `--entry-title` 可选过滤（无匹配 not-found，fix 引导 `brief read`；命中即按 `--full` 档字段输出，Default/JSON 同口径，spec §3.5）；command id `contacts.remove` / `contacts.update`（JSON additive）；ok 信封字段 `contacts` / `removed` / `updated`（`updated` 值格式逐字 `<OLD> -> <NEW>`，spec §3.6）；not-found fix 含键口径教学句 `the key is the profile path as stored in the contacts file, not the label`（spec §3.6）；usage 信封静态规范示例与 main.rs canonical_example 补 remove/update 两条（逐字：`paperwork contacts remove team.contacts.md --profile alice.profile.md`、`paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md`，spec §5 第 2 条同源，rework 补录 Ryan m-2）；全部新文案纯 ASCII。
+- **门禁**：cargo build + clippy 全绿。
+
+### 步骤 R5 测试落地
+
+- **文件**：`repos/paperwork-core/tests/ops_contacts_crud_tests.rs`（R2 已建，本步补全）、`repos/paperwork-cli/tests/cli_integration.rs`
+- **内容**：按 tdd §8.2 新增全部 cli 用例；按 tdd §8.3 新建/扩展白名单断言面（26 项无短形式负向清单、contacts 组动词集合断言、ASCII 清单补两行；口径为新建/扩展而非追加，现状基线见 tdd §8.3）；ASCII 契约防线覆盖本轮新信封形态（tdd §8.6 第 3 条）；`ops_tests.rs` 字节级零改动防线全程有效（tdd §8.4）。
+- **门禁**：`cargo test`（workspace 全量）+ clippy 全绿为硬门禁，后续步骤不得带红推进（本轮主验证点）。
+
+### 步骤 R6 文档面
+
+- **文件**：根 `README.md`、`repos/paperwork-cli/README.md`、仓库根 `SKILL.md`
+- **内容**：命令示例补 contacts remove/update 与 `brief read --entry-title`；SKILL.md 速查表同步；**SKILL.md/README 的 contacts update 示例附一句与 edit 的区分注记**（update = 条目 destination 路径换绑，edit = 文件自身内容就地修改，contacts 组无 edit 动词；spec §3.6 语义分工，rework 补录 Ryan M-1 ③）；**不写 CHANGELOG 发布段**（交付边界）。
+- **依赖**：R5 全绿后执行。
+
+### 本轮依赖图与 QA
+
+```
+R1(锁 helper) -> R2(contacts 三写路径) / R3(brief/profile 补锁) -> R4(CLI 接线) -> R5(测试, 硬门禁) -> R6(文档)
+```
+
+- R2 与 R3 分属不同文件，理论上可并行；单 impl agent 顺序执行按编号推进即可。
+- QA Review Book 由独立验证 agent 实测（口径同步骤(7)，不得由 impl agent 自评）：本轮新增面冒烟 = contacts remove/update 全路径、brief 选择性详情、多进程并发写不丢失、旧命令冻结回归。

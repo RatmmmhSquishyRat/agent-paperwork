@@ -5,6 +5,7 @@
 - 文档性质：行为规范的行为化表述（Given/When/Then），覆盖全部命令的正常路径与错误路径
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令）
+  - `docs/ssot/adr/feedbacks/v0.7_feedbacks.md`（本轮 owner 指令：contacts CRUD + 锁统一 + 渐进阅读；本轮新增场景 S-BRIEF-07~09、S-CONTACTS-06~11、§12 锁行为场景的依据）
   - `docs/researches/cli-grammar-v06-reassessment-2026-08-09.md`（混淆面矩阵与错误等级标注）
   - `docs/dev/adr-v1.md`（ADR-011）、`docs/ssot/adr/feedbacks/v0_feedbacks.md`
 - 契约基准：本目录 `spec.md`（签名、信封、退出码语义均以 spec 为准）；信封结构沿用 v0.5 spec §4（继承冻结）
@@ -214,7 +215,7 @@
 
 - **Given** 线程共 4 条消息，发送者均非 carol
 - **When** 执行 `paperwork post read standup.post.md --mention carol`
-- **Then** exit 0；`showing: 0/0`（total 为过滤后、limit 前口径，冻结语义；勘误 Ray m1：本行曾误写 0/4 过滤前口径，与 v0.5 bdd S-READ-06 冻结条款及实现 read_mention_filter_zero_hits_on_nonempty_thread 矛盾，代码从冻结口径）；`window` 字段不显示（空 window 冻结行为，与 v0.5 bdd S-READ-06 一致）；body 为空。
+- **Then** exit 0；`showing: 0/4`（total 为过滤前全量口径，冻结语义）；`window` 字段不显示（空 window 冻结行为，与 v0.5 bdd S-READ-06 一致）；body 为空。
 
 ### S-READ-07 过滤+limit 的 total 口径（rework 补录 Nora ISSUE-m3，对等 v0.5 bdd S-READ-07）
 
@@ -297,6 +298,28 @@
 
 - **Then** 输出样貌与三态判定（fresh/shifted/stale、conclusion `N/M fresh`）与 v0.5 完全一致。
 
+### S-BRIEF-07 read `--entry-title` 选择性详情（本轮新增，渐进阅读第三档）
+
+- **Given** brief 存在，共 2 条目（`main.rs` 与 `lib.rs`）
+- **When** 执行 `paperwork brief read onboarding.brief.md --entry-title main.rs`
+- **Then** exit 0；stdout 首行 `ok brief.read 2 entries`（conclusion 为全量条目数 `N entries` 形态，与现状冻结口径一致，worktree cmd/brief.rs L171/L197 实测；rework 修订 Daniel M-2：初版首行断言 `ok brief.read <path>` 与 S-BRIEF-06 冻结声明矛盾，改为现状形态）；输出仅含 `main.rs` 条目的详情字段（path/hash/regex/note，即 `--full` 档字段）；不含 `lib.rs` 条目详情；`--json` 模式 entries 数组仅含该条目，且命中条目含 path/hash/regex/note（`--entry-title` 命中即按 `--full` 档字段输出，不受 `--full` 门控，spec §3.5 字段面口径，Daniel m-4）。
+
+### S-BRIEF-08 read `--entry-title` 无匹配（not-found）
+
+- **When** 执行 `paperwork brief read onboarding.brief.md --entry-title no-such.rs`
+- **Then** exit 1；stderr 首行 `error not-found:`（resource Brief entry）；fix 引导 `paperwork brief read onboarding.brief.md` 列出条目；无文件写入。
+
+### S-BRIEF-09 read `--entry-title` 与 `--full` 组合
+
+- **When** 执行 `paperwork brief read onboarding.brief.md --full --entry-title main.rs`
+- **Then** exit 0；行为与 S-BRIEF-07 一致（单条目详情，两 flag 组合合法无冲突）；未给 `--entry-title` 时 TOC / `--full` 两档行为冻结不变（S-BRIEF-06）。
+
+### S-BRIEF-10 read `--entry-title` 空值守栏（评审轮新增，F1）
+
+- **Given** brief 存在，含任意条目
+- **When** 执行 `paperwork brief read onboarding.brief.md --entry-title ""`（或全空白值）
+- **Then** exit 1；stderr 首行 `error validation:`；message 逐字 `entry title (--entry-title) is empty`；fix 逐字 `provide a non-empty --entry-title value`；example 逐字 `paperwork brief read onboarding.brief.md --entry-title main.rs`（纯 ASCII，镜像 post send 空值判定先例）；无文件写入。属行为变更登记：护栏前该形态落入 not-found（空键是「无键」而非未命中，spec §3.5 空值守栏）。
+
 ## 6. contacts
 
 ### S-CONTACTS-01 create 不变（--title 保留可选 flag）
@@ -323,6 +346,69 @@
 ### S-CONTACTS-05 read 富化不变
 
 - **Then** body 行为 `<路径>: <name> (<description>)`，与 v0.5 一致。
+
+### S-CONTACTS-06 remove 成功（本轮新增）
+
+- **Given** contacts 文件 `team.contacts.md` 含条目 alice、bob（顺序在先）
+- **When** 执行 `paperwork contacts remove team.contacts.md --profile alice.profile.md`
+- **Then** exit 0；stdout 首行 `ok contacts.remove alice.profile.md -> team.contacts.md`；字段区含 `contacts: team.contacts.md`、`removed: alice.profile.md`；文件中 alice 条目消失，bob 条目保留且标题（H1）不变；`--json` 模式含同名 key（command `contacts.remove`）。
+
+### S-CONTACTS-07 remove 未命中（not-found）
+
+- **Given** contacts 文件不含 `ghost.profile.md` 条目，但含名为 alice 的条目（label = alice，键 = 其 profile 路径）
+- **When** 执行 `paperwork contacts remove team.contacts.md --profile ghost.profile.md`
+- **Then** exit 1；stderr 首行 `error not-found:`（resource Contacts entry）；fix 引导 `paperwork contacts read team.contacts.md` 核对条目清单，并含键口径教学句 `the key is the profile path as stored in the contacts file, not the label`（纯 ASCII，rework 补录 Ryan m-3）；文件内容不变。
+- **And label-as-key 触发形态（rework 补录，Ryan m-3）**：执行 `paperwork contacts remove team.contacts.md --profile alice`（把 label 当键）同样 exit 1 `error not-found:`（键为存储路径字符串精确匹配，`alice` 非任何条目的 destination）；fix/example 同上，agent 经 contacts read 一步自纠。
+
+### S-CONTACTS-08 update 成功（label 重派生 + 顺序保留）
+
+- **Given** contacts 文件含条目 [alice, bob]；`carol.profile.md` 存在且 H1 为 `carol`
+- **When** 执行 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md`
+- **Then** exit 0；stdout 首行 `ok contacts.update alice.profile.md -> carol.profile.md`；字段区含 `contacts`、`updated: alice.profile.md -> carol.profile.md`（编排层裁定维持箭头串形态，值格式逐字钉住为 `<OLD> -> <NEW>` 单空格三段拼接，spec §3.6，rework 补录 Ryan m-4）；文件中 alice 条目被原地替换为 `[carol](carol.profile.md)`（label 依 R11 对 NEW 重派生），bob 条目位置不变（顺序保留）；`--json` 模式含同名 key（command `contacts.update`）。
+
+### S-CONTACTS-09 update 错误路径（not-found / already-exists）
+
+- **Given** contacts 文件含条目 [alice, bob]
+- **When** 分别执行 `paperwork contacts update team.contacts.md --profile ghost.profile.md --new-profile carol.profile.md` 与 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile bob.profile.md`
+- **Then** 前者 exit 1 `error not-found:`（OLD 未命中）；后者 exit 1 `error already-exists:`（NEW 已存在于清单，fix 引导先 remove 或改用既有条目）；两次均无文件写入；update 不支持改 label（无任何 label 类 flag，label 为 R11 派生数据）。
+
+### S-CONTACTS-10 remove/update 缺必填 flag（usage）
+
+- **When** 分别执行 `paperwork contacts remove team.contacts.md`、`paperwork contacts update team.contacts.md`、`paperwork contacts update team.contacts.md --profile alice.profile.md`
+- **Then** 三者均 exit 2；`error usage:`；example 逐字钉住（rework 补录 Ryan m-2，spec §5 第 2 条同源）：remove 缺 flag 的 example 为 `paperwork contacts remove team.contacts.md --profile alice.profile.md`；update 两形态的 example 均为 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md`（静态规范示例，不携带用户原参数值）；无文件写入。
+
+### S-CONTACTS-11 旧文法不受影响与幂等回归
+
+- **When** 执行 `paperwork contacts remove team.contacts.md alice.profile.md`（误把 profile 路径作位置参数）
+- **Then** exit 2；`error usage:`（多余位置参数，v0.6 位置槽仅剩 PATH）；example 为 `--profile` 形态规范示例。
+- **And** contacts add 幂等语义不变：对已存在条目再次 add 仍 exit 0 no-op（spec §3.6，行为冻结）；contacts create/add/read 既有行为（S-CONTACTS-01~05）逐条冻结。
+
+### S-CONTACTS-12 remove 最后一条目后的文件形态（rework 补录，Daniel M-4）
+
+- **Given** contacts 文件 `solo.contacts.md` 仅含一条目（`alice.profile.md`）
+- **When** 执行 `paperwork contacts remove solo.contacts.md --profile alice.profile.md`
+- **Then** exit 0；落盘文件仅剩 title H1 + 空行（`serialize_contacts(title, &[])` 产物，与 contacts create 初态同形）；`paperwork validate solo.contacts.md --type contacts` 判定合法；再对同键执行 remove -> not-found exit 1（文件不变）。
+
+### S-CONTACTS-13 特殊字符路径的 remove/update 往返（rework 补录，Daniel M-4）
+
+- **Given** contacts 文件含 destination 需转义的条目（路径含空格/括号，如 `my profile (v2).profile.md`，序列化走 `<...>` 形态）
+- **When** 执行 `paperwork contacts update team.contacts.md --profile "my profile (v2).profile.md" --new-profile "new dir/prof.profile.md"`
+- **Then** exit 0；键匹配以**未转义原串**为准命中；新 destination 经序列化后走 angle-bracket 形态；往返后其余条目字节不变；再对同键执行 remove 仍命中（二次操作键匹配不受转义形态影响）；全程 validate 合法。
+
+### S-CONTACTS-14 update 到不存在 NEW 的静默成功面（rework 补录，Ryan M-3；仿 S-SEND-17 三件套形态）
+
+- **声明面**：update 到不存在/不可读的 NEW 仍 exit 0 静默写入（destination 按原值落盘、label 依 R11 回退文件名主干），与 format-v2 R11 及 add 现状一致，属已知静默面非缺陷（spec §3.6 行为契约，本轮不改运行时）。
+- **Given** contacts 文件含条目 alice；`carol` 文件不存在（忘写 `.profile.md` 后缀的路径笔误形态）
+- **When** 执行 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol`
+- **Then** exit 0；条目落为 `[carol](carol)`（label 回退文件名主干）；`updated` 字段回显 `alice.profile.md -> carol`（原值）；下一轮 `contacts read` 该条目显示 `(unreadable)` 类容错形态。
+- **agent 自救指引**：fix/example 与文档面引导写入前先 `paperwork contacts read <PATH>` 核对既有条目、或 `paperwork validate carol.profile.md` 确认目标 profile 合法；候选增强「写前 destination 存在性校验/回显」登记 backlog B-02，本轮不实现。
+
+### S-CONTACTS-15 add/update 空键护栏（评审轮新增，F1；Kim M-1 + QA BUG-1）
+
+- **Given** contacts 文件 `team.contacts.md` 含条目 alice
+- **When** 分别执行 `paperwork contacts add team.contacts.md --profile ""`、`paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile ""`（或全空白值）
+- **Then** 两者均 exit 1；stderr 首行 `error validation:`；message 逐字分别为 `profile path (--profile) is empty` 与 `new profile path (--new-profile) is empty`；fix 逐字分别为 `provide a non-empty --profile value` 与 `provide a non-empty --new-profile value`；example 为各动词规范示例（S-CONTACTS-10 同源逐字形态，纯 ASCII，镜像 post send `--message`/`--author` 空值判定先例）；两次均无文件写入；护栏先于文件存在性判定（目标文件不存在亦落 validation）；库直调（core `contacts_add`/`contacts_update`）同受护栏。
+- **行为变更登记**：护栏前 add 空键写入不可解析 bullet `- []()`（下次解析静默消失，validate 判结构损坏，属静默数据损坏）；update 空 `--new-profile` 把既有条目替换成该退化 bullet。护栏后既有条目不可经空键破坏；非空但不可读的路径仍依 S-CONTACTS-14 / add 静默回退判例（护栏仅针对「无键」，不改变「不可读路径」行为面）。
 
 ## 7. validate（冻结回归，示例换 v0.6 文法）
 
@@ -385,7 +471,29 @@ ensure_suffix 三级解析行为逐条沿用 v0.5 bdd S-PATH-01~08（原路径�
 - **When** 对 spec §4 短形式全表中每个有短形式的 flag（rework 裁定 F3 收窄后精确为 `-a/--author`、`-m/--message`、`-q` 全局三项），分别以短形式与全称执行同一命令
 - **Then** 两次行为逐字等价（exit 码、信封、文件效果一致）。
 
-### S-SHORT-02 命名政策白名单断言（冻结，SOTA C6）
+### S-SHORT-02 命名政策白名单断言（冻结，SOTA C6；本轮 additive 同步更新）
 
 - **When** 检查 `--help` 输出
-- **Then** 组/动词集合精确等于 {profile,post,brief,contacts,validate}（隐藏别名不出现）；全 CLI flag 名集合与 spec §4 全表一致；短形式集合精确等于 {-a, -m, -q}（rework 裁定 F3）；spec §4「其余全部 flag」行枚举的全量清单逐一断言无短形式：`--seq`、`--stdin`、`--title`、`--to`、`--from`、`--entry`、`--entry-title`、`--profile`、`--name`、`--model`、`--description`、`--owner`、`--note`、`--regex`、`--scope-read/--scope-write/--scope-owns`（--scope-* 三 flag）、`--full`、`--limit`、`--base-dir`、`--type`、`--json`、`--plain`，另含 post send/read 两侧 `--reply-to` 与 post read `--mention`（均无短形式，共 24 项；基线勘误删除 `--participants`，其余与 spec §4 枚举逐字对齐并保留原清单 --name）（F3 收窄后本白名单断言重获完整防线意义）。
+- **Then** 组集合精确等于 {profile,post,brief,contacts,validate}（隐藏别名不出现）；contacts 组动词集合精确等于 {create,add,remove,update,read}（本轮 additive：remove/update 新增，既有三动词不变；**断言面落点（rework 补录，Daniel M-3）**：现状 cli_integration 组级动词断言仅 post 组存在（`post_group_help_lists_verbs` 先例），contacts 组动词集合断言为本轮**新建**，仿该先例体例并含反向断言（不出现清单外动词），`update` 已随本轮经 owner CRUD 指令授权扩容纳入 SOTA C6 白名单，v0.7_feedbacks §2.5）；全 CLI flag 名集合与 spec §4 全表一致；短形式集合精确等于 {-a, -m, -q}（rework 裁定 F3，本轮不变）；spec §4「其余全部 flag」行枚举的全量清单逐一断言无短形式：`--seq`、`--stdin`、`--title`、`--to`、`--from`、`--entry`、`--entry-title`、`--profile`、`--new-profile`、`--name`、`--model`、`--description`、`--owner`、`--note`、`--regex`、`--scope-read/--scope-write/--scope-owns`（--scope-* 三 flag）、`--full`、`--limit`、`--base-dir`、`--type`、`--json`、`--plain`，另含 post send/read 两侧 `--reply-to` 与 post read `--mention`（均无短形式，**共 26 项**；基线勘误删除 `--participants`，其余与 spec §4 枚举逐字对齐并保留原清单 --name；本轮 additive 新增 `--new-profile` 一项，修订前 25 项 + 1 = 26 项；rework 修订：原「共 25 项」为 stale 计数，Mark M-3/Ryan m-1/Daniel m-1 定案为 26；**断言面落点（Daniel M-3）**：现状仅 6 个一次性负向探针（`-s/-l/-n/-t/-e/-p`），26 项逐 flag 负向清单为本轮**新建/扩展**，非「追加」）（F3 收窄后本白名单断言重获完整防线意义）。
+
+## 12. 横切场景：写路径锁（本轮新增，spec §3.9）
+
+### S-LOCK-01 多进程并发写不丢失（contacts/brief）
+
+- **Given** contacts 文件与 brief 文件均存在；**预创建 N 个互不相同的 entry 目标文件（与 N 个 brief 条目一一对应；brief add 须对 entry 目标文件做 SHA-256 快照，文件缺失即 io 错误 exit 1，rework 补录 Daniel m-2）**；contacts 侧 N 个 profile 路径可为不存在路径（add 不校验目标存在性，label 回退，不阻塞并发断言）
+- **When** N 个独立进程并发执行 `paperwork contacts add team.contacts.md --profile p<i>.profile.md`（互不相同的 N 个 profile 路径），另一组 N 个进程并发执行 `brief add`（互不相同的条目，指向上述预创建文件）
+- **Then** 全部 exit 0（锁阻塞串行化，无丢失、无 fast fail 误报）；contacts 文件条目集合 = N 个路径的并集；brief 条目集合 = N 个条目的并集；两文件均可被 `validate` 判定合法（格式未损坏）。
+
+### S-LOCK-02 profile edit 并发串行化（rework 修订，Daniel M-1）
+
+- **Given** `agents/alice.profile.md` 存在（model 与 description 各有旧值）
+- **When** 两个进程并发执行 `paperwork profile edit agents/alice.profile.md --model X` 与 `paperwork profile edit agents/alice.profile.md --description "D"`（两字段**不重叠**）
+- **Then** 两者均 exit 0（锁内串行）；最终文件为合法 profile（validate 通过），**终态为两次编辑的字段并集**：model 取 `X` 且 description 取 `D`（后一编辑经锁内读改写读到前一编辑的落盘结果再施加自身变更，无丢失写）；无交错损坏字节；禁止出现仅一侧生效的丢写终态。若采用「两进程改同一字段」变体，则断言最后写入者胜（两终态之一，以集合口径断言），二选一由测试实施方选定并在用例内写清；本场景主形态为不重叠字段并集断言。
+
+### S-LOCK-03 fast fail 无降级防线（代码级不变量）
+
+- **Given** 六写路径（contacts add/remove/update、brief add/remove、profile edit）的实现
+- **When** `lock_exclusive` 获取失败（IO/锁错误）
+- **Then** exit 1；`error io:`，fix 含 `another process may hold the lock; retry shortly` 语义；代码层不变量：**不存在任何无锁降级写入路径**（本条以 code review + 锁调用点位盘点断言为准，集成测试不强制模拟 OS 级锁失败；thread 写路径既有并发用例 S-SEND-14 冻结回归同批执行）。
+
+备注（本节通用，rework 补录 Ryan M-2）：锁阻塞等待无内建超时（fs2 语义，命令可能长时间乃至无限期不返回），契约全文见 spec §3.9「agent 可见阻塞行为契约」；agent 编排侧可对 paperwork 进程施加进程级超时，超时后杀进程重试（幂等/先读后写路径重试安全）。

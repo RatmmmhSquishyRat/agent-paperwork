@@ -5,6 +5,7 @@
 - 文档性质：测试改写与新增计划（对照 `repos/paperwork-cli/tests/cli_integration.rs`）
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令）
+  - `docs/ssot/adr/feedbacks/v0.7_feedbacks.md`（本轮 owner 指令：contacts CRUD + 锁统一 + 渐进阅读；§8 本轮测试计划的依据）
   - `docs/dev/adr-v1.md`（ADR-011）、`docs/ssot/adr/feedbacks/v0_feedbacks.md`
 - 契约基准：本目录 `spec.md`（签名）与 `bdd.md`（场景编号 S-xxx 与本文用例一一对应）
 - **编号约定（rework 补录，Nora ISSUE-m5）**：本文引用的 S-xxx 未带前缀一律指本目录 v0.6 bdd 编号；引用 v0.5 bdd 场景一律带 v0.5 前缀（两版存在同名异义撞号）。
@@ -175,7 +176,7 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 | `--author` 空值 | S-SEND-18 | `.code(1)`；`error validation:` |
 | 缺 PATH（send） | S-SEND-19 | `.code(2)`；`error usage:` |
 | edit 仅 `--stdin` | S-EDIT-09 | exit 0；正文逐字为 stdin 内容 |
-| read total 口径与空 window | S-READ-06 / S-READ-07 | `showing: 0/0` 无 window 字段（勘误 Ray m1：冻结口径为过滤后、limit 前）；`showing: 20/25`（过滤后口径） |
+| read total 口径与空 window | S-READ-06 / S-READ-07 | `showing: 0/4` 无 window 字段；`showing: 20/25`（过滤后口径） |
 | read `--to` 身份值 / read `--author` 迁移 | S-READ-08 / S-READ-09 | 两者均 `.code(2)` usage（F1 显式方向防线；习惯迁移 fix 点名 `--mention`） |
 | `--json` 与 `--plain` 同给 | S-OUT-06 | `.code(2)`；JSON 错误对象 `category:"usage"` |
 | 冻结回归抽查 | v0.5 bdd S-READ-01~03 / S-SUM-01 / S-PATH-* / S-ALIAS-* / S-OUT-01~04 | v0.5 既有对应用例改参数层后断言原样通过（showing/window/implicit-mention/三级解析/别名/三档输出） |
@@ -199,3 +200,77 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 1. **分阶段门禁（沿用 v0.5 F6 裁定）**：core 文案步与 CLI 签名步期间，`cargo build` + `cargo test -p paperwork-core`（ops_tests 恒绿）+ clippy 全绿即可推进，cli_integration 允许红；集成测试步完成后 `cargo test`（workspace 全量）全绿为硬门禁，后续步骤不得带红推进。
 2. `cargo clippy --all-targets -- -D warnings` 无警告。
 3. 实测冒烟（本文 §4 全部场景 + 并发 send seq 无间隙）由 review/gate 阶段执行，impl agent 不运行长时 e2e（MainAgent工作编排.md 审查条款）。
+
+## 8. 本轮增量测试计划（contacts CRUD additive 轮，2026-08-09）
+
+- 基线：cli-grammar-v0.6 分支（worktree agent-paperwork-wt-v06grammar）的 v0.6 实施完成态；本轮断言对象为 spec §2 本轮新增行、§3.5/§3.6/§3.9 契约与 bdd S-BRIEF-07~09、S-CONTACTS-06~11、§12 锁场景。
+- 原则：**新增行为用新用例钉住，既有行为用既有用例冻结回归**；§3 输出协议保留清单与 §5 ops_tests 零改动防线对本轮继续有效。
+
+### 8.1 core 独立测试文件：`repos/paperwork-core/tests/ops_contacts_crud_tests.rs`（新建）
+
+| 用例 | 断言要点 |
+|---|---|
+| contacts_remove 命中 | 目标条目消失；title（H1）与其余条目顺序不变；Ok |
+| contacts_remove 未命中 | `NotFound`（resource Contacts entry）；文件字节逐字不变 |
+| contacts_remove 文件不存在 | `NotFound`（resource Contacts） |
+| contacts_update 命中（label 重派生） | destination 原地替换；label = NEW profile H1（R11）；其余条目位置不变（顺序保留） |
+| contacts_update label 回退 | NEW profile 不可读时 label = 文件名主干（先剥 `.profile.md` 再剥 `.md`） |
+| contacts_update OLD 未命中 | `NotFound`；文件不变 |
+| contacts_update 文件不存在 | `NotFound`（resource Contacts）；与 remove 文件不存在行对等（共享 exists 预检，rework 补录 Daniel m-6） |
+| contacts_update NEW 已存在 | `AlreadyExists`；文件不变 |
+| contacts_update OLD == NEW | `AlreadyExists`（NEW 已在清单，边界形态）；判定顺序：OLD 命中检查先于 NEW 已存在检查（OLD==NEW 且 OLD 未命中时落入 `NotFound`，与 OLD 未命中行重合，rework 补录 Daniel m-6） |
+| contacts_update NEW 不存在静默成功 | 仍 Ok：destination 按原值落盘、label 回退文件名主干（与「label 回退」行互补，钉住 CLI 级静默面契约的 core 侧，spec §3.6 行为契约，rework 补录 Ryan M-3） |
+| contacts_remove 最后一条目 | 文件仅剩 title H1 + 空行（与 create 初态同形）；parse 合法；再 remove 同键 `NotFound`（rework 补录 Daniel M-4） |
+| remove/update 特殊字符路径往返 | 键 = 未转义原串命中含空格/括号/尾随反斜杠路径条目；update 后新路径含空格走 angle-bracket 形态；往返后其余条目字节不变；二次操作仍命中（rework 补录 Daniel M-4） |
+| contacts_add 幂等回归 | 补锁后行为不变：已存在条目再 add 仍 no-op Ok（spec §3.6） |
+| 锁内序列化等价 | brief add/remove、profile edit、contacts 三写路径锁内产物与既有 serialize 函数输出逐字节一致（同一 `serialize_contacts`/`serialize_manifest`/profile 序列化） |
+| 多线程并发 add/remove | 条目无丢失；结果可被 `parse_contacts` 解析（无交错损坏） |
+
+注：本文件不引用 example 字符串（口径同 §2）；锁行为断言面向结果（条目集合/字节不变），不依赖锁实现细节。
+
+### 8.2 cli_integration.rs 新增用例表
+
+| 用例 | 对应 BDD | 断言要点 |
+|---|---|---|
+| contacts remove 成功 | S-CONTACTS-06 | `.code(0)`；stdout 首行 `ok contacts.remove <profile> -> <path>`；字段 `contacts`/`removed`；文件断言条目消失、余条保留；`--json` 含 `command:"contacts.remove"` 与同名 key |
+| contacts remove 未命中 | S-CONTACTS-07 | `.code(1)`；`error not-found:`；fix 含 `contacts read`；文件不变 |
+| contacts update 成功 | S-CONTACTS-08 | `.code(0)`；`ok contacts.update <OLD> -> <NEW>`；字段 `contacts`/`updated`（值逐字为 `<OLD> -> <NEW>` 单空格三段拼接，spec §3.6）；顺序保留 + label 重派生文件断言；`--json` 含 `command:"contacts.update"` |
+| contacts update 错误路径 | S-CONTACTS-09 | OLD 未命中 `.code(1)` `error not-found:`（fix 含键口径教学句 `the key is the profile path`）；NEW 已存在 `.code(1)` `error already-exists:`；均无文件写入 |
+| remove/update 缺必填 flag | S-CONTACTS-10 | 三形态均 `.code(2)`；`error usage:`；example 逐字断言（spec §5 第 2 条钉住的两条规范示例，rework 补录 Ryan m-2） |
+| contacts remove 位置参数误用 | S-CONTACTS-11 | `.code(2)`；`error usage:`（多余位置参数）；example 为 `--profile` 形态 |
+| remove 最后一条目形态 | S-CONTACTS-12 | `.code(0)`；文件仅剩 title H1 + 空行；validate 合法；再 remove 同键 `.code(1)`（rework 补录 Daniel M-4） |
+| 特殊字符路径往返 | S-CONTACTS-13 | 转义条目键匹配命中；其余条目字节不变；二次操作仍命中（rework 补录 Daniel M-4） |
+| update NEW 不存在静默成功 | S-CONTACTS-14 | `.code(0)`；条目落为原值 destination + 回退 label；`updated` 回显原值（rework 补录 Ryan M-3） |
+| label-as-key 触发形态 | S-CONTACTS-07 And 段 | `--profile alice`（label 当键）`.code(1)` `error not-found:`；fix 含键口径教学句（rework 补录 Ryan m-3） |
+| brief read 选择性详情 | S-BRIEF-07 | exit 0；stdout 首行 `ok brief.read <N> entries`（N 为全量条目数，现状冻结形态，rework 修订 Daniel M-2）；输出仅含目标条目详情字段（path/hash/regex/note）；`--json` entries 仅含该条目且含 path/hash/regex/note（命中即 --full 档字段，不受 `--full` 门控，Daniel m-4） |
+| brief read 无匹配 | S-BRIEF-08 | `.code(1)`；`error not-found:`；fix 含 `brief read` |
+| brief read 组合 --full | S-BRIEF-09 | exit 0；与单条目详情等价；未给 `--entry-title` 时 TOC/--full 两档冻结回归（既有 brief read 用例原样通过） |
+| 多进程并发 contacts/brief 写 | S-LOCK-01 | 全部 exit 0；条目集合 = 并集；validate 合法；Given 预创建 N 个 entry 目标文件（brief add 快照前置，rework 补录 Daniel m-2） |
+| profile edit 并发 | S-LOCK-02 | 两者 exit 0；最终文件 validate 通过，终态为两次编辑的字段并集（不重叠字段无丢失写；同字段变体则最后写入者胜，二选一在用例内写清，rework 修订 Daniel M-1） |
+| ASCII 契约扩展 | S-OUT-05 延伸 | remove/update 的 usage/not-found/already-exists 信封 stderr 纳入逐字节 ASCII 断言；`all_help_output_is_pure_ascii` 动词清单追加 `contacts remove`、`contacts update` 两行（现状清单止于 contacts create/add/read，rework 补录 Daniel m-3） |
+
+### 8.3 白名单测试更新项（flag_inventory_matches_spec 及配套；rework 修订：措辞由「追加」改为如实的「新建/扩展断言面」，Mark M-3/Ryan m-1/Daniel M-3 定案）
+
+**现状基线（worktree cli_integration.rs 实测，Daniel 评审 §六）**：`short_form_whitelist_is_exact` 仅 6 个负向短形式探针（`-s/-l/-n/-t/-e/-p`），不存在 26 项逐 flag 负向清单；组级动词集合断言仅 post 组存在（`post_group_help_lists_verbs` 先例），contacts 组无任何动词断言；`all_help_output_is_pure_ascii` 动词清单止于 contacts create/add/read。
+
+1. 无短形式负向断言清单：本轮**新建/扩展**为 bdd S-SHORT-02 枚举的 26 项全量清单（修订前基线 25 项 + `--new-profile` = 26 项，spec §4 全表同步）；`--new-profile` 探针建议形态：`contacts update <PATH> --profile a.profile.md --new-profile b.profile.md` 加 `-N`/`-w` 类短形式误写触发 usage exit 2；
+2. contacts 组 help 动词列表断言：**新建**（现状不存在可追加点位），仿 `post_group_help_lists_verbs` 体例断言 contacts 组动词集合精确等于 {create,add,remove,update,read}，含反向断言（不出现清单外动词）；`update` 的白名单扩容来源登记见 spec §7 第 5 条与 v0.7_feedbacks §2.5（owner 指令 (1) 授权）；
+3. 短形式集合断言 {-a, -m, -q} 不变（新 flag 一律仅长形式）；
+4. 组集合断言 {profile,post,brief,contacts,validate} 不变；
+5. `all_help_output_is_pure_ascii` 动词清单追加 `contacts remove`、`contacts update`（ASCII 逐字节防线覆盖新 verb help 面，Daniel m-3）。
+
+### 8.4 ops_tests.rs 零改动防线（本轮延续）
+
+`repos/paperwork-core/tests/ops_tests.rs` 本轮继续**字节级零改动**：core 本轮仅新增函数（`contacts_remove`/`contacts_update`）与既有写路径补锁，不改既有函数签名与序列化逻辑，锁内产物与无锁产物逐字节一致（§8.1 锁内序列化等价用例钉住）；ops_tests 任何失败都意味着改动越界（越界即回滚，口径同 impl_plan 全局门禁）。新 core 测试一律落独立文件 `ops_contacts_crud_tests.rs`，不得并入 ops_tests.rs。
+
+### 8.5 测试语料
+
+- TempDir 约定不变（§6）；历史语料目录 test-v03/test-v04/test-v05 不得改动；若 QA 需要本轮冒烟样例，按 §6 既有 test-v06/ 先例结构补充（含 contacts remove/update 正常与错误形态、brief 多条目选择性详情样例），样例全 ASCII。
+
+### 8.6 验证门禁（本轮）
+
+1. `cargo test`（workspace 全量）全绿（含 ops_tests 字节级零改动恒绿 + ops_contacts_crud_tests 新绿）；
+2. `cargo clippy --all-targets -- -D warnings` 无警告；
+3. ASCII 审计：本轮新信封文案（contacts.remove/update 的 ok/usage/not-found/already-exists/io 各形态）纳入 stderr 逐字节 ASCII 断言（S-OUT-05 防线延伸）；
+4. 锁调用点位盘点：`rg -n "lock_exclusive" repos/paperwork-core/src` 输出含六写路径新锁点位，且无任何无锁 read-modify-write 残留（S-LOCK-03 不变量）；
+5. 明确不含发布步骤（不 bump、不 tag、不 publish、不写 CHANGELOG 发布段，口径同 spec §7 第 4/5 条）。

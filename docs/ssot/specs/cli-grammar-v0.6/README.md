@@ -58,8 +58,7 @@
 - [x] spec / design / BDD / TDD / impl_plan 五份文档齐备（本目录）
 - [x] role 文档落盘（docs/roles/cli-grammar-v0.6-implementer.role.md，rework 轮补录）
 - [x] 对抗评审 rework 轮完成：三份评审报告全部问题销账，编排层裁定 F1-F6 贯穿七份文档（Rework 回应段见各评审报告末尾）
-- [x] 对抗评审闭合确认（任务 #13，实现流程原则.md 门槛）
-- [x] 基线合并（cli-ux-v0.5 + format-v2，编排层执行，impl_plan 步骤 (0)，合并提交 a07ad4c）
-- [x] 按 impl_plan 步骤 (1) 至 (7) 实现（提交 5456eed/d6e9ff3/14699ea/c31c4cf/15d0c30/902fe31）
-- [x] 三维评审 + QA 实测统一修复轮（2026-08-09：C-A CHANGELOG 合并回归、C-B Windows 多进程并发锁内预读、Kim/Ray/Ethan/Terry 全部 Major/minor 销账；四份评审报告见 docs/reviews/v0.6-*-2026-08-09.md，各附修复回应段）
+- [ ] 对抗评审闭合确认（任务 #13，实现流程原则.md 门槛）
+- [ ] 基线合并（cli-ux-v0.5 + format-v2，编排层执行，impl_plan 步骤 (0)）
+- [ ] 按 impl_plan 步骤 (1) 至 (7) 实现（评审闭合后）
 - [ ] 发布（不在本轮：owner 于功能稳定后另行裁定）
