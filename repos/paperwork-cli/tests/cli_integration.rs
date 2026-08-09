@@ -13,6 +13,7 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use regex::Regex;
 use tempfile::TempDir;
 
 fn cmd() -> Command {
@@ -600,7 +601,9 @@ fn json_runtime_error_has_command_field() {
 
 #[test]
 fn top_level_parse_failure_command_usage() {
-    // S-OUT-06: group/verb layer failure -> command identifier is "usage"
+    // v0.5 S-OUT-06 (comment fix, review Ray m4: the v0.6 S-OUT-06 is the
+    // --json/--plain conflict, covered by json_plain_conflict_is_usage):
+    // group/verb layer failure -> command identifier is "usage"
     cmd()
         .args(["post"])
         .assert()
@@ -1367,7 +1370,9 @@ fn send_missing_message_no_stdin_is_usage() {
 
 #[test]
 fn edit_triple_guardrail_cli() {
-    // S-EDIT-02: wrong sender / not most recent / not final -> not-allowed,
+    // v0.5 S-EDIT-02 (comment fix, review Ray m4: the v0.6 S-EDIT-02 is
+    // edit-missing---author, covered by edit_missing_author_is_usage):
+    // wrong sender / not most recent / not final -> not-allowed,
     // examples carry the v0.6 named grammar
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
@@ -2007,4 +2012,475 @@ fn send_empty_author_is_validation() {
         .code(1)
         .stderr(predicate::str::contains("error validation:"))
         .stderr(predicate::str::contains("--author"));
+}
+
+// =====================================================================
+// Unified fix round 2026-08-09 (C-B + Major M1-M3 + minor items)
+// =====================================================================
+
+#[test]
+fn multiprocess_concurrent_send_no_lost_messages() {
+    // QA BUG-2 regression (Critical): N independent OS processes send to
+    // the same NEW thread concurrently. Windows mandatory byte-range
+    // locking used to fail the lock-less pre-read with os error 33, losing
+    // messages; every send must now succeed and seq must be contiguous
+    // 1..=N with no gaps/duplicates (runs on Windows and Linux).
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("conc.post.md");
+    let bin = assert_cmd::cargo::cargo_bin("paperwork");
+    let n = 10u64;
+
+    let mut children = Vec::new();
+    for i in 1..=n {
+        children.push(
+            std::process::Command::new(&bin)
+                .args([
+                    "post",
+                    "send",
+                    path.to_str().unwrap(),
+                    "--author",
+                    &format!("agent{}", i),
+                    "--message",
+                    &format!("msg-{}", i),
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn paperwork process"),
+        );
+    }
+    for (idx, child) in children.into_iter().enumerate() {
+        let out = child.wait_with_output().expect("wait for child");
+        assert!(
+            out.status.success(),
+            "concurrent send {} failed: {}",
+            idx + 1,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    let messages = paperwork_core::format::thread::parse_messages(&content)
+        .expect("thread must parse");
+    assert_eq!(messages.len(), n as usize, "message count must equal senders");
+    let seqs: Vec<u64> = messages.iter().map(|m| m.seq).collect();
+    assert_eq!(seqs, (1..=n).collect::<Vec<_>>(), "seq must be contiguous with no gaps/duplicates");
+    for i in 1..=n {
+        let msg = &messages[(i - 1) as usize];
+        assert_eq!(msg.sender, format!("agent{}", i));
+        assert_eq!(msg.body, format!("msg-{}", i));
+    }
+}
+
+#[test]
+fn read_foreign_file_is_format_error() {
+    // Kim M1: post read on a stage-1 hit that is not a post thread reports
+    // format (exit 1) instead of silently returning 0 messages (exit 0).
+    let dir = TempDir::new().unwrap();
+    let foreign = dir.path().join("foreign.txt");
+    std::fs::write(&foreign, "just some plain text, not a thread\n").unwrap();
+
+    cmd()
+        .args(["post", "read", foreign.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error format:"))
+        .stderr(predicate::str::contains("not a valid post thread"));
+}
+
+#[test]
+fn summary_foreign_file_is_format_error() {
+    // Kim M1: post summary mirrors the write-side guard.
+    let dir = TempDir::new().unwrap();
+    let foreign = dir.path().join("foreign.txt");
+    std::fs::write(&foreign, "just some plain text, not a thread\n").unwrap();
+
+    cmd()
+        .args(["post", "summary", foreign.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error format:"));
+}
+
+#[test]
+fn read_missing_thread_stays_not_found() {
+    // Kim M1 boundary: the symmetric guard must not change not-found.
+    let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("nope.post.md");
+
+    cmd()
+        .args(["post", "read", missing.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-found:"));
+
+    cmd()
+        .args(["post", "summary", missing.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error not-found:"));
+}
+
+#[test]
+fn edit_empty_body_is_validation() {
+    // Kim m2: edit rejects an empty/whitespace-only new body like send.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "1", "--message", "   "])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("message body is empty"))
+        .stderr(predicate::str::contains("paperwork post edit"));
+}
+
+#[test]
+fn json_plain_conflict_is_usage() {
+    // Ray M1 (S-OUT-06): --json + --plain -> clap conflicts_with -> usage
+    // exit 2 with a JSON envelope (the argv scan sees --json).
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["--json", "--plain", "post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("\"category\":\"usage\""))
+        .stdout(predicate::str::contains("\"exit_code\":2"))
+        .stdout(predicate::str::contains("\"command\":\"post.read\""));
+}
+
+#[test]
+fn read_unknown_author_flag_teaches_mention() {
+    // Ray M2 (S-READ-09): post read --author -> usage fix names the
+    // --mention replacement path; the misleading '(e.g. --author for the
+    // sender)' teaching is gone.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    let out = cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--author", "alice"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--mention"))
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !stderr.contains("--author for the sender"),
+        "misleading sender teaching must be removed"
+    );
+}
+
+#[test]
+fn read_unknown_long_flag_lists_read_filters() {
+    // Ray M2 companion: any other unknown long flag on post read points at
+    // the real read filter set instead of the send-side named flags.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--origin", "alice"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--from/--to/--mention/--reply-to/--limit"));
+}
+
+#[test]
+fn usage_fix_dash_teaching_only_for_dash_tokens() {
+    // Kim m1: the dash-body teaching applies only to tokens really starting
+    // with '-'; bare extra positionals get the named-flag teaching.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    let dash_out = cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "ok", "-stray"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&dash_out.stderr).contains("starts with '-'"),
+        "dash token must get the dash-body teaching"
+    );
+
+    let bare_out = cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "ok", "extra-token"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&bare_out.stderr).to_string();
+    assert!(
+        !stderr.contains("starts with '-'"),
+        "bare token must not get the dash-body teaching"
+    );
+    assert!(stderr.contains("named flags, not as bare tokens"));
+}
+
+#[test]
+fn message_value_literal_json_does_not_trigger_json_mode() {
+    // Kim M2: a value-eating flag whose VALUE is the literal "--json" must
+    // not switch the usage envelope into JSON mode.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    let out = cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--message", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(out.stdout.is_empty(), "stdout must stay empty: JSON mode was never requested");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).starts_with("error usage:"),
+        "default envelope expected on stderr"
+    );
+}
+
+#[test]
+fn edit_missing_author_is_usage() {
+    // S-EDIT-02 (tdd section 4): edit without --author -> usage exit 2.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "--seq", "1", "--message", "body"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--author <AUTHOR>"));
+}
+
+#[test]
+fn edit_missing_seq_is_usage() {
+    // S-EDIT-03 (tdd section 4): edit without --seq -> usage exit 2.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--message", "body"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--seq <SEQ>"));
+}
+
+#[test]
+fn edit_message_and_stdin_conflict_is_usage() {
+    // S-EDIT-05 (tdd section 4): edit --message + --stdin -> usage exit 2.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "1", "--message", "body", "--stdin"])
+        .write_stdin("stdin body")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
+}
+
+#[test]
+fn brief_missing_required_flags_are_usage() {
+    // S-BRIEF-03 (tdd section 4): brief create/add/remove each missing
+    // their required flag -> usage exit 2; examples carry --title /
+    // --entry / --entry-title respectively.
+    let dir = TempDir::new().unwrap();
+    let brief = dir.path().join("b.brief.md");
+
+    cmd()
+        .args(["brief", "create", brief.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--title"));
+
+    std::fs::write(&brief, "# B\n\n- owner: alice\n- created: 2026-01-15T10:30:00Z\n").unwrap();
+
+    cmd()
+        .args(["brief", "add", brief.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--entry"));
+
+    cmd()
+        .args(["brief", "remove", brief.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--entry-title"));
+}
+
+#[test]
+fn contacts_add_missing_profile_is_usage() {
+    // S-CONTACTS-03 (tdd section 4): contacts add without --profile.
+    let dir = TempDir::new().unwrap();
+    let contacts = dir.path().join("team.contacts.md");
+    std::fs::write(&contacts, "# Team\n").unwrap();
+
+    cmd()
+        .args(["contacts", "add", contacts.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--profile"));
+}
+
+#[test]
+fn send_missing_path_is_usage() {
+    // S-SEND-19 (tdd section 4): post send without PATH -> usage exit 2
+    // with the full named-flag example.
+    cmd()
+        .args(["post", "send", "--author", "alice", "--message", "body"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("<PATH>"))
+        .stderr(predicate::str::contains("paperwork post send standup.post.md --author alice --message \"Hello\""));
+}
+
+#[test]
+fn read_to_identity_value_is_usage() {
+    // S-READ-08 (tdd section 4): read --to given an identity value (not a
+    // seq number) -> type error -> usage exit 2.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--to", "alice"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
+}
+
+#[test]
+fn send_exact_two_extra_positionals_is_usage() {
+    // Ray m6 (S-SEND-12 exact shape): the v0.5 positional NAME + BODY pair
+    // after PATH -> usage exit 2 with the canonical example.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "hi there"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("paperwork post send standup.post.md --author alice --message \"Hello\""));
+}
+
+#[test]
+fn canonical_send_example_matches_spec_52() {
+    // Ray m3: the post.send canonical example is the spec section 5.2
+    // literal, verbatim.
+    cmd()
+        .args(["post", "send"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("paperwork post send standup.post.md --author alice --message \"Hello\""));
+}
+
+/// Extract short flags (`-x,`) from a clap help text.
+fn help_short_flags(help: &str) -> Vec<String> {
+    let re = Regex::new(r"(?m)^\s+-([A-Za-z0-9]),").unwrap();
+    let mut shorts: Vec<String> = re
+        .captures_iter(help)
+        .map(|c| c[1].to_string())
+        .collect();
+    shorts.sort();
+    shorts.dedup();
+    shorts
+}
+
+#[test]
+fn short_form_whitelist_is_exact() {
+    // Ray m2 (S-SHORT-02): the whole-CLI short-form set is exactly
+    // {-a, -m, -q} (plus clap's built-in -h / -V). Global propagation
+    // means every subcommand help additionally shows -q (and -h).
+    // Systemic negative probes: flags outside the whitelist never gain a
+    // short form.
+    let send_help = {
+        let out = cmd().args(["post", "send", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert_eq!(help_short_flags(&send_help), vec!["a", "h", "m", "q"], "post send shorts must be exactly {{-a, -m, -q, -h}}");
+
+    let edit_help = {
+        let out = cmd().args(["post", "edit", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert_eq!(help_short_flags(&edit_help), vec!["a", "h", "m", "q"], "post edit shorts must be exactly {{-a, -m, -q, -h}}");
+
+    let read_help = {
+        let out = cmd().args(["post", "read", "--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert_eq!(help_short_flags(&read_help), vec!["h", "q"], "post read shorts must be only the global {{-q, -h}}");
+
+    let root_help = {
+        let out = cmd().args(["--help"]).assert().success();
+        String::from_utf8_lossy(&out.get_output().stdout).to_string()
+    };
+    assert_eq!(help_short_flags(&root_help), vec!["V", "h", "q"], "root shorts must be exactly {{-q, -h, -V}}");
+
+    // Negative probes (one per group): no short form outside the whitelist.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("x.md");
+    for args in [
+        vec!["post", "edit", path.to_str().unwrap(), "-s", "1"],
+        vec!["post", "read", path.to_str().unwrap(), "-l", "5"],
+        vec!["profile", "create", path.to_str().unwrap(), "-n", "alice"],
+        vec!["brief", "create", path.to_str().unwrap(), "-t", "T"],
+        vec!["brief", "add", path.to_str().unwrap(), "-e", "src/main.rs"],
+        vec!["contacts", "add", path.to_str().unwrap(), "-p", "a.profile.md"],
+    ] {
+        cmd()
+            .args(&args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("error usage:"))
+            .stderr(predicate::str::contains("unexpected argument"));
+    }
+}
+
+#[test]
+fn all_help_output_is_pure_ascii() {
+    // Terry BUG-1 regression: every --help surface (root, groups, verbs)
+    // must be pure ASCII at the raw-byte level.
+    let mut invocations: Vec<Vec<&str>> = vec![vec!["--help"]];
+    for group in ["profile", "post", "brief", "contacts", "validate"] {
+        invocations.push(vec![group, "--help"]);
+    }
+    for verb in [
+        "profile create", "profile show", "profile edit", "profile list",
+        "post send", "post read", "post summary", "post edit",
+        "brief create", "brief add", "brief remove", "brief read", "brief verify",
+        "contacts create", "contacts add", "contacts read",
+    ] {
+        let mut v: Vec<&str> = verb.split(' ').collect();
+        v.push("--help");
+        invocations.push(v);
+    }
+    for args in invocations {
+        let out = cmd().args(&args).assert().success().get_output().clone();
+        assert!(
+            out.stdout.iter().all(u8::is_ascii),
+            "--help of {:?} contains non-ASCII bytes", args
+        );
+    }
 }
