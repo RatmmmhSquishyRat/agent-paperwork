@@ -3,8 +3,11 @@
 //! Thin CLI layer: parses args -> calls paperwork_core::ops -> formats output.
 //! No workspace, no init, no login. Every command takes explicit file paths.
 //!
-//! v0.5.0: clap usage errors render as the standard `usage` error envelope
-//! (seventh category) and exit 2; runtime errors keep exit 1.
+//! v0.6 grammar: PATH is the only positional argument; every required
+//! payload is a named flag (--author/--message/--seq for post send/edit,
+//! --name, --title, --entry, --entry-title, --profile). clap usage errors
+//! render as the standard `usage` error envelope (seventh category) and
+//! exit 2; runtime errors keep exit 1.
 
 mod cmd;
 mod output;
@@ -22,7 +25,7 @@ use crate::output::OutputMode;
     version,
     about,
     long_about = None,
-    after_help = "Grammar: paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]"
+    after_help = "Grammar: paperwork [global flags] <group> <verb> <PATH> --required-flag ... [--optional-flag ...]"
 )]
 struct Cli {
     /// Output as JSON
@@ -81,13 +84,7 @@ fn main() {
                 .skip(1)
                 .take_while(|a| a != "--")
                 .any(|a| a == "--json");
-            let unknown = extract_unknown_argument(&err);
-            // Suspected body value starting with '-' (short unknown token,
-            // not an old long flag): the example must demonstrate `--` (NF-2).
-            let dash_body = unknown
-                .as_deref()
-                .is_some_and(|t| t.starts_with('-') && !t.starts_with("--"));
-            let (command, example) = canonical_example(dash_body);
+            let (command, example) = canonical_example();
             let message = usage_message(&err);
             let fix = usage_fix(&err, command);
             output::emit_usage_error(json_mode, command, &message, &fix, example);
@@ -209,24 +206,29 @@ fn missing_subcommand_message() -> String {
 
 /// Build the fix line for a usage envelope.
 ///
-/// Unknown-argument errors involving a suspected flag carry `--` boundary
-/// teaching (NF-2): bodies starting with '-' must be placed after `--`.
+/// v0.6: required values are named flags. Unknown-argument errors carry
+/// migration teaching; a suspected body value starting with '-' is guided
+/// to the `--message` flag (allow_hyphen_values), the `--` boundary form
+/// is retired.
 fn usage_fix(err: &clap::Error, command: &str) -> String {
-    let base = "required values are positional (PATH first; NAME second for post send/edit); see the canonical example below";
+    let base = "required values are named flags (--author/--message for post send/edit); see the canonical example below";
     let unknown = extract_unknown_argument(err);
     match unknown.as_deref() {
-        // Long unknown flag (--from, --name, ...): old-grammar migration case
+        // Long unknown flag (--from as identity, pre-v0.6 leftovers, ...):
+        // old-grammar migration case. v0.6 re-legalized --seq/--title/
+        // --entry/--entry-title/--name/--profile, so they no longer appear
+        // in the teaching list.
         Some(tok) if tok.starts_with("--") => format!(
-            "{}; this flag is not recognized; if it came from pre-v0.5 grammar (--from/--seq/--title/--entry/...), give its value as a positional argument",
+            "{}; this flag is not recognized; if it came from older grammar, give the value via the matching named flag (e.g. --author for the sender)",
             base
         ),
         // Short/dash token: suspected body value starting with '-'
         Some(_) if matches!(command, "post.send" | "post.edit") => format!(
-            "{}; if a body value starts with '-', place it after -- (e.g. paperwork post send standup.post.md alice -- \"-fix flag text\")",
+            "{}; if a body value starts with '-', pass it via --message (e.g. paperwork post send standup.post.md --author alice --message \"-fix flag text\")",
             base
         ),
         Some(_) => format!(
-            "{}; if a value starts with '-', place it after --",
+            "{}; values are given via their named flags, not as bare tokens",
             base
         ),
         None => base.to_string(),
@@ -248,10 +250,8 @@ fn extract_unknown_argument(err: &clap::Error) -> Option<String> {
 /// values; migration teaching is delegated to example + SKILL.md + after_help).
 ///
 /// Top-level parse failures (group/verb undetermined) use command = "usage".
-///
-/// When `dash_body` is set (suspected body value starting with '-'), the
-/// post send/edit example switches to the `--` boundary form (NF-2).
-fn canonical_example(dash_body: bool) -> (&'static str, &'static str) {
+/// Every example is the single v0.6 named-flag normative form (F5).
+fn canonical_example() -> (&'static str, &'static str) {
     let mut tokens: Vec<String> = Vec::new();
     for arg in std::env::args().skip(1) {
         if arg == "--" {
@@ -271,50 +271,28 @@ fn canonical_example(dash_body: bool) -> (&'static str, &'static str) {
         Some("brief") | Some("b") => "brief",
         Some("contacts") | Some("c") => "contacts",
         Some("validate") | Some("v") => "validate",
-        _ => return ("usage", "paperwork post send standup.post.md alice \"Hello\""),
+        _ => return ("usage", "paperwork post send standup.post.md --author alice --message \"Hello\""),
     };
     let verb = tokens.get(1).map(String::as_str);
 
     match (group, verb) {
-        ("post", Some("send")) => {
-            if dash_body {
-                (
-                    "post.send",
-                    "paperwork post send standup.post.md alice -- \"-fix flag text\"",
-                )
-            } else {
-                (
-                    "post.send",
-                    "paperwork post send standup.post.md alice \"Parser module is 80% done.\"",
-                )
-            }
-        }
-        ("post", Some("edit")) => {
-            if dash_body {
-                (
-                    "post.edit",
-                    "paperwork post edit standup.post.md alice 3 -- \"-starts with dash\"",
-                )
-            } else {
-                (
-                    "post.edit",
-                    "paperwork post edit standup.post.md alice 3 \"corrected body\"",
-                )
-            }
-        }
+        ("post", Some("send")) => (
+            "post.send",
+            "paperwork post send standup.post.md --author alice --message \"Parser module is 80% done.\"",
+        ),
+        ("post", Some("edit")) => (
+            "post.edit",
+            "paperwork post edit standup.post.md --author alice --seq 3 --message \"corrected body\"",
+        ),
         ("post", Some("read")) => (
             "post.read",
             "paperwork post read standup.post.md --from 5 --to 20",
         ),
-        ("post", Some("create")) => (
-            "post.create",
-            "paperwork post create standup \"Daily Standup\" --participants alice,bob",
-        ),
         ("post", Some("summary")) => ("post.summary", "paperwork post summary standup.post.md"),
-        ("post", _) => ("usage", "paperwork post send standup.post.md alice \"Hello\""),
+        ("post", _) => ("usage", "paperwork post send standup.post.md --author alice --message \"Hello\""),
         ("profile", Some("create")) => (
             "profile.create",
-            "paperwork profile create agents/alice alice --model gpt-4o",
+            "paperwork profile create agents/alice --name alice --model gpt-4o",
         ),
         ("profile", Some("show")) => ("profile.show", "paperwork profile show agents/alice.profile.md"),
         ("profile", Some("edit")) => (
@@ -322,33 +300,33 @@ fn canonical_example(dash_body: bool) -> (&'static str, &'static str) {
             "paperwork profile edit agents/alice.profile.md --model gpt-4o",
         ),
         ("profile", Some("list")) => ("profile.list", "paperwork profile list agents"),
-        ("profile", _) => ("usage", "paperwork profile create agents/alice alice --model gpt-4o"),
+        ("profile", _) => ("usage", "paperwork profile create agents/alice --name alice --model gpt-4o"),
         ("brief", Some("create")) => (
             "brief.create",
-            "paperwork brief create onboarding \"Codebase Onboarding\" --owner alice",
+            "paperwork brief create onboarding --title \"Codebase Onboarding\" --owner alice",
         ),
         ("brief", Some("add")) => (
             "brief.add",
-            "paperwork brief add onboarding.brief.md src/main.rs --regex \"fn main\"",
+            "paperwork brief add onboarding.brief.md --entry src/main.rs --regex \"fn main\"",
         ),
         ("brief", Some("remove")) => (
             "brief.remove",
-            "paperwork brief remove onboarding.brief.md main.rs",
+            "paperwork brief remove onboarding.brief.md --entry-title main.rs",
         ),
         ("brief", Some("read")) => ("brief.read", "paperwork brief read onboarding.brief.md"),
         ("brief", Some("verify")) => ("brief.verify", "paperwork brief verify onboarding.brief.md"),
-        ("brief", _) => ("usage", "paperwork brief create onboarding \"Codebase Onboarding\" --owner alice"),
+        ("brief", _) => ("usage", "paperwork brief create onboarding --title \"Codebase Onboarding\" --owner alice"),
         ("contacts", Some("create")) => (
             "contacts.create",
             "paperwork contacts create team --title \"Core Team\"",
         ),
         ("contacts", Some("add")) => (
             "contacts.add",
-            "paperwork contacts add team.contacts.md agents/alice.profile.md",
+            "paperwork contacts add team.contacts.md --profile agents/alice.profile.md",
         ),
         ("contacts", Some("read")) => ("contacts.read", "paperwork contacts read team.contacts.md"),
         ("contacts", _) => ("usage", "paperwork contacts create team --title \"Core Team\""),
         ("validate", _) => ("validate", "paperwork validate mystery.md --type post"),
-        _ => ("usage", "paperwork post send standup.post.md alice \"Hello\""),
+        _ => ("usage", "paperwork post send standup.post.md --author alice --message \"Hello\""),
     }
 }
