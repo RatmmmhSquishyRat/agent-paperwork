@@ -1,4 +1,7 @@
 //! Contacts commands: create, add, read.
+//!
+//! v0.6 grammar: PATH is the only positional argument; the profile to add
+//! is the required `--profile` flag.
 
 use std::path::PathBuf;
 
@@ -26,7 +29,7 @@ pub fn command_id(args: &ContactsArgs) -> &'static str {
 #[derive(Subcommand)]
 enum ContactsCommand {
     /// Create a new contacts file
-    #[command(after_help = "Examples:\n  paperwork contacts create team --title \"Core Team\"\n\nNote: title is an OPTIONAL flag here (default \"Contacts\"), unlike post/brief create where it is a positional argument.")]
+    #[command(after_help = "Examples:\n  paperwork contacts create team --title \"Core Team\"\n\nNote: --title is an OPTIONAL flag here (default \"Contacts\"); it is required on brief create.")]
     Create {
         /// Path for the new contacts file
         path: PathBuf,
@@ -37,12 +40,13 @@ enum ContactsCommand {
     },
 
     /// Add a profile to the contacts file
-    #[command(after_help = "Examples:\n  paperwork contacts add team.contacts.md agents/alice.profile.md")]
+    #[command(after_help = "Examples:\n  paperwork contacts add team.contacts.md --profile agents/alice.profile.md")]
     Add {
         /// Path to the contacts file
         path: PathBuf,
 
         /// Path to the profile to add
+        #[arg(long)]
         profile: String,
     },
 

@@ -94,7 +94,7 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
                 return Err(paperwork_core::PaperworkError::Parse {
                     message: "no valid messages found".to_string(),
                     fix: "expected '## #<seq> <sender> (<timestamp>)' headers with dynamic md fences".to_string(),
-                    example: "paperwork post send myfile alice \"hello\"".to_string(),
+                    example: "paperwork post send myfile --author alice --message \"hello\"".to_string(),
                 }.into());
             }
 
