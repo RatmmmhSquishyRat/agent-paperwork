@@ -2065,11 +2065,27 @@ fn multiprocess_concurrent_send_no_lost_messages() {
     assert_eq!(messages.len(), n as usize, "message count must equal senders");
     let seqs: Vec<u64> = messages.iter().map(|m| m.seq).collect();
     assert_eq!(seqs, (1..=n).collect::<Vec<_>>(), "seq must be contiguous with no gaps/duplicates");
-    for i in 1..=n {
-        let msg = &messages[(i - 1) as usize];
-        assert_eq!(msg.sender, format!("agent{}", i));
-        assert_eq!(msg.body, format!("msg-{}", i));
-    }
+    // QA BUG-5: concurrent commit order is nondeterministic, so positional
+    // pairing ("message i came from agent i") is flaky. Assert set equality
+    // instead: the received sender/body sets must match the expected sets.
+    let senders: std::collections::BTreeSet<&str> =
+        messages.iter().map(|m| m.sender.as_str()).collect();
+    let expected_senders: std::collections::BTreeSet<String> =
+        (1..=n).map(|i| format!("agent{}", i)).collect();
+    assert_eq!(
+        senders,
+        expected_senders.iter().map(|s| s.as_str()).collect::<std::collections::BTreeSet<_>>(),
+        "received sender set must equal expected agent set"
+    );
+    let bodies: std::collections::BTreeSet<&str> =
+        messages.iter().map(|m| m.body.as_str()).collect();
+    let expected_bodies: std::collections::BTreeSet<String> =
+        (1..=n).map(|i| format!("msg-{}", i)).collect();
+    assert_eq!(
+        bodies,
+        expected_bodies.iter().map(|s| s.as_str()).collect::<std::collections::BTreeSet<_>>(),
+        "received body set must equal expected message set"
+    );
 }
 
 #[test]
