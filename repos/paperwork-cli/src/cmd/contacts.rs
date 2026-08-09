@@ -1,7 +1,8 @@
-//! Contacts commands: create, add, read.
+//! Contacts commands: create, add, remove, update, read.
 //!
-//! v0.6 grammar: PATH is the only positional argument; the profile to add
-//! is the required `--profile` flag.
+//! v0.6 grammar: PATH is the only positional argument; the profile to
+//! add/remove is the required `--profile` flag; update additionally takes
+//! the required `--new-profile` flag. All new flags are long-form only.
 
 use std::path::PathBuf;
 
@@ -22,6 +23,8 @@ pub fn command_id(args: &ContactsArgs) -> &'static str {
     match &args.command {
         ContactsCommand::Create { .. } => "contacts.create",
         ContactsCommand::Add { .. } => "contacts.add",
+        ContactsCommand::Remove { .. } => "contacts.remove",
+        ContactsCommand::Update { .. } => "contacts.update",
         ContactsCommand::Read { .. } => "contacts.read",
     }
 }
@@ -48,6 +51,32 @@ enum ContactsCommand {
         /// Path to the profile to add
         #[arg(long)]
         profile: String,
+    },
+
+    /// Remove a profile from the contacts file (key = stored profile path)
+    #[command(after_help = "Examples:\n  paperwork contacts remove team.contacts.md --profile alice.profile.md\n\nNote: the key is the profile path as stored in the contacts file, not the label.")]
+    Remove {
+        /// Path to the contacts file
+        path: PathBuf,
+
+        /// Profile path of the entry to remove (exactly as stored)
+        #[arg(long)]
+        profile: String,
+    },
+
+    /// Re-bind an entry to a new profile path (contacts has no edit verb)
+    #[command(after_help = "Examples:\n  paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md\n\nNote: update re-binds an entry destination; edit (in-place content change) does not exist in this group.")]
+    Update {
+        /// Path to the contacts file
+        path: PathBuf,
+
+        /// Profile path of the entry to re-bind (exactly as stored)
+        #[arg(long)]
+        profile: String,
+
+        /// New profile path for the entry
+        #[arg(long = "new-profile")]
+        new_profile: String,
     },
 
     /// Read all contacts
@@ -79,6 +108,30 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
             let env = output::Envelope::new("contacts.add", conclusion)
                 .field("contacts", &path.display().to_string())
                 .field("profile", &profile);
+            output::emit_ok(ctx, env);
+            Ok(())
+        }
+
+        ContactsCommand::Remove { path, profile } => {
+            let path = ensure_suffix(path, ".contacts.md");
+            paperwork_core::ops::contacts::contacts_remove(&path, &profile)?;
+
+            let conclusion = format!("{} -> {}", profile, path.display());
+            let env = output::Envelope::new("contacts.remove", conclusion)
+                .field("contacts", &path.display().to_string())
+                .field("removed", &profile);
+            output::emit_ok(ctx, env);
+            Ok(())
+        }
+
+        ContactsCommand::Update { path, profile, new_profile } => {
+            let path = ensure_suffix(path, ".contacts.md");
+            paperwork_core::ops::contacts::contacts_update(&path, &profile, &new_profile)?;
+
+            let conclusion = format!("{} -> {}", profile, new_profile);
+            let env = output::Envelope::new("contacts.update", conclusion)
+                .field("contacts", &path.display().to_string())
+                .field("updated", &format!("{} -> {}", profile, new_profile));
             output::emit_ok(ctx, env);
             Ok(())
         }

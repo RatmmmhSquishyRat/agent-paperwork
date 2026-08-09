@@ -5,7 +5,8 @@
 //!
 //! v0.6 grammar: PATH is the only positional argument; every required
 //! payload is a named flag (--author/--message/--seq for post send/edit,
-//! --name, --title, --entry, --entry-title, --profile). clap usage errors
+//! --name, --title, --entry, --entry-title, --profile, --new-profile). clap
+//! usage errors
 //! render as the standard `usage` error envelope (seventh category) and
 //! exit 2; runtime errors keep exit 1.
 
@@ -286,6 +287,7 @@ const VALUE_TAKING_FLAGS: &[&str] = &[
     "--entry",
     "--entry-title",
     "--profile",
+    "--new-profile",
     "--from",
     "--to",
     "--type",
@@ -392,6 +394,14 @@ fn canonical_example() -> (&'static str, &'static str) {
         ("contacts", Some("add")) => (
             "contacts.add",
             "paperwork contacts add team.contacts.md --profile agents/alice.profile.md",
+        ),
+        ("contacts", Some("remove")) => (
+            "contacts.remove",
+            "paperwork contacts remove team.contacts.md --profile alice.profile.md",
+        ),
+        ("contacts", Some("update")) => (
+            "contacts.update",
+            "paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md",
         ),
         ("contacts", Some("read")) => ("contacts.read", "paperwork contacts read team.contacts.md"),
         ("contacts", _) => ("usage", "paperwork contacts create team --title \"Core Team\""),
