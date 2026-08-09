@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::profile::{parse_profile, serialize_profile};
+use crate::ops::lock::locked_read_modify_write;
 use crate::Profile;
 
 /// Create a new profile file at the given path.
@@ -75,6 +76,8 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
 /// Edit an existing profile's fields.
 ///
 /// Only updates the fields that are `Some`.
+/// Runs under the locked read-modify-write template (spec cli-grammar-v0.6
+/// §3.9).
 pub fn edit_profile(
     path: &Path,
     model: Option<&str>,
@@ -92,38 +95,25 @@ pub fn edit_profile(
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    locked_read_modify_write(path, |content| {
+        let mut profile = parse_profile(&content)?;
 
-    let mut profile = parse_profile(&content)?;
+        if let Some(m) = model {
+            profile.model = m.to_string();
+        }
+        if let Some(d) = description {
+            profile.description = d.to_string();
+        }
+        if let Some(sr) = scope_read {
+            profile.scope_read = sr;
+        }
+        if let Some(sw) = scope_write {
+            profile.scope_write = sw;
+        }
+        if let Some(so) = scope_owns {
+            profile.scope_owns = so;
+        }
 
-    if let Some(m) = model {
-        profile.model = m.to_string();
-    }
-    if let Some(d) = description {
-        profile.description = d.to_string();
-    }
-    if let Some(sr) = scope_read {
-        profile.scope_read = sr;
-    }
-    if let Some(sw) = scope_write {
-        profile.scope_write = sw;
-    }
-    if let Some(so) = scope_owns {
-        profile.scope_owns = so;
-    }
-
-    let serialized = serialize_profile(&profile);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the target path is writable".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+        Ok(serialize_profile(&profile))
+    })
 }

@@ -12,6 +12,7 @@ use regex::Regex;
 use crate::error::{PaperworkError, Result};
 use crate::format::manifest::{extract_regex_groups, parse_manifest, serialize_manifest};
 use crate::hash;
+use crate::ops::lock::locked_read_modify_write;
 use crate::{Manifest, ManifestEntry, VerifyResult};
 
 /// Create a new empty brief at the given path.
@@ -66,6 +67,8 @@ pub fn brief_create(
 /// The entry title is derived from the file name of `entry_path`.
 /// Computes the SHA-256 hash of the file at `entry_path` (resolved relative
 /// to the brief file's parent directory).
+/// Runs under the locked read-modify-write template (spec cli-grammar-v0.6
+/// §3.9).
 pub fn brief_add_entry(
     path: &Path,
     entry_path: &str,
@@ -81,67 +84,57 @@ pub fn brief_add_entry(
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    locked_read_modify_write(path, |content| {
+        let mut manifest = parse_manifest(&content)?;
 
-    let mut manifest = parse_manifest(&content)?;
+        // Derive title from entry_path file name
+        let title = Path::new(entry_path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| entry_path.to_string());
 
-    // Derive title from entry_path file name
-    let title = Path::new(entry_path)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| entry_path.to_string());
+        // Check for duplicate title
+        if manifest.entries.iter().any(|e| e.title == title) {
+            return Err(PaperworkError::AlreadyExists {
+                resource: "Brief entry".to_string(),
+                name: title,
+                fix: "use a different entry path or remove the existing entry first".to_string(),
+                example: format!("paperwork brief remove {} --entry-title main.rs", path.display()),
+            });
+        }
 
-    // Check for duplicate title
-    if manifest.entries.iter().any(|e| e.title == title) {
-        return Err(PaperworkError::AlreadyExists {
-            resource: "Brief entry".to_string(),
-            name: title,
-            fix: "use a different entry path or remove the existing entry first".to_string(),
-            example: format!("paperwork brief remove {} --entry-title main.rs", path.display()),
-        });
-    }
+        // Resolve entry file path: try as-is (CWD-relative) first, then relative to brief's parent
+        let entry_as_given = Path::new(entry_path);
+        let base_dir = path.parent().unwrap_or(Path::new("."));
+        let abs_entry_path = if entry_as_given.exists() {
+            entry_as_given.to_path_buf()
+        } else {
+            base_dir.join(entry_path)
+        };
 
-    // Resolve entry file path: try as-is (CWD-relative) first, then relative to brief's parent
-    let entry_as_given = Path::new(entry_path);
-    let base_dir = path.parent().unwrap_or(Path::new("."));
-    let abs_entry_path = if entry_as_given.exists() {
-        entry_as_given.to_path_buf()
-    } else {
-        base_dir.join(entry_path)
-    };
+        let file_hash = hash::hash_file(&abs_entry_path)?;
 
-    let file_hash = hash::hash_file(&abs_entry_path)?;
+        let groups = regex.map(extract_regex_groups).unwrap_or_default();
 
-    let groups = regex.map(extract_regex_groups).unwrap_or_default();
+        let entry = ManifestEntry {
+            title,
+            path: entry_path.to_string(),
+            hash: file_hash,
+            regex: regex.map(|s| s.to_string()),
+            groups,
+            note: note.map(|s| s.to_string()),
+        };
 
-    let entry = ManifestEntry {
-        title,
-        path: entry_path.to_string(),
-        hash: file_hash,
-        regex: regex.map(|s| s.to_string()),
-        groups,
-        note: note.map(|s| s.to_string()),
-    };
+        manifest.entries.push(entry);
 
-    manifest.entries.push(entry);
-
-    let serialized = serialize_manifest(&manifest);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the target path is writable".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+        Ok(serialize_manifest(&manifest))
+    })
 }
 
 /// Remove an entry from a brief by title.
+///
+/// Runs under the locked read-modify-write template (spec cli-grammar-v0.6
+/// §3.9).
 pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     if !path.exists() {
         return Err(PaperworkError::NotFound {
@@ -152,36 +145,23 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    locked_read_modify_write(path, |content| {
+        let mut manifest = parse_manifest(&content)?;
 
-    let mut manifest = parse_manifest(&content)?;
+        let original_len = manifest.entries.len();
+        manifest.entries.retain(|e| e.title != title);
 
-    let original_len = manifest.entries.len();
-    manifest.entries.retain(|e| e.title != title);
+        if manifest.entries.len() == original_len {
+            return Err(PaperworkError::NotFound {
+                resource: "Brief entry".to_string(),
+                name: title.to_string(),
+                fix: format!("run `paperwork brief read {}` to see available entries", path.display()),
+                example: format!("paperwork brief read {}", path.display()),
+            });
+        }
 
-    if manifest.entries.len() == original_len {
-        return Err(PaperworkError::NotFound {
-            resource: "Brief entry".to_string(),
-            name: title.to_string(),
-            fix: format!("run `paperwork brief read {}` to see available entries", path.display()),
-            example: format!("paperwork brief read {}", path.display()),
-        });
-    }
-
-    let serialized = serialize_manifest(&manifest);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the target path is writable".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+        Ok(serialize_manifest(&manifest))
+    })
 }
 
 /// Read a brief (reuses the Manifest type internally).
