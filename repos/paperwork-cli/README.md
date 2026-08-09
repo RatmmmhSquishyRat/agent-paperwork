@@ -13,18 +13,17 @@ cargo install paperwork-cli
 ## Commands
 
 ```
-paperwork profile   — Agent identity files
-paperwork post      — Append-only conversation threads
-paperwork brief     — Reading lists with staleness detection
-paperwork contacts  — Registry of profile paths
+paperwork profile   - Agent identity files
+paperwork post      - Append-only conversation threads
+paperwork brief     - Reading lists with staleness detection
+paperwork contacts  - Registry of profile paths
 ```
 
 ## Quick Example
 
 ```bash
 paperwork profile create ./alice.md alice --model gpt-4o
-paperwork post create ./thread.md "Discussion"
-paperwork post send ./thread.md alice "Hello!"
+paperwork post send ./thread.md alice --title "Discussion" "Hello!"
 paperwork post read ./thread.md
 ```
 

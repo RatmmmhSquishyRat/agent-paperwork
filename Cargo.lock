@@ -446,6 +446,7 @@ dependencies = [
  "clap",
  "paperwork-core",
  "predicates",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

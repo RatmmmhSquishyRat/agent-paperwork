@@ -89,6 +89,7 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
                         // Try to read profile for enrichment
                         let (name, desc) = enrich_profile(&c.profile_path);
                         serde_json::json!({
+                            "label": c.label,
                             "path": c.profile_path,
                             "name": name,
                             "description": desc,

@@ -1,14 +1,9 @@
-//! Contacts table parsing and serialization.
+//! Contacts parsing and serialization — Managed File Format v2 (spec §7).
 //!
-//! A contacts file is a simple bullet list of profile paths.
-//!
-//! Format:
-//! ```markdown
-//! # <title>
-//!
-//! - ./agents/alice.profile.md
-//! - ./agents/bob.profile.md
-//! ```
+//! Entries are Markdown link bullets: `- [<label>](<destination>)`.
+//! Two destination forms are accepted on parse: bare paths and
+//! angle-bracket paths (`(<path with spaces>)` with `\<`/`\>` escapes).
+//! Serialization escapes per spec §7.3.
 
 use crate::{ContactEntry, PaperworkError, Result};
 
@@ -21,7 +16,7 @@ pub fn parse_contacts_title(content: &str) -> Result<String> {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix("# ") {
             if !trimmed.starts_with("## ") {
-                return Ok(stripped.to_string());
+                return Ok(stripped.trim().to_string());
             }
         }
     }
@@ -32,44 +27,167 @@ pub fn parse_contacts_title(content: &str) -> Result<String> {
     })
 }
 
-/// Parse contacts from Markdown bullet list content.
+/// Parse contacts from Markdown content (spec §7.2).
+///
+/// Only link bullets are recognized; bare-path bullets (legacy) and any
+/// other content are ignored (§3.6).
 pub fn parse_contacts(content: &str) -> Result<Vec<ContactEntry>> {
     let content = normalize_line_endings(content);
-    let lines: Vec<&str> = content.lines().collect();
-
     let mut entries = Vec::new();
 
-    for line in &lines {
-        let trimmed = line.trim();
-
-        // Skip empty lines and headings
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        // Bullet items: `- <path>`
-        if let Some(path) = trimmed.strip_prefix("- ") {
-            let path = path.trim();
-            if !path.is_empty() {
-                entries.push(ContactEntry {
-                    profile_path: path.to_string(),
-                    summary: String::new(),
-                });
-            }
+    for line in content.lines() {
+        let rest = match line.trim().strip_prefix("- ") {
+            Some(rest) => rest,
+            None => continue,
+        };
+        if let Some(entry) = parse_link_bullet(rest) {
+            entries.push(entry);
         }
     }
 
     Ok(entries)
 }
 
-/// Serialize contacts to Markdown bullet list content.
-pub fn serialize_contacts(title: &str, contacts: &[ContactEntry]) -> String {
-    let mut out = String::new();
+/// Parse `[label](destination)` (spec §7.2), returning `None` for
+/// non-link bullets.
+fn parse_link_bullet(text: &str) -> Option<ContactEntry> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.first() != Some(&'[') {
+        return None;
+    }
 
-    out.push_str(&format!("# {}\n\n", title));
+    // Label: up to the first unescaped `]`; unescape `\]` and `\\`
+    // (escape reflexivity, review B2).
+    let mut label = String::new();
+    let mut i = 1usize;
+    let mut closed = false;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\\' && i + 1 < chars.len() && matches!(chars[i + 1], ']' | '\\') {
+            label.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if ch == ']' {
+            closed = true;
+            i += 1;
+            break;
+        }
+        label.push(ch);
+        i += 1;
+    }
+    if !closed || chars.get(i) != Some(&'(') {
+        return None;
+    }
+    i += 1;
+
+    // Destination.
+    let mut dest = String::new();
+    if chars.get(i) == Some(&'<') {
+        // Angle-bracket form: up to the first unescaped `>`; unescape
+        // `\<` / `\>` / `\\` (escape reflexivity, review B2).
+        i += 1;
+        let mut closed = false;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '\\' && i + 1 < chars.len() && matches!(chars[i + 1], '<' | '>' | '\\') {
+                dest.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if ch == '>' {
+                closed = true;
+                i += 1;
+                break;
+            }
+            dest.push(ch);
+            i += 1;
+        }
+        if !closed {
+            return None;
+        }
+        // Skip optional whitespace + `"title"` (title syntax not accepted,
+        // ignored leniently), then require `)`.
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if chars.get(i) == Some(&'"') {
+            i += 1;
+            while i < chars.len() && chars[i] != '"' {
+                i += 1;
+            }
+            i += 1; // past closing quote (or past end)
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+        }
+        if chars.get(i) != Some(&')') {
+            return None;
+        }
+    } else {
+        // Bare form: token up to the first whitespace or `)`. An unbalanced
+        // `(` would silently truncate at the first `)` with a wrong path,
+        // so such bullets are rejected as non-links (review N1, §3.6).
+        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != ')' {
+            if chars[i] == '(' {
+                return None;
+            }
+            dest.push(chars[i]);
+            i += 1;
+        }
+        if dest.is_empty() {
+            return None;
+        }
+        // Skip optional whitespace + `"title"`, then require `)`.
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if chars.get(i) == Some(&'"') {
+            i += 1;
+            while i < chars.len() && chars[i] != '"' {
+                i += 1;
+            }
+            i += 1;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+        }
+        if chars.get(i) != Some(&')') {
+            return None;
+        }
+    }
+
+    Some(ContactEntry {
+        label,
+        profile_path: dest,
+    })
+}
+
+/// Serialize contacts to Markdown content (spec §7.3).
+///
+/// Paths containing space, tab, `(`, `)`, `<` or `>` use the angle-bracket
+/// destination form (with `<`/`>` escaped as `\<`/`\>`); labels escape `]`
+/// as `\]`. Escaping is reflexive: the backslash itself is escaped first
+/// (`\` -> `\\`) so trailing/consecutive backslashes cannot fuse with the
+/// structural characters that follow (review B2).
+pub fn serialize_contacts(title: &str, contacts: &[ContactEntry]) -> String {
+    let mut out = format!("# {}\n\n", title);
 
     for entry in contacts {
-        out.push_str(&format!("- {}\n", entry.profile_path));
+        let label = entry.label.replace('\\', "\\\\").replace(']', "\\]");
+        let path = &entry.profile_path;
+        let needs_angle = path
+            .chars()
+            .any(|c| c == ' ' || c == '\t' || c == '(' || c == ')' || c == '<' || c == '>');
+        if needs_angle {
+            let escaped = path
+                .replace('\\', "\\\\")
+                .replace('<', "\\<")
+                .replace('>', "\\>");
+            out.push_str(&format!("- [{}](<{}>)\n", label, escaped));
+        } else {
+            out.push_str(&format!("- [{}]({})\n", label, path));
+        }
     }
 
     out
@@ -79,68 +197,176 @@ pub fn serialize_contacts(title: &str, contacts: &[ContactEntry]) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_contacts_bullets() {
-        let content = r#"# team
+    fn entry(label: &str, path: &str) -> ContactEntry {
+        ContactEntry {
+            label: label.to_string(),
+            profile_path: path.to_string(),
+        }
+    }
 
-- /agents/alice.md
-- /agents/bob.md
-"#;
+    // T-FC-01 (CONT-01)
+    #[test]
+    fn test_parse_links() {
+        let content = "# Core Team\n\n- [alice](agents/alice.profile.md)\n- [bob](agents/bob.profile.md)\n";
         let contacts = parse_contacts(content).expect("should parse");
         assert_eq!(contacts.len(), 2);
-        assert_eq!(contacts[0].profile_path, "/agents/alice.md");
-        assert_eq!(contacts[1].profile_path, "/agents/bob.md");
+        assert_eq!(contacts[0].label, "alice");
+        assert_eq!(contacts[0].profile_path, "agents/alice.profile.md");
+        assert_eq!(contacts[1].label, "bob");
+        assert_eq!(contacts[1].profile_path, "agents/bob.profile.md");
+        assert_eq!(
+            parse_contacts_title(content).expect("title"),
+            "Core Team"
+        );
     }
 
+    // T-FC-02 (CONT-02)
     #[test]
-    fn test_parse_contacts_empty() {
-        let content = r#"# empty
-"#;
-        let contacts = parse_contacts(content).expect("should parse empty");
-        assert!(contacts.is_empty());
+    fn test_parse_angle_bracket() {
+        let content = "# t\n\n- [alice](<agents/my profile.md>)\n";
+        let contacts = parse_contacts(content).expect("should parse");
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].profile_path, "agents/my profile.md");
     }
 
+    // T-FC-03 (CONT-03/CONT-04/CONT-08)
     #[test]
-    fn test_serialize_contacts_roundtrip() {
-        let contacts = vec![
-            ContactEntry {
-                profile_path: "/agents/alice.md".to_string(),
-                summary: String::new(),
-            },
-            ContactEntry {
-                profile_path: "/agents/bob.md".to_string(),
-                summary: String::new(),
-            },
-        ];
+    fn test_serialize_escaping() {
+        // space → angle-bracket form
+        let out = serialize_contacts("t", &[entry("alice", "team docs/alice.profile.md")]);
+        assert!(out.contains("- [alice](<team docs/alice.profile.md>)"));
 
+        // tab → angle-bracket form
+        let out = serialize_contacts("t", &[entry("a", "a\tb.md")]);
+        assert!(out.contains("(<a\tb.md>)"));
+
+        // parentheses and angle chars get escaped inside <>
+        let out = serialize_contacts("t", &[entry("a", "weird (x) <y>.md")]);
+        assert!(out.contains("(<weird (x) \\<y\\>.md>)"));
+        let parsed = parse_contacts(&out).expect("parse");
+        assert_eq!(parsed[0].profile_path, "weird (x) <y>.md");
+
+        // plain path → bare form
+        let out = serialize_contacts("t", &[entry("bob", "agents/bob.profile.md")]);
+        assert!(out.contains("- [bob](agents/bob.profile.md)"));
+        assert!(!out.contains('<'));
+
+        // label with `]` escaped
+        let out = serialize_contacts("t", &[entry("we]ird", "a.md")]);
+        assert!(out.contains("- [we\\]ird](a.md)"));
+    }
+
+    // T-FC-04 (CONT-03/CONT-04)
+    #[test]
+    fn test_roundtrip_windows_path() {
+        let contacts = vec![entry("alice", "C:\\team docs\\alice.profile.md")];
         let serialized = serialize_contacts("team", &contacts);
-        let parsed = parse_contacts(&serialized).expect("should parse serialized");
-        assert_eq!(contacts, parsed);
+        let parsed = parse_contacts(&serialized).expect("should roundtrip");
+        assert_eq!(parsed, contacts);
     }
 
+    // T-FC-05 (CONT-05)
     #[test]
-    fn test_parse_contacts_title() {
-        let content = "# my-team\n\n- /a.md\n";
-        let title = parse_contacts_title(content).expect("should parse title");
-        assert_eq!(title, "my-team");
+    fn test_missing_title() {
+        let err = parse_contacts_title("- [alice](a.md)").unwrap_err();
+        assert!(err.to_string().contains("missing contacts title heading"));
+        assert_eq!(err.category(), "format");
     }
 
+    // T-FC-06 (CONT-06)
+    #[test]
+    fn test_bare_path_ignored() {
+        let content = "# t\n\n- agents/alice.profile.md\n- [bob](agents/bob.profile.md)\n";
+        let contacts = parse_contacts(content).expect("should parse");
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].label, "bob");
+    }
+
+    // T-FC-07 (CONT-07)
+    #[test]
+    fn test_unicode() {
+        let content = "# équipe 🚀\n\n- [alicé](agents/alicé.profile.md)\n";
+        let contacts = parse_contacts(content).expect("should parse unicode");
+        assert_eq!(contacts[0].label, "alicé");
+        assert_eq!(contacts[0].profile_path, "agents/alicé.profile.md");
+        assert_eq!(parse_contacts_title(content).expect("title"), "équipe 🚀");
+    }
+
+    // T-FC-08 (CONT-08)
+    #[test]
+    fn test_unescape_and_title() {
+        // label `\]` unescape + destination `\<`/`\>` unescape
+        let content = "# t\n\n- [we\\]ird](<a\\<b\\>c.md>)\n";
+        let contacts = parse_contacts(content).expect("should parse");
+        assert_eq!(contacts[0].label, "we]ird");
+        assert_eq!(contacts[0].profile_path, "a<b>c.md");
+
+        // `"title"` syntax ignored; destination still extracted (both forms)
+        let content = "# t\n\n- [alice](agents/alice.md \"the title\")\n";
+        let contacts = parse_contacts(content).expect("should parse");
+        assert_eq!(contacts[0].profile_path, "agents/alice.md");
+
+        let content = "# t\n\n- [alice](<agents/my file.md> \"the title\")\n";
+        let contacts = parse_contacts(content).expect("should parse");
+        assert_eq!(contacts[0].profile_path, "agents/my file.md");
+
+        // roundtrip of escaped label
+        let contacts_in = vec![entry("we]ird", "plain.md")];
+        let parsed =
+            parse_contacts(&serialize_contacts("t", &contacts_in)).expect("roundtrip");
+        assert_eq!(parsed, contacts_in);
+    }
+
+    // CRLF normalization
     #[test]
     fn test_parse_contacts_crlf() {
-        let content = "# test\r\n\r\n- /a.md\r\n";
+        let content = "# t\r\n\r\n- [alice](agents/alice.profile.md)\r\n";
         let contacts = parse_contacts(content).expect("should parse CRLF");
         assert_eq!(contacts.len(), 1);
-        assert_eq!(contacts[0].profile_path, "/a.md");
+        assert_eq!(contacts[0].profile_path, "agents/alice.profile.md");
     }
 
+    // B2: escape reflexivity — backslashes must survive the roundtrip
     #[test]
-    fn test_parse_contacts_unicode() {
-        let content = r#"# équipe
+    fn test_roundtrip_backslash_escaping() {
+        // label ending in a backslash
+        let contacts = vec![entry("a\\", "p.md")];
+        let serialized = serialize_contacts("t", &contacts);
+        assert!(serialized.contains("- [a\\\\](p.md)"));
+        assert_eq!(parse_contacts(&serialized).expect("parse"), contacts);
 
-- /agents/alicé.md
-"#;
-        let contacts = parse_contacts(content).expect("should parse unicode");
+        // label with consecutive backslashes
+        let contacts = vec![entry("a\\\\b", "p.md")];
+        let parsed =
+            parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
+        assert_eq!(parsed, contacts);
+
+        // bare-form path ending in a backslash
+        let contacts = vec![entry("alice", "docs\\")];
+        let parsed =
+            parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
+        assert_eq!(parsed, contacts);
+
+        // angle-bracket path ending in a backslash (Windows dir-style)
+        let contacts = vec![entry("alice", "team docs\\")];
+        let serialized = serialize_contacts("t", &contacts);
+        assert!(serialized.contains("(<team docs\\\\>)"));
+        assert_eq!(parse_contacts(&serialized).expect("parse"), contacts);
+
+        // angle-bracket path with consecutive backslashes
+        let contacts = vec![entry("alice", "C:\\team\\\\share\\\\ docs\\\\")];
+        let parsed =
+            parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
+        assert_eq!(parsed, contacts);
+    }
+
+    // N1: bare destination containing `(` is not a link bullet
+    #[test]
+    fn test_bare_dest_unbalanced_paren_ignored() {
+        let content = "# t\n\n- [alice](path(x).md)\n- [bob](ok.md)\n";
+        let contacts = parse_contacts(content).expect("should parse");
         assert_eq!(contacts.len(), 1);
-        assert_eq!(contacts[0].profile_path, "/agents/alicé.md");
+        assert_eq!(contacts[0].label, "bob");
+        assert_eq!(contacts[0].profile_path, "ok.md");
     }
 }

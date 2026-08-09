@@ -53,31 +53,37 @@ jobs:
           cd $(mktemp -d)
 
           # Profile
-          $BIN profile create alice alice --model gpt-4o | grep "^ok profile.create"
+          $BIN profile create alice --name alice --model gpt-4o | grep "^ok profile.create"
           $BIN profile show alice | grep "^ok profile.show"
           $BIN profile list . | grep "^ok profile.list"
 
-          # Post
-          $BIN post create standup "Test" --participants alice,bob | grep "^ok post.create"
-          $BIN post send standup alice "Hello world" | grep "^ok post.send"
-          $BIN post send standup bob --reply-to 2 "Reply" | grep "^ok post.send"
+          # Post (first send creates the thread and writes the preamble)
+          $BIN post send standup --title "Test" --from alice "Hello world" | grep "^ok post.send"
+          $BIN post send standup --from bob --reply-to 1 --mention alice "Reply" | grep "^ok post.send"
           $BIN post read standup | grep "^ok post.read"
           $BIN post read standup --json | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok'"
           $BIN post summary standup | grep "^ok post.summary"
 
+          # D3: on-disk body fences carry the `md` info string (T-CI-01)
+          if grep -q '```md' standup.post.md; then
+            echo "PASS: fence info md"
+          else
+            echo "FAIL: fence info md"; exit 1
+          fi
+
           # Stdin
-          echo "piped content" | $BIN post send standup alice --stdin | grep "^ok post.send"
+          echo "piped content" | $BIN post send standup --from alice --stdin | grep "^ok post.send"
 
           # Brief
           echo "fn main() {}" > main.rs
-          $BIN brief create guide "Guide" --owner alice | grep "^ok brief.create"
-          $BIN brief add guide main.rs --regex "fn main" | grep "^ok brief.add"
+          $BIN brief create guide --title "Guide" --owner alice | grep "^ok brief.create"
+          $BIN brief add guide --entry "main.rs" --regex "fn main" | grep "^ok brief.add"
           $BIN brief verify guide | grep "^ok brief.verify"
           $BIN brief read guide --full | grep "regex:"
 
           # Contacts
           $BIN contacts create team --title "Team" | grep "^ok contacts.create"
-          $BIN contacts add team ./alice.profile.md | grep "^ok contacts.add"
+          $BIN contacts add team --profile ./alice.profile.md | grep "^ok contacts.add"
           $BIN contacts read team | grep "alice"
 
           # Validate
@@ -91,30 +97,26 @@ jobs:
           fi
 
           # Empty body rejection
-          if $BIN post send standup alice "" 2>&1 | grep -q "^error validation:"; then
+          if $BIN post send standup --from alice "" 2>&1 | grep -q "^error validation:"; then
             echo "PASS: empty body rejection"
           else
             echo "FAIL: empty body rejection"; exit 1
           fi
 
-          # Validate garbage rejection
+          # Validate garbage rejection (zero messages -> Parse -> category format)
           echo "garbage" > bad.post.md
-          if $BIN validate bad.post.md 2>&1 | grep -q "^error"; then
+          if $BIN validate bad.post.md 2>&1 | grep -q "^error format:"; then
             echo "PASS: validate rejects garbage"
           else
             echo "FAIL: validate rejects garbage"; exit 1
           fi
 
-          # Usage envelope (exit 2): old-grammar flag must yield category usage
-          set +e
-          $BIN post send x.post.md --from alice "hi" 2>usage_err.txt
-          code=$?
-          set -e
-          if [ "$code" -ne 2 ]; then echo "FAIL: expected exit 2, got $code"; exit 1; fi
-          if grep -q "^error usage:" usage_err.txt; then
-            echo "PASS: usage envelope exit 2"
+          # Validate seq gap rejection (Validation -> category validation)
+          printf '# Gapped\n\n## #1 alice (2026-08-01T10:00:00Z)\n\n```md\none\n```\n\n## #3 alice (2026-08-01T10:01:00Z)\n\n```md\nthree\n```\n' > gap.post.md
+          if $BIN validate gap.post.md 2>&1 | grep -q "^error validation:"; then
+            echo "PASS: validate rejects seq gap"
           else
-            echo "FAIL: usage envelope"; exit 1
+            echo "FAIL: validate rejects seq gap"; exit 1
           fi
 
           echo "=== ALL SMOKE TESTS PASSED ==="
@@ -129,33 +131,31 @@ jobs:
           Push-Location $tmp
 
           # Profile
-          & $BIN profile create alice alice --model gpt-4o | Select-String "^ok profile.create"
+          & $BIN profile create alice --name alice --model gpt-4o | Select-String "^ok profile.create"
           & $BIN profile show alice | Select-String "^ok profile.show"
 
-          # Post
-          & $BIN post create standup "Test" --participants alice,bob | Select-String "^ok post.create"
-          & $BIN post send standup alice "Hello world" | Select-String "^ok post.send"
-          & $BIN post send standup bob --reply-to 2 "Reply" | Select-String "^ok post.send"
+          # Post (first send creates the thread and writes the preamble)
+          & $BIN post send standup --title "Test" --from alice "Hello world" | Select-String "^ok post.send"
+          & $BIN post send standup --from bob --reply-to 1 --mention alice "Reply" | Select-String "^ok post.send"
           & $BIN post read standup | Select-String "^ok post.read"
           & $BIN post summary standup | Select-String "^ok post.summary"
 
-          # --json status assertion (Daniel #5)
-          $json = & $BIN post read standup --json | Out-String
-          if ($json -match '"status":"ok"') { Write-Output "PASS: json status" }
-          else { Write-Error "FAIL: json status"; exit 1 }
+          # D3: on-disk body fences carry the `md` info string (T-CI-02)
+          if (Select-String -Path "standup.post.md" -Pattern '```md' -SimpleMatch -Quiet) { Write-Output "PASS: fence info md" }
+          else { Write-Error "FAIL: fence info md"; exit 1 }
 
           # Stdin
-          "piped content" | & $BIN post send standup alice --stdin | Select-String "^ok post.send"
+          "piped content" | & $BIN post send standup --from alice --stdin | Select-String "^ok post.send"
 
           # Brief
           Set-Content "main.rs" -Value "fn main() {}"
-          & $BIN brief create guide "Guide" --owner alice | Select-String "^ok brief.create"
-          & $BIN brief add guide main.rs --regex "fn main" | Select-String "^ok brief.add"
+          & $BIN brief create guide --title "Guide" --owner alice | Select-String "^ok brief.create"
+          & $BIN brief add guide --entry "main.rs" --regex "fn main" | Select-String "^ok brief.add"
           & $BIN brief verify guide | Select-String "^ok brief.verify"
 
           # Contacts
           & $BIN contacts create team --title "Team" | Select-String "^ok contacts.create"
-          & $BIN contacts add team ./alice.profile.md | Select-String "^ok contacts.add"
+          & $BIN contacts add team --profile ./alice.profile.md | Select-String "^ok contacts.add"
           & $BIN contacts read team | Select-String "alice"
 
           # Validate
@@ -167,21 +167,35 @@ jobs:
           else { Write-Error "FAIL: error envelope"; exit 1 }
 
           # Empty body rejection
-          $err = & $BIN post send standup alice "" 2>&1 | Out-String
+          $err = & $BIN post send standup --from alice "" 2>&1 | Out-String
           if ($err -match "^error validation:") { Write-Output "PASS: empty body" }
           else { Write-Error "FAIL: empty body"; exit 1 }
 
-          # Validate garbage
+          # Validate garbage (zero messages -> Parse -> category format)
           Set-Content "bad.post.md" -Value "garbage"
           $err = & $BIN validate bad.post.md 2>&1 | Out-String
-          if ($err -match "^error") { Write-Output "PASS: validate garbage" }
+          if ($err -match "^error format:") { Write-Output "PASS: validate garbage" }
           else { Write-Error "FAIL: validate garbage"; exit 1 }
 
-          # Usage envelope (exit 2): old-grammar flag must yield category usage
-          $err = & $BIN post send x.post.md --from alice "hi" 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 2) { Write-Error "FAIL: expected exit 2, got $LASTEXITCODE"; exit 1 }
-          if ($err -match "^error usage:") { Write-Output "PASS: usage envelope exit 2" }
-          else { Write-Error "FAIL: usage envelope"; exit 1 }
+          # Validate seq gap (Validation -> category validation)
+          Set-Content "gap.post.md" -Value @(
+            "# Gapped",
+            "",
+            "## #1 alice (2026-08-01T10:00:00Z)",
+            "",
+            '```md',
+            "one",
+            '```',
+            "",
+            "## #3 alice (2026-08-01T10:01:00Z)",
+            "",
+            '```md',
+            "three",
+            '```'
+          )
+          $err = & $BIN validate gap.post.md 2>&1 | Out-String
+          if ($err -match "^error validation:") { Write-Output "PASS: validate seq gap" }
+          else { Write-Error "FAIL: validate seq gap"; exit 1 }
 
           Pop-Location
           Write-Output "=== ALL SMOKE TESTS PASSED ==="

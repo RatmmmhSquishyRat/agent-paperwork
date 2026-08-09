@@ -1,7 +1,10 @@
 //! Integration tests for the stateless paperwork CLI.
 //!
-//! v0.5.0 grammar: PATH is always the first required positional argument;
-//! NAME is the second positional for post send/edit; content is last.
+//! Merged baseline: v0.5.0 positional grammar (PATH first; NAME second for
+//! post send/edit; content last) on top of Managed File Format v2 (owner
+//! rulings D1/D2/D3): H1-title-only preamble, `## #N sender (timestamp)`
+//! headers with ```md fences, reference state as `@name` / `@#N` body
+//! tokens, no `post create` (thread creation folded into the first send).
 //! Usage errors (clap parse failures) render as the `usage` envelope, exit 2;
 //! runtime errors keep the six categories, exit 1.
 
@@ -13,17 +16,25 @@ fn cmd() -> Command {
     Command::cargo_bin("paperwork").unwrap()
 }
 
-/// Minimal valid single-message thread corpus.
-fn thread_message(seq: u64, sender: &str, to: &str, reply_to: Option<u64>, mentions: &[&str], body: &str) -> String {
-    let mut out = format!("---\n\n### #{} {} · 2026-01-15T10:30:00Z\n\n- To: {}\n", seq, sender, to);
+/// Minimal valid single-message thread corpus (Format v2).
+///
+/// Header `## #N sender (timestamp)` + ```md fence; reference state lives in
+/// the body as `@#N` / `@name` tokens (D2). The `to` parameter is vestigial:
+/// the To attribute line was deleted by D1/D2 and is ignored here.
+fn thread_message(seq: u64, sender: &str, _to: &str, reply_to: Option<u64>, mentions: &[&str], body: &str) -> String {
+    let mut tokens: Vec<String> = Vec::new();
     if let Some(r) = reply_to {
-        out.push_str(&format!("- Reply-To: #{}\n", r));
+        tokens.push(format!("@#{}", r));
     }
-    if !mentions.is_empty() {
-        out.push_str(&format!("- Mentions: {}\n", mentions.join(", ")));
+    for m in mentions {
+        tokens.push(format!("@{}", m));
     }
-    out.push_str(&format!("\n````markdown\n{}\n````\n\n", body));
-    out
+    let body = if tokens.is_empty() {
+        body.to_string()
+    } else {
+        format!("{}\n\n{}", tokens.join(" "), body)
+    };
+    format!("## #{} {} (2026-01-15T10:30:00Z)\n\n```md\n{}\n```\n\n", seq, sender, body)
 }
 
 // --- Profile ---
@@ -122,28 +133,42 @@ fn profile_list() {
 // --- Post ---
 
 #[test]
-fn post_create_send_read() {
+fn post_send_read() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("thread.md");
 
+    // First send creates the thread and writes the preamble (no separate
+    // create subcommand; Format v2 folds creation into the first send).
     cmd()
-        .args(["post", "create", path.to_str().unwrap(), "Design Discussion"])
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--title", "Design Discussion", "I think we should use Rust."])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ok post.create"));
+        .stdout(predicate::str::contains("ok post.send"))
+        .stdout(predicate::str::contains("seq: 1"));
+
+    let actual_path = dir.path().join("thread.post.md");
+    let content = std::fs::read_to_string(&actual_path).unwrap();
+    // First-write preamble is the H1 title only (D1): no participants line
+    assert!(content.starts_with("# Design Discussion\n\n## #1 alice ("));
+    assert!(!content.contains("- participants:"));
+    // Body fence info is `md` on the write side (D3)
+    assert!(content.contains("```md"));
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "I think we should use Rust."])
+        .args(["post", "send", path.to_str().unwrap(), "bob", "Agreed, Rust it is."])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ok post.send"));
+        .stdout(predicate::str::contains("seq: 2"));
 
+    // Read starts at #1 (no placeholder first message)
     cmd()
         .args(["post", "read", path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok post.read"))
-        .stdout(predicate::str::contains("Rust"));
+        .stdout(predicate::str::contains("#1 alice"))
+        .stdout(predicate::str::contains("Rust"))
+        .stdout(predicate::str::contains("#2 bob"));
 }
 
 #[test]
@@ -152,16 +177,15 @@ fn post_send_stdin() {
     let path = dir.path().join("stdin-thread.md");
 
     cmd()
-        .args(["post", "create", path.to_str().unwrap(), "T"])
-        .assert()
-        .success();
-
-    cmd()
         .args(["post", "send", path.to_str().unwrap(), "alice", "--stdin"])
         .write_stdin("Message from stdin")
         .assert()
         .success()
         .stdout(predicate::str::contains("ok post.send"));
+
+    // Default title: strip .md from the original path argument (spec §5.7)
+    let content = std::fs::read_to_string(dir.path().join("stdin-thread.post.md")).unwrap();
+    assert!(content.contains("# stdin-thread"));
 
     cmd()
         .args(["post", "read", path.to_str().unwrap()])
@@ -176,11 +200,6 @@ fn post_send_empty_body_rejected() {
     let path = dir.path().join("empty.md");
 
     cmd()
-        .args(["post", "create", path.to_str().unwrap(), "T"])
-        .assert()
-        .success();
-
-    cmd()
         .args(["post", "send", path.to_str().unwrap(), "alice", "   "])
         .assert()
         .failure()
@@ -192,18 +211,17 @@ fn post_edit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("edit-thread.md");
 
-    cmd().args(["post", "create", path.to_str().unwrap(), "T"]).assert().success();
     cmd().args(["post", "send", path.to_str().unwrap(), "bob", "original"]).assert().success();
 
-    // Edit the last message (seq 2, since create is seq 1)
+    // First real message is seq 1 (placeholder creation message abolished)
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "bob", "2", "edited"])
+        .args(["post", "edit", path.to_str().unwrap(), "bob", "1", "edited"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok post.edit"));
 
     cmd()
-        .args(["post", "read", path.to_str().unwrap(), "--from", "2", "--to", "2"])
+        .args(["post", "read", path.to_str().unwrap(), "--from", "1", "--to", "1"])
         .assert()
         .success()
         .stdout(predicate::str::contains("edited"));
@@ -214,14 +232,17 @@ fn post_summary() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("sum.md");
 
-    cmd().args(["post", "create", path.to_str().unwrap(), "S"]).assert().success();
     cmd().args(["post", "send", path.to_str().unwrap(), "x", "hello"]).assert().success();
 
+    // Title from the H1 preamble (default derived from the path); messages
+    // counts real messages only (no placeholder creation message).
     cmd()
         .args(["--json", "post", "summary", path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"messages\":2"));
+        .stdout(predicate::str::contains("\"title\":\"sum\""))
+        .stdout(predicate::str::contains("\"participants\":\"x\""))
+        .stdout(predicate::str::contains("\"messages\":1"));
 }
 
 // --- Brief ---
@@ -340,7 +361,7 @@ fn validate_post_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("thread.md");
 
-    cmd().args(["post", "create", path.to_str().unwrap(), "T"]).assert().success();
+    cmd().args(["post", "send", path.to_str().unwrap(), "alice", "hello"]).assert().success();
 
     // The actual file created has .post.md suffix
     let actual_path = dir.path().join("thread.post.md");
@@ -1035,32 +1056,43 @@ fn dash_body_without_double_dash_is_usage() {
 // --- NF-3 supplementary cases ---
 
 #[test]
-fn post_create_missing_title_usage() {
-    // S-CREATE-02
+fn post_create_removed_is_usage() {
+    // Format v2: `post create` no longer exists; invoking it is a clap usage
+    // error (exit 2) and nothing is written.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.md");
 
     cmd()
-        .args(["post", "create", path.to_str().unwrap()])
+        .args(["post", "create", path.to_str().unwrap(), "T"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("paperwork post create standup \"Daily Standup\""));
+        .stderr(predicate::str::contains("error usage:"));
+
+    assert!(!dir.path().join("t.post.md").exists());
 }
 
 #[test]
-fn post_create_duplicate_already_exists() {
-    // S-CREATE-03
+fn post_send_title_ignored_on_existing_thread() {
+    // OQ-1: --title is only honoured on first write; on a non-empty thread
+    // it is silently ignored (exit 0, preamble title unchanged).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.md");
 
-    cmd().args(["post", "create", path.to_str().unwrap(), "T"]).assert().success();
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--title", "First Title", "first"])
+        .assert()
+        .success();
 
     cmd()
-        .args(["post", "create", path.to_str().unwrap(), "T2"])
+        .args(["post", "send", path.to_str().unwrap(), "bob", "--title", "Second Title", "second"])
         .assert()
-        .code(1)
-        .stderr(predicate::str::contains("error already-exists:"));
+        .success();
+
+    cmd()
+        .args(["--json", "post", "summary", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"title\":\"First Title\""));
 }
 
 #[test]
@@ -1241,12 +1273,11 @@ fn flag_inventory_matches_spec() {
     };
     assert!(validate_help.contains("--type"), "validate must keep --type");
 
-    let post_create_help = {
-        let out = cmd().args(["post", "create", "--help"]).assert().success();
-        String::from_utf8_lossy(&out.get_output().stdout).to_string()
-    };
-    assert!(post_create_help.contains("--participants"), "post create must keep --participants");
-    assert!(!post_create_help.contains("--title"), "post create must not keep --title");
+    // Format v2 flag surface (D1/D2): send keeps the sugar flags but never
+    // gains --to / --participants; --title is the preamble carrier.
+    assert!(send_help.contains("--title"), "post send must keep --title");
+    assert!(!send_help.contains("--to\n"), "post send must not gain --to");
+    assert!(!send_help.contains("--participants"), "post send must not gain --participants");
 }
 
 // =====================================================================
@@ -1381,7 +1412,7 @@ fn plain_read_outputs_file_format() {
         .args(["--plain", "post", "read", path.to_str().unwrap()])
         .assert()
         .code(0)
-        .stdout(predicate::str::contains("### #1 alice"))
+        .stdout(predicate::str::contains("## #1 alice"))
         .stdout(predicate::str::contains("ok post.read").not());
 }
 
@@ -1427,9 +1458,11 @@ fn post_group_help_lists_verbs() {
     let help = String::from_utf8_lossy(&out.get_output().stdout).to_string();
     assert!(help.contains("post"), "group help must mention the group");
     assert!(help.contains("<COMMAND>"), "group help must show the subcommand slot");
-    for verb in ["create", "send", "read", "summary", "edit"] {
+    for verb in ["send", "read", "summary", "edit"] {
         assert!(help.contains(verb), "group help must list verb `{}`", verb);
     }
+    // Format v2 removed `post create`
+    assert!(!help.contains("  create"), "group help must not list removed verb `create`");
 }
 
 #[test]
@@ -1451,7 +1484,7 @@ fn read_mention_filter_zero_hits_on_nonempty_thread() {
 
 #[test]
 fn implicit_mention_persisted_to_file() {
-    // The auto-added mention must land in the thread file (- Mentions: line)
+    // The auto-added mention lands in the body as an `@name` token (D2).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -1464,7 +1497,388 @@ fn implicit_mention_persisted_to_file() {
 
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
-        content.contains("- Mentions: alice"),
-        "implicit mention not persisted to file"
+        content.contains("@#1 @alice\n\nreply"),
+        "implicit mention token not persisted to body: {}",
+        content
     );
+}
+
+// =====================================================================
+// Format v2 (merged baseline) additions: D1/D2/D3 + OQ-1/OQ-4 behaviour
+// =====================================================================
+
+#[test]
+fn post_send_to_and_participants_flags_removed() {
+    // Owner rulings D1/D2: `--to` and `--participants` flags are deleted;
+    // passing them is a clap usage error and no file is ever created.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("directed.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "--to", "charlie", "Hi"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "--participants", "bob,charlie", "Hi"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
+
+    assert!(!dir.path().join("directed.post.md").exists());
+}
+
+#[test]
+fn post_send_mention_injects_body_tokens() {
+    // OQ-4: --mention a,b injects `@a @b` tokens at the body head.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("mention.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "charlie,dave", "hello team"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seq: 1"));
+
+    let content = std::fs::read_to_string(dir.path().join("mention.post.md")).unwrap();
+    assert!(content.contains("@charlie @dave\n\nhello team"));
+
+    // Derived mentions show up in the default read output
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mentions:charlie,dave"));
+
+    // Read filter matches on the derived value
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--mention", "dave"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 messages"));
+}
+
+#[test]
+fn post_send_mention_rejects_malformed_values() {
+    // MJ-2: --mention values are validated at the flag layer; shapes that
+    // the derivation rules would silently mangle or drop are rejected with
+    // a Validation envelope and no file is written.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("strict.md");
+
+    // 1. reply-shaped value (#<digits>) belongs to --reply-to, not --mention
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "#5", "hello"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("invalid --mention value '#5'"));
+
+    // 2. whitespace inside the value would be truncated by the token scan
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "two words", "hello"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error validation:"));
+
+    // 3. mentioning the sender itself is silently dropped by derivation
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "alice", "hello"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error validation:"));
+
+    // No file was created by any rejected invocation
+    assert!(!dir.path().join("strict.post.md").exists());
+}
+
+#[test]
+fn post_send_reply_to_injects_body_tokens() {
+    // OQ-4: --reply-to N injects `@#N` plus the implicit @original-sender.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("reply.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "first"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "agreed"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seq: 2"));
+
+    let content = std::fs::read_to_string(dir.path().join("reply.post.md")).unwrap();
+    assert!(content.contains("@#1 @alice\n\nagreed"));
+
+    // JSON read exposes the parse-time derived fields (no `to` field)
+    cmd()
+        .args(["--json", "post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"reply_to\":1"))
+        .stdout(predicate::str::contains("\"mentions\":[\"alice\"]"))
+        .stdout(predicate::str::contains("\"to\"").not());
+
+    // Read filter matches on the derived reply reference
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--reply-to", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 messages"))
+        .stdout(predicate::str::contains("#2 bob"));
+}
+
+#[test]
+fn post_send_reply_token_dedup() {
+    // Implicit @ original sender never duplicates: self-reply skips it and
+    // an explicit --mention of the same name is injected exactly once.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("dedup.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "first"])
+        .assert()
+        .success();
+
+    // Self-reply: only the `@#1` token, no `@alice`
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--reply-to", "1", "follow-up"])
+        .assert()
+        .success();
+
+    // Reply + explicit mention of the same sender: single `@alice` token
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "--mention", "alice,alice", "also this"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(dir.path().join("dedup.post.md")).unwrap();
+    assert!(content.contains("@#1\n\nfollow-up"));
+    assert!(content.contains("@#1 @alice\n\nalso this"));
+    assert_eq!(content.matches("@alice").count(), 1);
+}
+
+#[test]
+fn post_send_oversized_body_after_injection() {
+    // The 64KB cap applies to the final body AFTER token injection.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("big.md");
+
+    // Delivered via --stdin to stay under the OS command-line length limit.
+    let huge = "a".repeat(65 * 1024);
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "bob", "--stdin"])
+        .write_stdin(huge)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error validation:"));
+}
+
+#[test]
+fn post_read_plain_no_preamble() {
+    // Subset output is messages-only serialization (no preamble, POST-31)
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("plain.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "--title", "Plain Check", "one"])
+        .assert()
+        .success();
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "two"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["--plain", "post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("## #1 alice"))
+        .stdout(predicate::str::contains("## #2 bob"))
+        .stdout(predicate::str::contains("Plain Check").not())
+        .stdout(predicate::str::contains("- participants:").not());
+}
+
+#[test]
+fn post_send_appends_to_file_missing_trailing_newline() {
+    // A thread whose final byte is the closing fence (external edits can
+    // strip the trailing newline). The next send must repair the boundary
+    // instead of gluing the new header onto the fence line.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("noeol.post.md");
+    std::fs::write(
+        &path,
+        "# NoEol\n\n\
+         ## #1 alice (2026-08-09T03:50:00Z)\n\n\
+         ```md\nfirst\n```",
+    )
+    .unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "bob", "second"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ok post.send"))
+        .stdout(predicate::str::contains("seq: 2"));
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("\n## #2 bob ("));
+    assert!(!content.contains("```##"));
+
+    // Both messages read back intact (previously #2 vanished into #1).
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 messages"))
+        .stdout(predicate::str::contains("#1 alice"))
+        .stdout(predicate::str::contains("#2 bob"));
+}
+
+#[test]
+fn post_edit_missing_body_example_shows_edit_form() {
+    // Review F3: the one-retry example must match the failing command
+    // (edit previously showed a send-shaped example).
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("thread.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "alice", "first"])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "alice", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("example: paperwork post edit"))
+        .stderr(predicate::str::contains("example: paperwork post send").not());
+}
+
+// --- Format v2 validate pipeline (seq / fence / heuristic / empty) ---
+
+#[test]
+fn validate_seq_gap() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("gap.post.md");
+    std::fs::write(
+        &path,
+        "# Gap Thread\n\n\
+         ## #1 alice (2026-01-15T10:30:00Z)\n\n\
+         ```md\none\n```\n\n\
+         ## #3 bob (2026-01-15T10:31:00Z)\n\n\
+         ```md\nthree\n```\n",
+    )
+    .unwrap();
+
+    // seq failure surfaces as Validation directly (category validation, R10)
+    cmd()
+        .args(["--json", "validate", path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"status\":\"error\""))
+        .stdout(predicate::str::contains("\"category\":\"validation\""))
+        .stdout(predicate::str::contains("sequence"));
+}
+
+#[test]
+fn validate_unclosed_fence() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("broken.post.md");
+    std::fs::write(
+        &path,
+        "# Broken Fence\n\n\
+         ## #1 alice (2026-01-15T10:30:00Z)\n\n\
+         ```md\nbody\n```\n\n\
+         ```text\nunclosed tail\n",
+    )
+    .unwrap();
+
+    cmd()
+        .args(["--json", "validate", path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"status\":\"error\""))
+        .stdout(predicate::str::contains("\"category\":\"format\""))
+        .stdout(predicate::str::contains("unclosed"));
+}
+
+#[test]
+fn validate_garbage() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("garbage.post.md");
+    std::fs::write(&path, "just some garbage text\nno headers here\n").unwrap();
+
+    cmd()
+        .args(["--json", "validate", path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"status\":\"error\""))
+        .stdout(predicate::str::contains("\"category\":\"format\""))
+        .stdout(predicate::str::contains("dynamic md fences"));
+}
+
+#[test]
+fn validate_empty_file() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty.post.md");
+    std::fs::write(&path, "").unwrap();
+
+    // Empty-file exemption removed (spec §8, VAL-07): zero messages -> Parse
+    cmd()
+        .args(["--json", "validate", path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"status\":\"error\""))
+        .stdout(predicate::str::contains("\"category\":\"format\""));
+}
+
+#[test]
+fn validate_suspected_header_warning() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("suspect.post.md");
+    std::fs::write(
+        &path,
+        "# Suspect\n\n\
+         ## #1 alice (2026-01-15T10:30:00Z)\n\n\
+         ```md\nok\n```\n\n\
+         ## #2 bob (2026-01-15T10:31:00Z\n",
+    )
+    .unwrap();
+
+    // Conclusion stays ok; the malformed header line gets a warning + fix
+    cmd()
+        .args(["validate", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ok validate"))
+        .stdout(predicate::str::contains("warning:"))
+        .stdout(predicate::str::contains("expected format: ## #<seq> <sender> (<timestamp>)"));
+}
+
+#[test]
+fn validate_suspected_header_multi_space_warning() {
+    // N2 regression: `##  #1 alice` (double space + missing timestamp) fails
+    // the strict grammar but MUST trip the whitespace-lenient heuristic.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("multispace.post.md");
+    std::fs::write(
+        &path,
+        "# Suspect\n\n\
+         ## #1 alice (2026-01-15T10:30:00Z)\n\n\
+         ```md\nok\n```\n\n\
+         ##  #1 alice\n",
+    )
+    .unwrap();
+
+    cmd()
+        .args(["validate", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ok validate"))
+        .stdout(predicate::str::contains("suspected message header: ##  #1 alice"))
+        .stdout(predicate::str::contains("expected format: ## #<seq> <sender> (<timestamp>)"));
 }

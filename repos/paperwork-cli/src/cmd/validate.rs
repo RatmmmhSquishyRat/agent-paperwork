@@ -1,9 +1,17 @@
-//! Validate command: check Markdown structure of a file by type.
+//! Validate command: check Markdown structure of a file by type (spec §8).
+//!
+//! For `.post.md` the checks run in order: parse (>= 1 message) -> seq
+//! monotonicity -> fence closure -> suspected-header heuristic (warning only).
+//! Error envelopes surface the underlying variant directly (R10): parse/fence
+//! failures are `Parse` (category `format`), seq failures are `Validation`
+//! (category `validation`).
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use clap::{Args, ValueEnum};
+use regex::Regex;
 
 use crate::cmd::Context;
 use crate::output;
@@ -16,6 +24,12 @@ pub enum FileKind {
     Brief,
     Contacts,
 }
+
+/// Suspected message header heuristic (spec §8 step 4): `##` + whitespace +
+/// `#<digit>`. Regex-based so multi-space variants (`##  #1 …`) are caught,
+/// aligned with `MESSAGE_HEADER_RE`'s `\s+` lenient stance (R9, review N2).
+static SUSPECTED_HEADER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^##\s+#\d").expect("valid regex"));
 
 #[derive(Args)]
 #[command(after_help = "Examples:\n  paperwork validate standup.post.md\n  paperwork validate mystery.md --type post")]
@@ -69,44 +83,104 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
             example: format!("paperwork validate {}", path_str),
         })?;
 
-    // Call the corresponding parser
-    let result = match file_type {
-        FileType::Post => paperwork_core::format::thread::parse_messages(&content)
-            .and_then(|msgs| {
-                if msgs.is_empty() && !content.trim().is_empty() {
-                    Err(paperwork_core::PaperworkError::Parse {
-                        message: "no valid message boundaries found".to_string(),
-                        fix: "expected --- separators with ### #N sender . timestamp headers and ````markdown fenced bodies".to_string(),
-                        example: "paperwork post send myfile alice \"hello\"".to_string(),
-                    })
-                } else {
-                    Ok(())
-                }
-            }),
-        FileType::Profile => paperwork_core::format::profile::parse_profile(&content).map(|_| ()),
-        FileType::Brief => paperwork_core::format::manifest::parse_manifest(&content).map(|_| ()),
-        FileType::Contacts => paperwork_core::format::contacts::parse_contacts(&content).map(|_| ()),
-    };
+    let mut env = output::Envelope::new("validate", path_str);
 
-    match result {
-        Ok(()) => {
-            let env = output::Envelope::new("validate", path_str);
-            output::emit_ok(ctx, env);
-            Ok(())
+    match file_type {
+        FileType::Post => {
+            // Step 1: parse; empty content or zero messages -> Parse (spec §8;
+            // the v0.4 empty-file exemption is removed, BDD:VAL-07).
+            let messages = paperwork_core::format::thread::parse_messages(&content)?;
+            if messages.is_empty() {
+                return Err(paperwork_core::PaperworkError::Parse {
+                    message: "no valid messages found".to_string(),
+                    fix: "expected '## #<seq> <sender> (<timestamp>)' headers with dynamic md fences".to_string(),
+                    example: "paperwork post send myfile alice \"hello\"".to_string(),
+                }.into());
+            }
+
+            // Step 2: seq monotonicity (Validation surfaces directly, R10).
+            paperwork_core::format::thread::validate_seq_monotonicity(&messages)?;
+
+            // Step 3: fence closure (dynamic-length fence aware).
+            fence_check(&content)?;
+
+            // Step 4: suspected-header heuristic (warning only; does not
+            // change the ok/error conclusion, BDD:VAL-08).
+            let warnings = suspected_header_warnings(&content);
+            if !warnings.is_empty() {
+                env = env.body_lines(warnings);
+            }
         }
-        Err(e) => {
-            // Report as format error with specific issues
-            let detail = match &e {
-                paperwork_core::PaperworkError::Parse { message, .. } => message.clone(),
-                other => other.to_string(),
-            };
-            Err(paperwork_core::PaperworkError::Parse {
-                message: format!("{} is not a valid {} file: {}", args.path.display(), file_type.label(), detail),
-                fix: e.fix(),
-                example: e.example(),
-            }.into())
+        FileType::Profile => {
+            paperwork_core::format::profile::parse_profile(&content)?;
+            fence_check(&content)?;
+        }
+        FileType::Brief => {
+            paperwork_core::format::manifest::parse_manifest(&content)?;
+            fence_check(&content)?;
+        }
+        FileType::Contacts => {
+            paperwork_core::format::contacts::parse_contacts(&content)?;
+            fence_check(&content)?;
         }
     }
+
+    output::emit_ok(ctx, env);
+    Ok(())
+}
+
+/// Fence closure check (spec §8 step 3 / validate_markdown). Unclosed fences
+/// are reported as `Parse` (category `format`) with the opening line number.
+fn fence_check(content: &str) -> Result<()> {
+    let issues = paperwork_core::format::validate_markdown(content);
+    if issues.is_empty() {
+        return Ok(());
+    }
+    Err(paperwork_core::PaperworkError::Parse {
+        message: issues.join("; "),
+        fix: "close every code fence with a backtick-only line at least as long as the opening fence".to_string(),
+        example: String::new(),
+    }.into())
+}
+
+/// Suspected message header heuristic (spec §8 step 4, R9).
+///
+/// A flush-left line that looks like `## #<digits>` but does not strictly
+/// match the message header grammar (and is not inside a fence) is reported
+/// as a warning with the expected-format fix. Warnings never change the
+/// ok/error conclusion.
+fn suspected_header_warnings(content: &str) -> Vec<String> {
+    use paperwork_core::format::thread::MESSAGE_HEADER_RE;
+    use paperwork_core::format::{fence_close_matches, fence_open_len, normalize_line_endings};
+
+    let content = normalize_line_endings(content);
+    let mut warnings = Vec::new();
+    let mut open: Option<usize> = None;
+
+    for (i, line) in content.lines().enumerate() {
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+            continue;
+        }
+        if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+            continue;
+        }
+        let looks_like_header = SUSPECTED_HEADER_RE.is_match(line);
+        if looks_like_header && !MESSAGE_HEADER_RE.is_match(line) {
+            warnings.push(format!(
+                "warning: line {}: suspected message header: {}",
+                i + 1,
+                line.trim_end()
+            ));
+            warnings.push("fix: expected format: ## #<seq> <sender> (<timestamp>)".to_string());
+            warnings.push("example: ## #1 alice (2026-01-15T10:30:00Z)".to_string());
+        }
+    }
+
+    warnings
 }
 
 enum FileType {
@@ -114,15 +188,4 @@ enum FileType {
     Profile,
     Brief,
     Contacts,
-}
-
-impl FileType {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Post => ".post.md",
-            Self::Profile => ".profile.md",
-            Self::Brief => ".brief.md",
-            Self::Contacts => ".contacts.md",
-        }
-    }
 }

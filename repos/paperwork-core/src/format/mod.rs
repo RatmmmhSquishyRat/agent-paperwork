@@ -1,6 +1,8 @@
 //! Format layer: parsing and serialization of managed Markdown files.
 //!
-//! Shared utilities for boundary detection, bullet-key extraction, and CRLF normalization.
+//! Shared utilities for attribute-line extraction, fence-aware scanning
+//! (CommonMark backtick-fence subset, spec §3.3), dynamic fence length
+//! computation (spec §3.4), and CRLF normalization (invariant I11).
 
 pub mod contacts;
 pub mod manifest;
@@ -16,18 +18,19 @@ pub fn normalize_line_endings(content: &str) -> String {
     content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// Regex for extracting bullet-key metadata lines: `- Key: value`
-static BULLET_KEY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^- ([^:]+):\s*(.*)$").expect("valid regex"));
+/// Regex for attribute lines (spec §3.2): `- key: value` with a lowercase
+/// ASCII key (letters, digits, hyphens; first character a letter).
+static ATTRIBUTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^- ([a-z][a-z0-9-]*):\s*(.*)$").expect("valid regex"));
 
-/// Regex for message H3 header: `### #<seq> <sender> · <timestamp>`
-static MESSAGE_HEADER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^### #(\d+) (.+) · (.+)$").expect("valid regex"));
-
-/// Extract a bullet-key value from a line.
-/// Returns (key, value) if the line matches `- Key: value`.
-pub fn extract_bullet_key(line: &str) -> Option<(String, String)> {
-    BULLET_KEY_RE.captures(line.trim()).map(|caps| {
+/// Extract an attribute (key, value) from a line.
+///
+/// Returns `Some((key, value))` if the line matches `- key: value` with a
+/// lowercase key; the value is the trimmed text after the colon (may be
+/// empty). Uppercase-key bullets (legacy format) never match and are treated
+/// as unknown content (spec §3.6).
+pub fn extract_attribute(line: &str) -> Option<(String, String)> {
+    ATTRIBUTE_RE.captures(line).map(|caps| {
         (
             caps[1].to_string(),
             caps[2].trim().to_string(),
@@ -35,168 +38,126 @@ pub fn extract_bullet_key(line: &str) -> Option<(String, String)> {
     })
 }
 
-/// Check if a line is a valid message H3 header.
-/// Returns (seq, sender, timestamp_str) if it matches.
-pub fn parse_message_header(line: &str) -> Option<(u64, String, String)> {
-    MESSAGE_HEADER_RE.captures(line.trim()).map(|caps| {
-        (
-            caps[1].parse().unwrap_or(0),
-            caps[2].to_string(),
-            caps[3].to_string(),
-        )
-    })
-}
-
-/// Check if a line is exactly `---` (horizontal rule / message boundary marker).
-pub fn is_boundary_line(line: &str) -> bool {
-    line.trim() == "---"
-}
-
-/// Check if a line opens or closes a 4-backtick fence.
-fn is_four_backtick_fence(line: &str) -> bool {
-    line.trim().starts_with("````")
-}
-
-/// Detect message boundaries in content (fence-aware).
+/// Count the leading spaces of a line (capped: returns `None` once more
+/// than 3 leading spaces are seen).
 ///
-/// A message boundary is a `---` line immediately followed (within 2 lines)
-/// by a valid H3 header matching `### #\d+ .+ · .+`.
-/// A `---` inside a 4-backtick fenced code block is NEVER a boundary.
+/// CommonMark fence policy (spec §3.3, R13): a fence line may be indented by
+/// at most 3 spaces; >= 4 spaces makes it an indented code block line with
+/// no fence semantics.
+fn leading_indent_ok(line: &str) -> Option<&str> {
+    let mut spaces = 0usize;
+    for ch in line.chars() {
+        if ch == ' ' {
+            spaces += 1;
+            if spaces > 3 {
+                return None;
+            }
+        } else {
+            return Some(&line[spaces..]);
+        }
+    }
+    // All-spaces (or empty) line: not a fence line.
+    None
+}
+
+/// Length of the leading backtick run of a line, if the line is a candidate
+/// fence line (<= 3 leading spaces followed immediately by backticks).
 ///
-/// Returns a list of (boundary_line_index, header_line_index) pairs.
-pub fn find_message_boundaries(lines: &[&str]) -> Vec<(usize, usize)> {
-    let mut boundaries = Vec::new();
-    let mut i = 0;
-    let mut in_fence = false;
-
-    while i < lines.len() {
-        // Track fence state
-        if is_four_backtick_fence(lines[i]) {
-            in_fence = !in_fence;
-            i += 1;
-            continue;
-        }
-
-        if !in_fence && is_boundary_line(lines[i]) {
-            // Look ahead within 2 lines for a valid H3 header
-            let mut found = false;
-            for offset in 1..=2 {
-                if i + offset < lines.len() {
-                    let candidate = lines[i + offset];
-                    if parse_message_header(candidate).is_some() {
-                        boundaries.push((i, i + offset));
-                        // Skip past this boundary to avoid double-counting
-                        i += offset + 1;
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if found {
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    boundaries
-}
-
-/// Parse comma-separated backtick-quoted glob patterns.
-/// Input: `` `src/**`, `docs/**` `` → `vec!["src/**", "docs/**"]`
-/// Empty scope (`—`) returns empty vec.
-pub fn parse_scope_globs(value: &str) -> Vec<String> {
-    let trimmed = value.trim();
-    if trimmed == "—" || trimmed.is_empty() {
-        return Vec::new();
-    }
-
-    trimmed
-        .split(',')
-        .filter_map(|part| {
-            let part = part.trim();
-            // Extract content between backticks
-            if part.starts_with('`') && part.ends_with('`') && part.len() >= 2 {
-                Some(part[1..part.len() - 1].to_string())
-            } else if !part.is_empty() {
-                // Allow unquoted values too for flexibility
-                Some(part.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Serialize a list of glob patterns to comma-separated backtick-quoted format.
-/// Empty list → `—`
-pub fn serialize_scope_globs(globs: &[String]) -> String {
-    if globs.is_empty() {
-        "—".to_string()
+/// Returns `Some(n)` with the run length (any n >= 1), or `None` when the
+/// line is not a candidate fence line. Callers decide open/close semantics
+/// (a fence requires n >= 3).
+pub fn backtick_run(line: &str) -> Option<usize> {
+    let rest = leading_indent_ok(line)?;
+    let run = rest.bytes().take_while(|&b| b == b'`').count();
+    if run == 0 {
+        None
     } else {
-        globs
-            .iter()
-            .map(|g| format!("`{}`", g))
-            .collect::<Vec<_>>()
-            .join(", ")
+        Some(run)
     }
 }
 
-/// Validate basic Markdown structure of content.
+/// Fence-opening length of a line, if it opens a fence.
 ///
-/// Returns a list of warning/error messages. Empty vec = valid.
-/// Checks:
-/// - Unclosed fenced code blocks (``` or ````)
-/// - Unclosed 4-backtick fences
+/// An opening line is a backtick run of length N >= 3 (<= 3 leading spaces),
+/// optionally followed by any info string (spec §3.3).
+pub fn fence_open_len(line: &str) -> Option<usize> {
+    let run = backtick_run(line)?;
+    if run >= 3 {
+        Some(run)
+    } else {
+        None
+    }
+}
+
+/// Whether a line closes a fence opened with `open_len` backticks.
+///
+/// Closing rule (CommonMark, spec §3.3): backtick run length >= `open_len`,
+/// the line consists of backticks and whitespace only (no info string),
+/// <= 3 leading spaces.
+pub fn fence_close_matches(line: &str, open_len: usize) -> bool {
+    let rest = match leading_indent_ok(line) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let run = rest.bytes().take_while(|&b| b == b'`').count();
+    run >= open_len && rest[run..].chars().all(|c| c.is_whitespace())
+}
+
+/// Info string of a fence opening line (text after the backtick run, trimmed).
+pub fn fence_info(line: &str) -> String {
+    let rest = match leading_indent_ok(line) {
+        Some(rest) => rest,
+        None => return String::new(),
+    };
+    let run = rest.bytes().take_while(|&b| b == b'`').count();
+    rest[run..].trim().to_string()
+}
+
+/// Dynamic fence length for serializing a user-content body (spec §3.4):
+/// `max(3, longest consecutive backtick run in body + 1)`.
+pub fn compute_fence_length(body: &str) -> usize {
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for ch in body.chars() {
+        if ch == '`' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    (longest + 1).max(3)
+}
+
+/// Validate basic Markdown structure of content: fence closure.
+///
+/// Fence-aware per spec §3.3 (CommonMark length rules: an N-backtick fence
+/// is only closed by a backtick-only line of length >= N; <= 3 spaces indent;
+/// tilde fences are not recognized). Returns a list of issues; empty = valid.
+/// An unclosed fence is reported with its 1-based opening line number.
 pub fn validate_markdown(content: &str) -> Vec<String> {
     let content = normalize_line_endings(content);
-    let lines: Vec<&str> = content.lines().collect();
     let mut issues = Vec::new();
 
-    // Track fence state
-    let mut in_four_fence = false;
-    let mut four_fence_start = 0;
-    let mut in_three_fence = false;
-    let mut three_fence_start = 0;
+    let mut open_len: Option<(usize, usize)> = None; // (backtick len, 1-based line no)
 
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-
-        if in_four_fence {
-            // Inside a 4-backtick fence, only ```` closes it
-            if trimmed == "````" {
-                in_four_fence = false;
+    for (i, line) in content.lines().enumerate() {
+        let line_no = i + 1;
+        if let Some((n, _start)) = open_len {
+            if fence_close_matches(line, n) {
+                open_len = None;
             }
             continue;
         }
-
-        if in_three_fence {
-            if trimmed == "```" || (trimmed.starts_with("```") && !trimmed.starts_with("````")) {
-                in_three_fence = false;
-            }
-            continue;
-        }
-
-        // Not inside any fence
-        if trimmed.starts_with("````") {
-            in_four_fence = true;
-            four_fence_start = i + 1; // 1-based line number
-        } else if trimmed.starts_with("```") {
-            in_three_fence = true;
-            three_fence_start = i + 1;
+        if let Some(n) = fence_open_len(line) {
+            open_len = Some((n, line_no));
         }
     }
 
-    if in_four_fence {
+    if let Some((n, start)) = open_len {
         issues.push(format!(
-            "unclosed 4-backtick fence opened at line {}",
-            four_fence_start
-        ));
-    }
-    if in_three_fence {
-        issues.push(format!(
-            "unclosed 3-backtick fence opened at line {}",
-            three_fence_start
+            "unclosed code fence ({} backticks) opened at line {}",
+            n, start
         ));
     }
 
@@ -215,134 +176,138 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_bullet_key() {
+    fn test_extract_attribute() {
+        // lowercase key hits
         assert_eq!(
-            extract_bullet_key("- Model: gpt-4"),
-            Some(("Model".to_string(), "gpt-4".to_string()))
+            extract_attribute("- model: gpt-4o"),
+            Some(("model".to_string(), "gpt-4o".to_string()))
         );
+        // uppercase key (legacy) never matches
+        assert_eq!(extract_attribute("- Model: gpt-4o"), None);
+        // brief key with a plain value
         assert_eq!(
-            extract_bullet_key("- To: alice"),
-            Some(("To".to_string(), "alice".to_string()))
+            extract_attribute("- owner: alice"),
+            Some(("owner".to_string(), "alice".to_string()))
         );
-        assert_eq!(extract_bullet_key("not a bullet key"), None);
+        // brief key with an RFC3339 timestamp value
         assert_eq!(
-            extract_bullet_key("- Empty:"),
-            Some(("Empty".to_string(), String::new()))
+            extract_attribute("- created: 2026-01-15T10:00:00Z"),
+            Some(("created".to_string(), "2026-01-15T10:00:00Z".to_string()))
         );
+        // empty value allowed
         assert_eq!(
-            extract_bullet_key("- Reply-To: #1"),
-            Some(("Reply-To".to_string(), "#1".to_string()))
+            extract_attribute("- regex:"),
+            Some(("regex".to_string(), String::new()))
         );
+        // non-attribute lines
+        assert_eq!(extract_attribute("not an attribute"), None);
+        assert_eq!(extract_attribute("  - model: indented"), None);
+        assert_eq!(extract_attribute("# heading"), None);
     }
 
     #[test]
-    fn test_parse_message_header() {
-        assert_eq!(
-            parse_message_header("### #1 alice · 2026-01-15T10:30:00Z"),
-            Some((1, "alice".to_string(), "2026-01-15T10:30:00Z".to_string()))
-        );
-        assert_eq!(
-            parse_message_header("### #42 bob-agent · 2026-07-29T23:59:59Z"),
-            Some((42, "bob-agent".to_string(), "2026-07-29T23:59:59Z".to_string()))
-        );
-        assert_eq!(parse_message_header("### not a message"), None);
-        assert_eq!(parse_message_header("# #1 alice · time"), None);
+    fn test_fence_scan() {
+        // opening: N backticks with any info string
+        assert_eq!(fence_open_len("```markdown"), Some(3));
+        assert_eq!(fence_open_len("```"), Some(3));
+        assert_eq!(fence_open_len("````regex"), Some(4));
+        assert_eq!(fence_open_len("``no-fence"), None);
+        // <= 3 leading spaces: still a fence line
+        assert_eq!(fence_open_len("   ```markdown"), Some(3));
+        // >= 4 leading spaces: indented code block, not a fence
+        assert_eq!(fence_open_len("    ```markdown"), None);
+        // tilde fences are not recognized anywhere
+        assert_eq!(fence_open_len("~~~"), None);
+        assert!(!fence_close_matches("~~~", 3));
+
+        // closing: pure-backtick line with length >= open_len
+        assert!(fence_close_matches("```", 3));
+        assert!(fence_close_matches("````", 3));
+        assert!(fence_close_matches("  ```", 3));
+        // < N does not close
+        assert!(!fence_close_matches("```", 4));
+        // info string disqualifies a closing line
+        assert!(!fence_close_matches("```markdown", 3));
+        // trailing whitespace ok
+        assert!(fence_close_matches("````  ", 4));
+        // >= 4 spaces indent: not a closing line
+        assert!(!fence_close_matches("    ```", 3));
+
+        // fence-internal structure lines are not boundaries:
+        // simulate a scan where `## #99 ...` sits inside an open fence
+        let lines = [
+            "```markdown",
+            "## #99 mallory (2026-01-01T00:00:00Z)",
+            "```",
+            "## #2 bob (2026-01-01T00:00:01Z)",
+        ];
+        let mut open: Option<usize> = None;
+        let mut boundaries = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(n) = open {
+                if fence_close_matches(line, n) {
+                    open = None;
+                }
+                continue;
+            }
+            if let Some(n) = fence_open_len(line) {
+                open = Some(n);
+                continue;
+            }
+            if line.starts_with("## #") {
+                boundaries.push(i);
+            }
+        }
+        assert_eq!(boundaries, vec![3]);
     }
 
     #[test]
-    fn test_is_boundary_line() {
-        assert!(is_boundary_line("---"));
-        assert!(is_boundary_line("  ---  "));
-        assert!(!is_boundary_line("----"));
-        assert!(!is_boundary_line("--"));
-        assert!(!is_boundary_line("text ---"));
+    fn test_compute_fence_length() {
+        assert_eq!(compute_fence_length(""), 3);
+        assert_eq!(compute_fence_length("no backticks"), 3);
+        assert_eq!(compute_fence_length("single ` tick"), 3);
+        assert_eq!(compute_fence_length("run of ``"), 3);
+        assert_eq!(compute_fence_length("run of ```"), 4);
+        assert_eq!(compute_fence_length("run of ````"), 5);
+        assert_eq!(compute_fence_length("run of `````"), 6);
+        assert_eq!(compute_fence_length("run of ``````"), 7);
+        // longest run wins
+        assert_eq!(compute_fence_length("` and ````` and ``"), 6);
     }
 
     #[test]
-    fn test_find_message_boundaries_basic() {
-        let content = "---\n\n### #1 alice · 2026-01-15T10:30:00Z\n\nbody\n\n---\n\n### #2 bob · 2026-01-15T11:00:00Z\n\nbody2";
-        let lines: Vec<&str> = content.split('\n').collect();
-        let boundaries = find_message_boundaries(&lines);
-        assert_eq!(boundaries.len(), 2);
-        assert_eq!(boundaries[0], (0, 2));
-        assert_eq!(boundaries[1], (6, 8));
-    }
+    fn test_validate_markdown_dynamic() {
+        // valid: closed fences of various lengths
+        assert!(validate_markdown("# t\n\n```rust\nfn main() {}\n```\n").is_empty());
+        assert!(validate_markdown("`````markdown\n````\n`````\n").is_empty());
 
-    #[test]
-    fn test_find_message_boundaries_lone_hr() {
-        // A --- NOT followed by header is body content
-        let content = "---\n\n### #1 alice · 2026-01-15T10:30:00Z\n\nbody with\n---\ninside\n\n---\n\n### #2 bob · 2026-01-15T11:00:00Z";
-        let lines: Vec<&str> = content.split('\n').collect();
-        let boundaries = find_message_boundaries(&lines);
-        // Only 2 real boundaries, the --- in body is ignored
-        assert_eq!(boundaries.len(), 2);
-    }
-
-    #[test]
-    fn test_find_message_boundaries_fence_aware() {
-        // --- inside a 4-backtick fence should NOT be a boundary
-        let content = "---\n\n### #1 alice · 2026-01-15T10:30:00Z\n\n````markdown\n---\n### #99 fake · 2026-01-01T00:00:00Z\n````\n\n---\n\n### #2 bob · 2026-01-15T11:00:00Z";
-        let lines: Vec<&str> = content.split('\n').collect();
-        let boundaries = find_message_boundaries(&lines);
-        assert_eq!(boundaries.len(), 2);
-        assert_eq!(boundaries[0], (0, 2));
-    }
-
-    #[test]
-    fn test_parse_scope_globs() {
-        assert_eq!(
-            parse_scope_globs("`src/**`, `docs/**`"),
-            vec!["src/**", "docs/**"]
-        );
-        assert_eq!(parse_scope_globs("—"), Vec::<String>::new());
-        assert_eq!(parse_scope_globs(""), Vec::<String>::new());
-        assert_eq!(parse_scope_globs("`single`"), vec!["single"]);
-    }
-
-    #[test]
-    fn test_serialize_scope_globs() {
-        assert_eq!(
-            serialize_scope_globs(&["src/**".to_string(), "docs/**".to_string()]),
-            "`src/**`, `docs/**`"
-        );
-        assert_eq!(serialize_scope_globs(&[]), "—");
-    }
-
-    #[test]
-    fn test_scope_roundtrip() {
-        let globs = vec!["src/**".to_string(), "lib/*.rs".to_string()];
-        let serialized = serialize_scope_globs(&globs);
-        let parsed = parse_scope_globs(&serialized);
-        assert_eq!(globs, parsed);
-    }
-
-    #[test]
-    fn test_validate_markdown_valid() {
-        let content = "# Hello\n\nSome text\n\n```rust\nfn main() {}\n```\n";
-        assert!(validate_markdown(content).is_empty());
-    }
-
-    #[test]
-    fn test_validate_markdown_unclosed_three_fence() {
-        let content = "# Hello\n\n```rust\nfn main() {}\n";
-        let issues = validate_markdown(content);
+        // unclosed 3-backtick fence reports opening line number
+        let issues = validate_markdown("# t\n\n```rust\nfn main() {}\n");
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].contains("unclosed 3-backtick fence"));
-    }
+        assert!(issues[0].contains("unclosed"));
+        assert!(issues[0].contains("line 3"));
 
-    #[test]
-    fn test_validate_markdown_unclosed_four_fence() {
-        let content = "# Hello\n\n````markdown\nSome content\n";
-        let issues = validate_markdown(content);
+        // unclosed 5-backtick fence
+        let issues = validate_markdown("line\n`````markdown\nbody\n");
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].contains("unclosed 4-backtick fence"));
-    }
+        assert!(issues[0].contains("5 backticks"));
+        assert!(issues[0].contains("line 2"));
 
-    #[test]
-    fn test_validate_markdown_nested_fences() {
-        // 4-backtick fence containing 3-backtick fence is valid
-        let content = "````markdown\n```rust\nfn main() {}\n```\n````\n";
-        let issues = validate_markdown(content);
-        assert!(issues.is_empty());
+        // nested: longer fence containing shorter fence lines is valid
+        assert!(validate_markdown("````markdown\n```\nx\n```\n````\n").is_empty());
+
+        // shorter fence line does NOT close a longer fence
+        let issues = validate_markdown("````markdown\n```\n`````\n");
+        assert!(issues.is_empty()); // closed by the 5-backtick line
+
+        // >= 4 space indented backtick line is not a fence (no issue reported)
+        assert!(validate_markdown("    ```not-a-fence\n").is_empty());
+
+        // tilde fences are not recognized: the ``` line opens a backtick
+        // fence that ~~~ never closes
+        let issues = validate_markdown("~~~\n```\n~~~\n");
+        // the ``` line opens a backtick fence that is never closed
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("line 2"));
     }
 }
