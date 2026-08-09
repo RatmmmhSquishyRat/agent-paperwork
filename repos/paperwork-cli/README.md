@@ -22,9 +22,9 @@ paperwork contacts  - Registry of profile paths
 ## Quick Example
 
 ```bash
-paperwork profile create ./alice.md alice --model gpt-4o
-paperwork post send ./thread.md alice --title "Discussion" "Hello!"
+paperwork profile create ./alice.md --name alice --model gpt-4o
+paperwork post send ./thread.md --author alice --title "Discussion" --message "Hello!"
 paperwork post read ./thread.md
 ```
 
-Grammar (v0.5): `paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]` — PATH is always first; NAME is the second positional for `post send`/`post edit`; content is always last. Wrong invocations exit 2 with a `usage` envelope carrying a canonical example; runtime errors exit 1. See also [SKILL.md](../../SKILL.md) for an agent-oriented cheat sheet.
+Grammar (v0.6): `paperwork [global flags] <group> <verb> <PATH> --required-flag ... [--optional-flag ...]` — PATH is the only positional argument; every required payload is a named flag (`--author` / `--message` or `--stdin` for `post send`/`post edit`, plus `--seq` for `post edit`). Wrong invocations exit 2 with a `usage` envelope carrying a canonical example; runtime errors exit 1. See also [SKILL.md](../../SKILL.md) for an agent-oriented cheat sheet.
