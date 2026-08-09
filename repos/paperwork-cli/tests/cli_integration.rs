@@ -5,6 +5,9 @@
 //! rulings D1/D2/D3): H1-title-only preamble, `## #N sender (timestamp)`
 //! headers with ```md fences, reference state as `@name` / `@#N` body
 //! tokens, no `post create` (thread creation folded into the first send).
+//! v0.6 grammar (this file): PATH is the only positional argument; every
+//! required payload is a named flag (--author/-a, --message/-m, --seq,
+//! --name, --title, --entry, --entry-title, --profile).
 //! Usage errors (clap parse failures) render as the `usage` envelope, exit 2;
 //! runtime errors keep the six categories, exit 1.
 
@@ -45,7 +48,7 @@ fn profile_create_and_show() {
     let path = dir.path().join("alice.md");
 
     cmd()
-        .args(["profile", "create", path.to_str().unwrap(), "alice", "--model", "gpt-4"])
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "alice", "--model", "gpt-4"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok profile.create"))
@@ -65,7 +68,7 @@ fn profile_create_json() {
     let path = dir.path().join("bob.md");
 
     cmd()
-        .args(["--json", "profile", "create", path.to_str().unwrap(), "bob"])
+        .args(["--json", "profile", "create", path.to_str().unwrap(), "--name", "bob"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"name\":\"bob\""))
@@ -78,12 +81,12 @@ fn profile_create_duplicate_fails() {
     let path = dir.path().join("dup.md");
 
     cmd()
-        .args(["profile", "create", path.to_str().unwrap(), "x"])
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "x"])
         .assert()
         .success();
 
     cmd()
-        .args(["profile", "create", path.to_str().unwrap(), "y"])
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "y"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("error already-exists:"));
@@ -95,7 +98,7 @@ fn profile_edit() {
     let path = dir.path().join("edit.md");
 
     cmd()
-        .args(["profile", "create", path.to_str().unwrap(), "agent"])
+        .args(["profile", "create", path.to_str().unwrap(), "--name", "agent"])
         .assert()
         .success();
 
@@ -119,8 +122,8 @@ fn profile_list() {
     let p1 = dir.path().join("a.md");
     let p2 = dir.path().join("b.md");
 
-    cmd().args(["profile", "create", p1.to_str().unwrap(), "a"]).assert().success();
-    cmd().args(["profile", "create", p2.to_str().unwrap(), "b"]).assert().success();
+    cmd().args(["profile", "create", p1.to_str().unwrap(), "--name", "a"]).assert().success();
+    cmd().args(["profile", "create", p2.to_str().unwrap(), "--name", "b"]).assert().success();
 
     cmd()
         .args(["--json", "profile", "list", dir.path().to_str().unwrap()])
@@ -140,7 +143,7 @@ fn post_send_read() {
     // First send creates the thread and writes the preamble (no separate
     // create subcommand; Format v2 folds creation into the first send).
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--title", "Design Discussion", "I think we should use Rust."])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--title", "Design Discussion", "--message", "I think we should use Rust."])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok post.send"))
@@ -155,7 +158,7 @@ fn post_send_read() {
     assert!(content.contains("```md"));
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "Agreed, Rust it is."])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--message", "Agreed, Rust it is."])
         .assert()
         .success()
         .stdout(predicate::str::contains("seq: 2"));
@@ -177,7 +180,7 @@ fn post_send_stdin() {
     let path = dir.path().join("stdin-thread.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--stdin"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--stdin"])
         .write_stdin("Message from stdin")
         .assert()
         .success()
@@ -200,7 +203,7 @@ fn post_send_empty_body_rejected() {
     let path = dir.path().join("empty.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "   "])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "   "])
         .assert()
         .failure()
         .stderr(predicate::str::contains("error validation:"));
@@ -211,11 +214,11 @@ fn post_edit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("edit-thread.md");
 
-    cmd().args(["post", "send", path.to_str().unwrap(), "bob", "original"]).assert().success();
+    cmd().args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--message", "original"]).assert().success();
 
     // First real message is seq 1 (placeholder creation message abolished)
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "bob", "1", "edited"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "bob", "--seq", "1", "--message", "edited"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok post.edit"));
@@ -232,7 +235,7 @@ fn post_summary() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("sum.md");
 
-    cmd().args(["post", "send", path.to_str().unwrap(), "x", "hello"]).assert().success();
+    cmd().args(["post", "send", path.to_str().unwrap(), "--author", "x", "--message", "hello"]).assert().success();
 
     // Title from the H1 preamble (default derived from the path); messages
     // counts real messages only (no placeholder creation message).
@@ -256,13 +259,13 @@ fn brief_create_add_read() {
     std::fs::write(&entry_file, "some content").unwrap();
 
     cmd()
-        .args(["brief", "create", brief_path.to_str().unwrap(), "My Brief"])
+        .args(["brief", "create", brief_path.to_str().unwrap(), "--title", "My Brief"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok brief.create"));
 
     cmd()
-        .args(["brief", "add", brief_path.to_str().unwrap(), "notes.txt"])
+        .args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "notes.txt"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok brief.add"));
@@ -282,11 +285,11 @@ fn brief_remove() {
 
     std::fs::write(&entry_file, "data").unwrap();
 
-    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "B"]).assert().success();
-    cmd().args(["brief", "add", brief_path.to_str().unwrap(), "e.txt"]).assert().success();
+    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "--title", "B"]).assert().success();
+    cmd().args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "e.txt"]).assert().success();
 
     cmd()
-        .args(["brief", "remove", brief_path.to_str().unwrap(), "e.txt"])
+        .args(["brief", "remove", brief_path.to_str().unwrap(), "--entry-title", "e.txt"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok brief.remove"));
@@ -306,8 +309,8 @@ fn brief_verify() {
 
     std::fs::write(&entry_file, "original").unwrap();
 
-    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "V"]).assert().success();
-    cmd().args(["brief", "add", brief_path.to_str().unwrap(), "src.txt"]).assert().success();
+    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "--title", "V"]).assert().success();
+    cmd().args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "src.txt"]).assert().success();
 
     // Verify fresh
     cmd()
@@ -333,7 +336,7 @@ fn contacts_create_add_read() {
     let contacts_path = dir.path().join("contacts.md");
     let profile_path = dir.path().join("agent.md");
 
-    cmd().args(["profile", "create", profile_path.to_str().unwrap(), "agent"]).assert().success();
+    cmd().args(["profile", "create", profile_path.to_str().unwrap(), "--name", "agent"]).assert().success();
 
     cmd()
         .args(["contacts", "create", contacts_path.to_str().unwrap(), "--title", "Team"])
@@ -342,7 +345,7 @@ fn contacts_create_add_read() {
         .stdout(predicate::str::contains("ok contacts.create"));
 
     cmd()
-        .args(["contacts", "add", contacts_path.to_str().unwrap(), profile_path.to_str().unwrap()])
+        .args(["contacts", "add", contacts_path.to_str().unwrap(), "--profile", profile_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok contacts.add"));
@@ -361,7 +364,7 @@ fn validate_post_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("thread.md");
 
-    cmd().args(["post", "send", path.to_str().unwrap(), "alice", "hello"]).assert().success();
+    cmd().args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "hello"]).assert().success();
 
     // The actual file created has .post.md suffix
     let actual_path = dir.path().join("thread.post.md");
@@ -394,7 +397,7 @@ fn quiet_suppresses_status_line() {
 
     // Quiet suppresses the "ok" status line but still outputs fields
     cmd()
-        .args(["--quiet", "profile", "create", path.to_str().unwrap(), "q"])
+        .args(["--quiet", "profile", "create", path.to_str().unwrap(), "--name", "q"])
         .assert()
         .success()
         .stdout(predicate::str::contains("name: q"))
@@ -427,7 +430,7 @@ fn json_error_on_stdout() {
 
 #[test]
 fn usage_missing_body_post_send() {
-    // S-SEND-08: only PATH given, NAME and BODY both missing
+    // S-SEND-08: only PATH given, --author and --message both missing
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -438,13 +441,14 @@ fn usage_missing_body_post_send() {
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
         .stderr(predicate::str::contains("example:"))
-        .stderr(predicate::str::contains("paperwork post send standup.post.md alice"));
+        .stderr(predicate::str::contains("paperwork post send standup.post.md --author alice --message"));
 }
 
 #[test]
 fn name_body_confusion_single_string() {
-    // S-SEND-12: PATH + one string -> falls into validation (empty NAME slot),
-    // exit 1, fix teaches `--` (F1 ruling: not a usage error)
+    // S-SEND-15 (tdd 1b-C flip): a single extra string after PATH is a clap
+    // unexpected-argument usage error (exit 2); the v0.5 silent-write path
+    // (validation exit 1 via the NAME slot) is structurally gone.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -452,66 +456,68 @@ fn name_body_confusion_single_string() {
     cmd()
         .args(["post", "send", path.to_str().unwrap(), "some body text"])
         .assert()
-        .code(1)
-        .stderr(predicate::str::contains("error validation:"))
-        .stderr(predicate::str::contains("NAME"))
-        .stderr(predicate::str::contains("--"));
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
 }
 
 #[test]
 fn usage_old_grammar_send_from() {
-    // S-SEND-09: old-grammar --from flag -> usage envelope, canonical example
-    // must not carry user argv values (F2 ruling)
+    // S-SEND-13: old-grammar --from flag -> usage envelope, canonical example
+    // must not carry user argv values (F2 ruling); v0.6 named form.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "--from", "alice", "body"])
+        .args(["post", "send", path.to_str().unwrap(), "--from", "alice", "--message", "body"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("paperwork post send standup.post.md alice"));
+        .stderr(predicate::str::contains("paperwork post send standup.post.md --author alice --message"));
 }
 
 #[test]
-fn usage_old_grammar_profile_create_name() {
-    // S-PROF-03
+fn usage_v05_grammar_profile_create_positional() {
+    // S-PROF-03 (tdd 1b-A flip): --name is re-legalized in v0.6, so the old
+    // trigger became valid; the migration trigger is now the v0.5 positional
+    // NAME (extra positional -> usage exit 2).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("a.md");
 
     cmd()
-        .args(["profile", "create", path.to_str().unwrap(), "--name", "alice"])
+        .args(["profile", "create", path.to_str().unwrap(), "alice"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("paperwork profile create agents/alice alice"));
+        .stderr(predicate::str::contains("paperwork profile create agents/alice --name alice"));
 }
 
 #[test]
-fn usage_old_grammar_brief_add_entry() {
-    // S-BRIEF-03
+fn usage_v05_grammar_brief_add_positional() {
+    // S-BRIEF-04 (tdd 1b-A flip): --entry re-legalized; trigger is now the
+    // v0.5 positional entry path (extra positional -> usage exit 2).
     let dir = TempDir::new().unwrap();
     let brief_path = dir.path().join("b.md");
-    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "B"]).assert().success();
+    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "--title", "B"]).assert().success();
 
     cmd()
-        .args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "e.txt"])
+        .args(["brief", "add", brief_path.to_str().unwrap(), "e.txt"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("paperwork brief add onboarding.brief.md src/main.rs"));
+        .stderr(predicate::str::contains("paperwork brief add onboarding.brief.md --entry src/main.rs"));
 }
 
 #[test]
-fn usage_old_grammar_contacts_add_profile() {
-    // S-CONTACTS-03
+fn usage_v05_grammar_contacts_add_positional() {
+    // S-CONTACTS-04 (tdd 1b-A flip): --profile re-legalized; trigger is now
+    // the v0.5 positional profile path (extra positional -> usage exit 2).
     let dir = TempDir::new().unwrap();
     let contacts_path = dir.path().join("c.md");
     cmd().args(["contacts", "create", contacts_path.to_str().unwrap()]).assert().success();
 
     cmd()
-        .args(["contacts", "add", contacts_path.to_str().unwrap(), "--profile", "x.profile.md"])
+        .args(["contacts", "add", contacts_path.to_str().unwrap(), "x.profile.md"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
@@ -519,29 +525,31 @@ fn usage_old_grammar_contacts_add_profile() {
 }
 
 #[test]
-fn usage_old_grammar_post_edit_seq() {
-    // S-EDIT-04
+fn usage_identity_flag_post_edit_from() {
+    // S-SEND-13 migration chain (tdd 1b-A rewrite): --seq is re-legalized in
+    // v0.6, so the case keeps its usage exit 2 only through the still-illegal
+    // identity flag --from.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "--seq", "1", "--from", "alice", "new"])
+        .args(["post", "edit", path.to_str().unwrap(), "--seq", "1", "--from", "alice", "--message", "new"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("paperwork post edit standup.post.md alice 3"));
+        .stderr(predicate::str::contains("paperwork post edit standup.post.md --author alice --seq 3"));
 }
 
 #[test]
 fn usage_seq_not_numeric() {
-    // S-EDIT-03
+    // S-EDIT-06: --seq value must parse as u64
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "alice", "abc", "new"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "abc", "--message", "new"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"));
@@ -549,7 +557,7 @@ fn usage_seq_not_numeric() {
 
 #[test]
 fn usage_extra_positional_send() {
-    // S-SEND-13: four positional values for send
+    // S-SEND-13: four positional values for send (v0.6 keeps PATH only)
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -661,7 +669,8 @@ fn usage_missing_required_argument_full_message() {
         .clone();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        err.contains("the following required arguments were not provided: <NAME>"),
+        err.contains("the following required arguments were not provided: --author <AUTHOR>")
+            && err.contains("--message <MESSAGE>"),
         "message must list the missing arguments: {}",
         err
     );
@@ -672,7 +681,7 @@ fn usage_missing_required_argument_full_message() {
         .assert()
         .code(2)
         .stdout(predicate::str::contains(
-            "the following required arguments were not provided: <NAME>",
+            "the following required arguments were not provided: --author <AUTHOR>",
         ));
 }
 
@@ -753,7 +762,7 @@ fn path_send_creates_suffixed_landing() {
     let bare = dir.path().join("newthread");
 
     cmd()
-        .args(["post", "send", bare.to_str().unwrap(), "alice", "landing content"])
+        .args(["post", "send", bare.to_str().unwrap(), "--author", "alice", "--message", "landing content"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok post.send"));
@@ -771,7 +780,7 @@ fn path_stage1_foreign_file_format_error_no_reroute() {
     std::fs::write(&notes, "just some plain notes").unwrap();
 
     cmd()
-        .args(["post", "send", notes.to_str().unwrap(), "alice", "attempt"])
+        .args(["post", "send", notes.to_str().unwrap(), "--author", "alice", "--message", "attempt"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error format:"));
@@ -821,14 +830,14 @@ fn implicit_mention_triggered_on_reply() {
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "reply body"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--reply-to", "1", "--message", "reply body"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("implicit-mention: alice"));
 
     // JSON key with the same singular name (carol replies to #2 -> bob)
     cmd()
-        .args(["--json", "post", "send", path.to_str().unwrap(), "carol", "--reply-to", "2", "again"])
+        .args(["--json", "post", "send", path.to_str().unwrap(), "--author", "carol", "--reply-to", "2", "--message", "again"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("\"implicit-mention\":\"bob\""));
@@ -843,21 +852,21 @@ fn implicit_mention_not_triggered_boundaries() {
 
     // (a) self-reply: original sender == sender
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--reply-to", "1", "self reply"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--reply-to", "1", "--message", "self reply"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("implicit-mention").not());
 
     // (b) explicit mention already covers the original sender
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "--mention", "alice", "explicit"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--reply-to", "1", "--mention", "alice", "--message", "explicit"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("implicit-mention").not());
 
     // (c) reply-to seq does not exist
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "99", "ghost reply"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--reply-to", "99", "--message", "ghost reply"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("implicit-mention").not());
@@ -992,7 +1001,7 @@ fn validate_type_mismatch_format_error() {
     // S-VAL-06: a profile file validated --type post -> format error
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("alice.md");
-    cmd().args(["profile", "create", path.to_str().unwrap(), "alice"]).assert().success();
+    cmd().args(["profile", "create", path.to_str().unwrap(), "--name", "alice"]).assert().success();
     let actual = dir.path().join("alice.profile.md");
 
     cmd()
@@ -1002,17 +1011,21 @@ fn validate_type_mismatch_format_error() {
         .stderr(predicate::str::contains("error format:"));
 }
 
-// --- `--` boundary ---
+// --- dash-headed bodies (v0.6: direct via --message, allow_hyphen_values) ---
 
 #[test]
-fn dash_body_with_double_dash_send_and_edit() {
-    // S-SEND-07 / S-EDIT-05: body starting with '-' placed after `--`
+fn dash_body_direct_via_message_send_and_edit() {
+    // S-SEND-10 / S-EDIT-05 (tdd 1b-B flip): a body starting with '-' is
+    // passed DIRECTLY via --message. PINNED DEPENDENCY: this test relies on
+    // `allow_hyphen_values = true` on --message for BOTH post send and
+    // post edit; do not remove that attribute without flipping this case.
+    // The v0.5 `--` boundary form is retired.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--", "-fix flag text"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "-fix flag text"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok post.send"));
@@ -1024,7 +1037,7 @@ fn dash_body_with_double_dash_send_and_edit() {
         .stdout(predicate::str::contains("-fix flag text"));
 
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "alice", "2", "--", "-edited dash"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "2", "--message", "-edited dash"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok post.edit"));
@@ -1037,20 +1050,22 @@ fn dash_body_with_double_dash_send_and_edit() {
 }
 
 #[test]
-fn dash_body_without_double_dash_is_usage() {
-    // S-SEND-14 (NF-2): clap treats -fix as an unknown flag -> usage exit 2,
-    // fix teaches `--`, example shows the `--` boundary form
+fn bare_dash_token_teaches_message_flag() {
+    // S-SEND-11 (tdd 1b-B flip): a bare dash-headed token (not handed to
+    // --message) is a clap unknown-argument usage error (exit 2); the fix
+    // guides the value into --message and the canonical example shows the
+    // `--message "-fix flag text"` form.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "-fix flag text"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "-fix", "flag", "text"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("--"))
-        .stderr(predicate::str::contains("paperwork post send standup.post.md alice -- \"-fix flag text\""));
+        .stderr(predicate::str::contains("pass it via --message"))
+        .stderr(predicate::str::contains("--message \"-fix flag text\""));
 }
 
 // --- NF-3 supplementary cases ---
@@ -1079,12 +1094,12 @@ fn post_send_title_ignored_on_existing_thread() {
     let path = dir.path().join("t.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--title", "First Title", "first"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--title", "First Title", "--message", "first"])
         .assert()
         .success();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--title", "Second Title", "second"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--title", "Second Title", "--message", "second"])
         .assert()
         .success();
 
@@ -1106,7 +1121,7 @@ fn profile_create_missing_name_usage() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"))
-        .stderr(predicate::str::contains("paperwork profile create agents/alice alice --model gpt-4o"));
+        .stderr(predicate::str::contains("paperwork profile create agents/alice --name alice --model gpt-4o"));
 }
 
 #[test]
@@ -1133,24 +1148,24 @@ fn brief_add_remove_basename_mapping() {
     std::fs::create_dir(&src_dir).unwrap();
     std::fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
 
-    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "B"]).assert().success();
+    cmd().args(["brief", "create", brief_path.to_str().unwrap(), "--title", "B"]).assert().success();
 
     cmd()
-        .args(["brief", "add", brief_path.to_str().unwrap(), "src/main.rs"])
+        .args(["brief", "add", brief_path.to_str().unwrap(), "--entry", "src/main.rs"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok brief.add"));
 
     // remove by the ORIGINAL path misses (stored title is the basename)
     cmd()
-        .args(["brief", "remove", brief_path.to_str().unwrap(), "src/main.rs"])
+        .args(["brief", "remove", brief_path.to_str().unwrap(), "--entry-title", "src/main.rs"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error not-found:"));
 
     // remove by basename succeeds
     cmd()
-        .args(["brief", "remove", brief_path.to_str().unwrap(), "main.rs"])
+        .args(["brief", "remove", brief_path.to_str().unwrap(), "--entry-title", "main.rs"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok brief.remove"));
@@ -1226,7 +1241,7 @@ fn flag_inventory_matches_spec() {
         let out = cmd().args(["post", "send", "--help"]).assert().success();
         String::from_utf8_lossy(&out.get_output().stdout).to_string()
     };
-    for flag in ["--stdin", "--reply-to", "--mention"] {
+    for flag in ["--author", "--message", "--stdin", "--reply-to", "--mention"] {
         assert!(send_help.contains(flag), "post send must keep {}", flag);
     }
     assert!(!send_help.contains("--from"), "post send must not keep --from");
@@ -1253,7 +1268,9 @@ fn flag_inventory_matches_spec() {
         String::from_utf8_lossy(&out.get_output().stdout).to_string()
     };
     assert!(profile_create_help.contains("--model"), "profile create must keep --model");
-    assert!(!profile_create_help.contains("--name"), "profile create must not keep --name");
+    // v0.6: --name is re-legalized as the required named flag (was the v0.5
+    // positional NAME slot).
+    assert!(profile_create_help.contains("--name"), "profile create must gain --name");
 
     let brief_create_help = {
         let out = cmd().args(["brief", "create", "--help"]).assert().success();
@@ -1316,39 +1333,42 @@ fn ascii_output_contract_guard() {
 }
 
 #[test]
-fn send_body_and_stdin_mutually_exclusive() {
-    // S-SEND-04 (B4): positional body + --stdin -> validation error, exit 1
+fn send_message_and_stdin_conflict_is_usage() {
+    // S-SEND-07 (tdd 1b-C flip): --message + --stdin -> clap conflicts_with
+    // -> usage exit 2 (was v0.5 validation exit 1); no file write.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "body", "--stdin"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "body", "--stdin"])
         .assert()
-        .code(1)
-        .stderr(predicate::str::contains("error validation:"))
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
         .stderr(predicate::str::contains("--stdin"));
 }
 
 #[test]
-fn send_missing_body_no_stdin_is_validation() {
-    // S-SEND-05 (standalone): PATH + NAME but no body/--stdin -> validation
+fn send_missing_message_no_stdin_is_usage() {
+    // S-SEND-06 (tdd 1b-C flip): PATH + --author but neither --message nor
+    // --stdin -> clap required_unless_present -> usage exit 2 (was v0.5
+    // validation exit 1).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice"])
         .assert()
-        .code(1)
-        .stderr(predicate::str::contains("error validation:"))
-        .stderr(predicate::str::contains("paperwork post send"));
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--message <MESSAGE>"));
 }
 
 #[test]
 fn edit_triple_guardrail_cli() {
     // S-EDIT-02: wrong sender / not most recent / not final -> not-allowed,
-    // examples carry the v0.5 positional grammar
+    // examples carry the v0.6 named grammar
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     let mut content = thread_message(1, "alice", "all", None, &[], "first");
@@ -1358,7 +1378,7 @@ fn edit_triple_guardrail_cli() {
 
     // (a) wrong sender: #3 was sent by bob
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "alice", "3", "x"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "3", "--message", "x"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error not-allowed:"))
@@ -1367,7 +1387,7 @@ fn edit_triple_guardrail_cli() {
 
     // (b) not sender's most recent: alice's last is #2
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "alice", "1", "x"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "1", "--message", "x"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error not-allowed:"))
@@ -1375,7 +1395,7 @@ fn edit_triple_guardrail_cli() {
 
     // (c) not final: #2 is alice's latest but bob's #3 ends the thread
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "alice", "2", "x"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "2", "--message", "x"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error not-allowed:"))
@@ -1423,14 +1443,14 @@ fn single_letter_aliases_work() {
 
     let profile_path = dir.path().join("a.md");
     cmd()
-        .args(["p", "create", profile_path.to_str().unwrap(), "alice"])
+        .args(["p", "create", profile_path.to_str().unwrap(), "--name", "alice"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok profile.create"));
 
     let brief_path = dir.path().join("b.md");
     cmd()
-        .args(["b", "create", brief_path.to_str().unwrap(), "B"])
+        .args(["b", "create", brief_path.to_str().unwrap(), "--title", "B"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("ok brief.create"));
@@ -1490,7 +1510,7 @@ fn implicit_mention_persisted_to_file() {
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "reply"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--reply-to", "1", "--message", "reply"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("implicit-mention: alice"));
@@ -1515,13 +1535,13 @@ fn post_send_to_and_participants_flags_removed() {
     let path = dir.path().join("directed.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--to", "charlie", "Hi"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--to", "charlie", "--message", "Hi"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"));
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--participants", "bob,charlie", "Hi"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--participants", "bob,charlie", "--message", "Hi"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("error usage:"));
@@ -1536,7 +1556,7 @@ fn post_send_mention_injects_body_tokens() {
     let path = dir.path().join("mention.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "charlie,dave", "hello team"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--mention", "charlie,dave", "--message", "hello team"])
         .assert()
         .success()
         .stdout(predicate::str::contains("seq: 1"));
@@ -1569,7 +1589,7 @@ fn post_send_mention_rejects_malformed_values() {
 
     // 1. reply-shaped value (#<digits>) belongs to --reply-to, not --mention
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "#5", "hello"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--mention", "#5", "--message", "hello"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("error validation:"))
@@ -1577,14 +1597,14 @@ fn post_send_mention_rejects_malformed_values() {
 
     // 2. whitespace inside the value would be truncated by the token scan
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "two words", "hello"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--mention", "two words", "--message", "hello"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("error validation:"));
 
     // 3. mentioning the sender itself is silently dropped by derivation
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "alice", "hello"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--mention", "alice", "--message", "hello"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("error validation:"));
@@ -1600,12 +1620,12 @@ fn post_send_reply_to_injects_body_tokens() {
     let path = dir.path().join("reply.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "first"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "first"])
         .assert()
         .success();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "agreed"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--reply-to", "1", "--message", "agreed"])
         .assert()
         .success()
         .stdout(predicate::str::contains("seq: 2"));
@@ -1639,19 +1659,19 @@ fn post_send_reply_token_dedup() {
     let path = dir.path().join("dedup.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "first"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "first"])
         .assert()
         .success();
 
     // Self-reply: only the `@#1` token, no `@alice`
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--reply-to", "1", "follow-up"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--reply-to", "1", "--message", "follow-up"])
         .assert()
         .success();
 
     // Reply + explicit mention of the same sender: single `@alice` token
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "--reply-to", "1", "--mention", "alice,alice", "also this"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--reply-to", "1", "--mention", "alice,alice", "--message", "also this"])
         .assert()
         .success();
 
@@ -1670,7 +1690,7 @@ fn post_send_oversized_body_after_injection() {
     // Delivered via --stdin to stay under the OS command-line length limit.
     let huge = "a".repeat(65 * 1024);
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--mention", "bob", "--stdin"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--mention", "bob", "--stdin"])
         .write_stdin(huge)
         .assert()
         .failure()
@@ -1684,11 +1704,11 @@ fn post_read_plain_no_preamble() {
     let path = dir.path().join("plain.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "--title", "Plain Check", "one"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--title", "Plain Check", "--message", "one"])
         .assert()
         .success();
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "two"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--message", "two"])
         .assert()
         .success();
 
@@ -1718,7 +1738,7 @@ fn post_send_appends_to_file_missing_trailing_newline() {
     .unwrap();
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "bob", "second"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "bob", "--message", "second"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ok post.send"))
@@ -1739,23 +1759,25 @@ fn post_send_appends_to_file_missing_trailing_newline() {
 }
 
 #[test]
-fn post_edit_missing_body_example_shows_edit_form() {
-    // Review F3: the one-retry example must match the failing command
-    // (edit previously showed a send-shaped example).
+fn post_edit_missing_message_is_usage() {
+    // Review F3 flipped (tdd 1b): missing body channel is now caught by clap
+    // (required_unless_present) as usage exit 2; the envelope example is the
+    // edit-shaped v0.6 canonical form (never a send-shaped example).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("thread.md");
 
     cmd()
-        .args(["post", "send", path.to_str().unwrap(), "alice", "first"])
+        .args(["post", "send", path.to_str().unwrap(), "--author", "alice", "--message", "first"])
         .assert()
         .success();
 
     cmd()
-        .args(["post", "edit", path.to_str().unwrap(), "alice", "1"])
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "1"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("example: paperwork post edit"))
-        .stderr(predicate::str::contains("example: paperwork post send").not());
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("paperwork post edit"))
+        .stderr(predicate::str::contains("paperwork post send").not());
 }
 
 // --- Format v2 validate pipeline (seq / fence / heuristic / empty) ---
@@ -1881,4 +1903,108 @@ fn validate_suspected_header_multi_space_warning() {
         .stdout(predicate::str::contains("ok validate"))
         .stdout(predicate::str::contains("suspected message header: ##  #1 alice"))
         .stdout(predicate::str::contains("expected format: ## #<seq> <sender> (<timestamp>)"));
+}
+
+// =====================================================================
+// v0.6 new cases (tdd §4)
+// =====================================================================
+
+#[test]
+fn short_forms_equivalent_to_long_flags() {
+    // S-SEND-02 / S-SHORT-01: -a / -m are verbatim equivalents of
+    // --author / --message (F3: the short set is exactly {-a, -m, -q}).
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "-a", "alice", "-m", "short form body"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok post.send"))
+        .stdout(predicate::str::contains("seq: 1"));
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "-a", "alice", "--seq", "1", "-m", "short form edit"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok post.edit"));
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("short form edit"));
+}
+
+#[test]
+fn send_missing_author_is_usage() {
+    // S-SEND-05: --message given but --author missing -> usage exit 2
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--message", "body"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains("--author <AUTHOR>"));
+}
+
+#[test]
+fn edit_stdin_only_succeeds() {
+    // S-EDIT-04 boundary: --stdin satisfies the body channel without
+    // --message (required_unless_present).
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "edit", path.to_str().unwrap(), "--author", "alice", "--seq", "1", "--stdin"])
+        .write_stdin("stdin edit body")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok post.edit"));
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("stdin edit body"));
+}
+
+#[test]
+fn read_mention_has_no_short_form() {
+    // S-READ-04 (F3): the short set is exactly {-a, -m, -q}; read filters
+    // never gain short forms.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &["bob"], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "-m", "bob"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--mention", "bob"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("showing: 1/1"));
+}
+
+#[test]
+fn send_empty_author_is_validation() {
+    // S-SEND-18: whitespace-only --author value -> validation exit 1
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args(["post", "send", path.to_str().unwrap(), "--author", "   ", "--message", "body"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("--author"));
 }
