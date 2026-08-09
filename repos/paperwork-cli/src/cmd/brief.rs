@@ -170,6 +170,19 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
             // Optional single-entry filter (progressive reading, third
             // tier, spec cli-grammar-v0.6 §3.5): a hit is emitted with the
             // --full field set regardless of --full; a miss is not-found.
+            // An empty/whitespace-only --entry-title is refused as
+            // validation (mirrors the post send empty-value precedent):
+            // an empty key is "no key", not a miss.
+            if let Some(wanted) = entry_title.as_deref() {
+                if wanted.trim().is_empty() {
+                    return Err(paperwork_core::PaperworkError::Validation {
+                        message: "entry title (--entry-title) is empty".to_string(),
+                        fix: "provide a non-empty --entry-title value".to_string(),
+                        example: format!("paperwork brief read {} --entry-title main.rs", path.display()),
+                    }
+                    .into());
+                }
+            }
             let entries: Vec<&paperwork_core::ManifestEntry> = match entry_title.as_deref() {
                 Some(wanted) => {
                     let hits: Vec<&paperwork_core::ManifestEntry> = manifest

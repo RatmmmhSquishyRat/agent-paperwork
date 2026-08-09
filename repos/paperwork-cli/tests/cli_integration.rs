@@ -2486,8 +2486,11 @@ fn short_form_whitelist_is_exact() {
     for args in [
         // --seq
         vec!["post", "edit", path.to_str().unwrap(), "-s", "1"],
-        // --stdin
-        vec!["post", "send", path.to_str().unwrap(), "-S", "body"],
+        // --stdin (bool flag: probe carries --author/--message so a future
+        // accidental short form lands in a conflicts branch the assertions
+        // can catch, not the generic UnexpectedArgument branch — review
+        // Kim M-2 false-positive fix)
+        vec!["post", "send", path.to_str().unwrap(), "--author", "a", "--message", "m", "-S"],
         // --title
         vec!["brief", "create", path.to_str().unwrap(), "-t", "T"],
         // --to
@@ -2536,6 +2539,8 @@ fn short_form_whitelist_is_exact() {
         vec!["post", "read", path.to_str().unwrap(), "-P"],
         // --reply-to (post send side)
         vec!["post", "send", path.to_str().unwrap(), "--author", "a", "--message", "m", "-r", "1"],
+        // --reply-to (post read side, completeness review Ray m-1)
+        vec!["post", "read", path.to_str().unwrap(), "-r", "1"],
         // --mention (post read side)
         vec!["post", "read", path.to_str().unwrap(), "-M", "alice"],
     ] {
@@ -2622,9 +2627,13 @@ fn contacts_remove_success() {
         .args(["contacts", "remove", path.to_str().unwrap(), "--profile", "alice.profile.md"])
         .assert()
         .code(0)
-        .stdout(predicate::str::contains("ok contacts.remove"))
-        .stdout(predicate::str::contains("alice.profile.md ->"))
-        .stdout(predicate::str::contains("contacts: "))
+        // Verbatim ok first line + verbatim field values (completeness
+        // review Ray m-2: fragments alone under-pin the envelope shape).
+        .stdout(predicate::str::contains(format!(
+            "ok contacts.remove alice.profile.md -> {}",
+            path.display()
+        )))
+        .stdout(predicate::str::contains(format!("contacts: {}", path.display())))
         .stdout(predicate::str::contains("removed: alice.profile.md"));
 
     let content = std::fs::read_to_string(&path).unwrap();
@@ -2881,6 +2890,16 @@ fn contacts_update_nonexistent_new_is_silent_success() {
 
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("- [carol](carol)"), "fallback label + destination stored verbatim");
+
+    // bdd S-CONTACTS-14 closing clause (completeness review Ray m-3): the
+    // next contacts read shows the unreadable-profile tolerance form for
+    // the non-existent NEW destination.
+    cmd()
+        .args(["contacts", "read", path.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok contacts.read 1 contacts"))
+        .stdout(predicate::str::contains("carol: (unreadable)"));
 }
 
 /// Fixture: a brief with two entries (main.rs with regex/note, lib.rs bare).
@@ -3120,4 +3139,53 @@ fn profile_edit_concurrent_disjoint_fields_union() {
         .args(["validate", prof.to_str().unwrap(), "--type", "profile"])
         .assert()
         .code(0);
+}
+
+#[test]
+fn empty_key_values_are_refused_as_validation() {
+    // F1 (correctness review Kim M-1 + QA BUG-1): an empty/whitespace-only
+    // key is "no key", refused as validation exit 1 — mirroring the post
+    // send empty --author/--message precedent. Before the guard, contacts
+    // add --profile "" silently wrote the unparseable bullet `- []()`
+    // (silent data corruption).
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts_cli(&dir, "Team", &["alice.profile.md"]);
+    let before = std::fs::read(&path).unwrap();
+
+    // contacts add --profile ""
+    cmd()
+        .args(["contacts", "add", path.to_str().unwrap(), "--profile", ""])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("profile path (--profile) is empty"))
+        .stderr(predicate::str::contains("provide a non-empty --profile value"))
+        .stderr(predicate::str::contains("example: paperwork contacts add"));
+
+    // contacts update --new-profile "" (OLD valid)
+    cmd()
+        .args([
+            "contacts", "update", path.to_str().unwrap(),
+            "--profile", "alice.profile.md", "--new-profile", "   ",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("new profile path (--new-profile) is empty"))
+        .stderr(predicate::str::contains("provide a non-empty --new-profile value"))
+        .stderr(predicate::str::contains("example: paperwork contacts update"));
+
+    // brief read --entry-title ""
+    let brief = setup_brief_cli(&dir);
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap(), "--entry-title", ""])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("entry title (--entry-title) is empty"))
+        .stderr(predicate::str::contains("provide a non-empty --entry-title value"))
+        .stderr(predicate::str::contains("example: paperwork brief read"));
+
+    // No file was touched by any refused call.
+    assert_eq!(std::fs::read(&path).unwrap(), before, "refused empty-key calls must not write");
 }
