@@ -337,3 +337,82 @@ fn multithread_concurrent_add_remove_loses_no_entries() {
     let want: BTreeSet<String> = (n / 2..n).map(|i| format!("p{}.profile.md", i)).collect();
     assert_eq!(got, want, "remaining entry set must equal the expected set");
 }
+
+// --- empty-key validation guard (review Kim M-1 / QA BUG-1) ---
+
+#[test]
+fn contacts_add_empty_profile_is_validation_error() {
+    // Library-direct guard: an empty/whitespace-only profile path is
+    // refused before any file access (previously it silently wrote the
+    // unparseable bullet `- []()`).
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts(&dir, "Core Team", &["alice.profile.md"]);
+    let before = std::fs::read(&path).unwrap();
+
+    for empty in ["", "   "] {
+        let err = contacts_add(&path, empty).unwrap_err();
+        match err {
+            PaperworkError::Validation { message, .. } => {
+                assert_eq!(message, "profile path (--profile) is empty");
+            }
+            other => panic!("expected Validation, got {:?}", other),
+        }
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "refused call must not write");
+    assert_eq!(contacts_read(&path).unwrap().len(), 1);
+}
+
+#[test]
+fn contacts_update_empty_keys_are_validation_errors() {
+    // Both --profile and --new-profile are guarded at the core entry.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts(&dir, "Core Team", &["alice.profile.md"]);
+    let before = std::fs::read(&path).unwrap();
+
+    let err = contacts_update(&path, "  ", "carol.profile.md").unwrap_err();
+    match err {
+        PaperworkError::Validation { message, .. } => {
+            assert_eq!(message, "profile path (--profile) is empty");
+        }
+        other => panic!("expected Validation, got {:?}", other),
+    }
+
+    let err = contacts_update(&path, "alice.profile.md", "").unwrap_err();
+    match err {
+        PaperworkError::Validation { message, .. } => {
+            assert_eq!(message, "new profile path (--new-profile) is empty");
+        }
+        other => panic!("expected Validation, got {:?}", other),
+    }
+
+    assert_eq!(std::fs::read(&path).unwrap(), before, "refused calls must not write");
+}
+
+// --- lock helper no-change skip (review Kim m-1 / Oscar M-2) ---
+
+#[test]
+fn idempotent_add_keeps_bytes_and_mtime_stable() {
+    // The locked helper skips truncate+rewrite when the closure returns
+    // unchanged content: an idempotent add must be a true zero-write
+    // (bytes AND mtime stable), restoring the pre-lock baseline semantics.
+    let dir = TempDir::new().unwrap();
+    let path = setup_contacts(&dir, "Core Team", &["alice.profile.md"]);
+
+    let meta_before = std::fs::metadata(&path).unwrap();
+    let bytes_before = std::fs::read(&path).unwrap();
+    let mtime_before = meta_before.modified().unwrap();
+
+    contacts_add(&path, "alice.profile.md").unwrap();
+
+    let meta_after = std::fs::metadata(&path).unwrap();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes_before,
+        "idempotent add must keep file bytes identical"
+    );
+    assert_eq!(
+        meta_after.modified().unwrap(),
+        mtime_before,
+        "idempotent add must not rewrite the file (mtime must stay stable)"
+    );
+}

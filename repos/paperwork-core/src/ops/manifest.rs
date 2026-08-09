@@ -84,6 +84,20 @@ pub fn brief_add_entry(
         });
     }
 
+    // Pre-compute the entry file hash OUTSIDE the lock (impact review
+    // Oscar m-1): the exclusive critical section must only read-modify-write
+    // the locked brief file itself, never external files.
+    // Resolve entry file path: try as-is (CWD-relative) first, then relative to brief's parent
+    let entry_as_given = Path::new(entry_path);
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    let abs_entry_path = if entry_as_given.exists() {
+        entry_as_given.to_path_buf()
+    } else {
+        base_dir.join(entry_path)
+    };
+
+    let file_hash = hash::hash_file(&abs_entry_path)?;
+
     locked_read_modify_write(path, |content| {
         let mut manifest = parse_manifest(&content)?;
 
@@ -102,17 +116,6 @@ pub fn brief_add_entry(
                 example: format!("paperwork brief remove {} --entry-title main.rs", path.display()),
             });
         }
-
-        // Resolve entry file path: try as-is (CWD-relative) first, then relative to brief's parent
-        let entry_as_given = Path::new(entry_path);
-        let base_dir = path.parent().unwrap_or(Path::new("."));
-        let abs_entry_path = if entry_as_given.exists() {
-            entry_as_given.to_path_buf()
-        } else {
-            base_dir.join(entry_path)
-        };
-
-        let file_hash = hash::hash_file(&abs_entry_path)?;
 
         let groups = regex.map(extract_regex_groups).unwrap_or_default();
 

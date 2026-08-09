@@ -28,7 +28,10 @@ use crate::error::{PaperworkError, Result};
 /// The closure receives the current file content (read through the locked
 /// handle) and returns either the new content to rewrite, or an error.
 /// Error paths unlock before returning; the file is only rewritten when the
-/// closure returns `Ok`.
+/// closure returns `Ok` and the new content differs from the original
+/// byte-for-byte — an unchanged result skips the truncate + rewrite entirely
+/// (keeps mtime stable and removes the no-op crash window, restoring the
+/// pre-lock zero-write idempotency semantics of the callers).
 pub fn locked_read_modify_write<F>(path: &Path, modify: F) -> Result<()>
 where
     F: FnOnce(String) -> Result<String>,
@@ -40,7 +43,7 @@ where
         .map_err(|e| PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
-            fix: "check file permissions".to_string(),
+            fix: "check that the target path is writable".to_string(),
             example: String::new(),
         })?;
 
@@ -72,6 +75,9 @@ where
         });
     }
 
+    // Keep a snapshot for the no-change comparison (content is moved into
+    // the closure below).
+    let original = content.clone();
     let new_content = match modify(content) {
         Ok(c) => c,
         Err(e) => {
@@ -80,13 +86,24 @@ where
         }
     };
 
+    // No-op: content unchanged -> skip truncate + rewrite (zero write).
+    if new_content == original {
+        file.unlock().map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
+        })?;
+        return Ok(());
+    }
+
     // Rewrite entire file (truncate + write within the lock).
     if let Err(e) = file.set_len(0) {
         file.unlock().ok();
         return Err(PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
-            fix: "check file permissions".to_string(),
+            fix: "check that the target path is writable".to_string(),
             example: String::new(),
         });
     }
@@ -104,7 +121,7 @@ where
         return Err(PaperworkError::IoContext {
             path: path.to_path_buf(),
             source: e,
-            fix: "check disk space and file permissions".to_string(),
+            fix: "check that the target path is writable".to_string(),
             example: String::new(),
         });
     }
