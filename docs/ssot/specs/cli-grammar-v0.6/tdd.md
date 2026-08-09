@@ -13,8 +13,8 @@
 
 ## 0. 基线与行号约定
 
-- 测试基线为 **cli-ux-v0.5 分支 + format-v2 工作树变更的合并结果**（v0.5 位置文法 + post create 删除 + send 建线程载荷已就位）；实施第一步即执行全量盘点（检索命令见 §2 末）。
-- **勘误（闭合复核 NF-1 定点修复）**：本节原文「本文行号以合并后基线实测为准」失实：合并后基线尚不存在（impl_plan 步骤(0) 合并为编排层未来前置步骤）。§1b 行号基线更正为 **cli-ux-v0.5 worktree（agent-paperwork-wt-cliux，HEAD 70f7e43，git 干净）逐行实测**；实施时若基线变化（合并完成后）须重新盘点。
+- 测试基线为 **合并提交 a07ad4c 落盘的合并基线**（cli-ux-v0.5 的 v0.5.0 发布形态 + master format-v2：v0.5 位置文法 + post create 删除 + send `--title` 建线程载荷 + core v2 格式；基线事实链见 design §11）。
+- **勘误（基线合并后重盘点）**：本节原文以 cli-ux-v0.5 worktree（HEAD 70f7e43）为 §1b 行号基线；合并提交 a07ad4c 落盘后该行号基线失效，§1b 已按合并后基线（cli_integration.rs 1885 行、main.rs 355 行）逐行实测全量重盘点，见 §1b 现行表。
 - v0.5 tdd 的 29 处行号清单基于 v0.4 基线，已随 v0.5 实施消耗完毕，不构成本文行号依据。
 
 ## 1. 需改写的 v0.5 位置文法调用点（按类清单）
@@ -42,81 +42,90 @@ rg -n "\"(send|edit|create|add|remove)\"" repos/paperwork-cli/tests/cli_integrat
 
 - **盘点输出过滤规则（rework 补录 Quinn minor m-3）**：命中行需人工甄别，仅「参数层携带位置 NAME/BODY/主载荷」的调用点属改写范围；命中但属于断言字符串、错误文案断言、注释的用例不属改写而属 §1b 语义翻转或 §3 冻结保留甄别对象。core 层 14 处 example 口径同理：14 处为「需改写文案」口径（v0.5 rework 实测盘净），非全量命中数。
 
-## 1b. 断言语义翻转点清单（rework 补录 Quinn M-3；闭合复核 NF-1 以实测全量重做，实施第三步处理）
+## 1b. 断言语义翻转点清单（rework 补录 Quinn M-3；闭合复核 NF-1 以实测全量重做；基线合并后按 a07ad4c 全量重盘点，实施第四步处理）
 
-**行号口径（表头注明）**：本清单全部行号为 **cli-ux-v0.5 worktree（agent-paperwork-wt-cliux，分支 cli-ux-v0.5，HEAD 70f7e43，git 干净）** 内 `repos/paperwork-cli/tests/cli_integration.rs`（1471 行）与 `repos/paperwork-cli/src/main.rs`（355 行）逐行实测值，逐行经行号定位核验后写入；实施时若基线变化（impl_plan 步骤(0) 合并完成后）须重新盘点，禁止沿用本表行号。（本表前一版本行号与语义映射系未经实测填报，经闭合复核逐行核验无一吻合，已按实测全量重做并勘误，见 §0 勘误注记与闭合复核报告 NF-1。）
+**行号口径（表头注明）**：本清单全部行号为 **合并基线（提交 a07ad4c，分支 cli-grammar-v0.6，worktree agent-paperwork-wt-v06grammar）** 内 `repos/paperwork-cli/tests/cli_integration.rs`（1885 行）与 `repos/paperwork-cli/src/main.rs`（355 行）逐行实测值；前一版行号基于 cli-ux-v0.5 worktree（HEAD 70f7e43），随合并失效，已整体作废重盘。
 
 v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽收窄为仅 PATH、post create 随 format-v2 删除后，下列点位的**断言语义本身**需翻转或失效（非仅参数层改写）。处置方式图例：改写=用例保留但断言/触发器换新；翻转=断言方向反转（负翻正、validation 翻 usage、usage 翻成功）；删除=用例整体废止（由 §4 新用例取代或随命令删除）。
 
 ### 1b-A 再合法化 flag 触发器失效（旧文法 usage 教学用例的触发 flag 在 v0.6 变合法）
 
-| 实测行号 | 测试函数 | 现行断言语义（v0.5） | v0.6 目标语义 | 处置 |
+| 实测行号 | 测试函数 | 现行断言语义（合并基线，v0.5 文法） | v0.6 目标语义 | 处置 |
 |---|---|---|---|---|
-| L457 | usage_old_grammar_profile_create_name | `profile create <PATH> --name alice` -> `.code(2)` + error usage + example 断言（L467 "paperwork profile create agents/alice alice"） | `--name` 再合法化为必填 flag，该调用翻转为 exit 0 成功，`.code(2)` 必红且不可只改参数层修复 | 改写：触发器换为 v0.5 位置文法形态（`profile create <PATH> alice` 多余位置参数 -> usage exit 2）或删除并入 S-PROF-03；example 断言随 canonical_example 换新（新形态含 --name，L467 断言串不再被包含，须同步） |
-| L471 | usage_old_grammar_brief_add_entry | `brief add <PATH> --entry e.txt` -> `.code(2)` usage | `--entry` 再合法化为必填 flag，翻转为 exit 0 成功 | 同上：改触发器为 v0.5 位置文法形态或删除并入 S-BRIEF-04 |
-| L486 | usage_old_grammar_contacts_add_profile | `contacts add <PATH> --profile x.profile.md` -> `.code(2)` usage | `--profile` 再合法化为必填 flag，翻转为 exit 0 成功 | 同上：改触发器或删除并入 S-CONTACTS-04 |
-| L501 | usage_old_grammar_post_edit_seq | `post edit <PATH> --seq 1 --from alice new` -> `.code(2)` usage | `--seq` 再合法化后用例仅靠未知 `--from` 维持 usage exit 2，语义与用例名（旧文法 --seq）脱节 | 改写：用例改名并改触发器为仍非法的 flag（--from 作身份），并入 S-SEND-13 迁移链；L512 example 断言随文法换新 |
+| L478 | usage_old_grammar_profile_create_name | `profile create <PATH> --name alice` -> `.code(2)` + error usage + example 断言（L488 "paperwork profile create agents/alice alice"） | `--name` 再合法化为必填 flag，该调用翻转为 exit 0 成功，`.code(2)` 必红且不可只改参数层修复 | 改写：触发器换为 v0.5 位置文法形态（`profile create <PATH> alice` 多余位置参数 -> usage exit 2）或删除并入 S-PROF-03；example 断言随 canonical_example 换新（新形态含 --name，L488 断言串不再被包含，须同步） |
+| L492 | usage_old_grammar_brief_add_entry | `brief add <PATH> --entry e.txt` -> `.code(2)` usage | `--entry` 再合法化为必填 flag，翻转为 exit 0 成功 | 同上：改触发器为 v0.5 位置文法形态或删除并入 S-BRIEF-04 |
+| L507 | usage_old_grammar_contacts_add_profile | `contacts add <PATH> --profile x.profile.md` -> `.code(2)` usage | `--profile` 再合法化为必填 flag，翻转为 exit 0 成功 | 同上：改触发器或删除并入 S-CONTACTS-04 |
+| L522 | usage_old_grammar_post_edit_seq | `post edit <PATH> --seq 1 --from alice new` -> `.code(2)` usage | `--seq` 再合法化后用例仅靠未知 `--from` 维持 usage exit 2，语义与用例名（旧文法 --seq）脱节 | 改写：用例改名并改触发器为仍非法的 flag（--from 作身份），并入 S-SEND-13 迁移链；L533 example 断言随文法换新 |
 
 ### 1b-B `--` 边界与 dash body 用例（v0.6 废止 `--` 边界教学）
 
-| 实测行号 | 测试函数 | 现行断言语义（v0.5） | v0.6 目标语义 | 处置 |
+| 实测行号 | 测试函数 | 现行断言语义（合并基线，v0.5 文法） | v0.6 目标语义 | 处置 |
 |---|---|---|---|---|
-| L987 | dash_body_with_double_dash_send_and_edit | `-` 开头正文置 `--` 后（L994 send、L1006 edit）-> exit 0 逐字写入 | `--message` 直传 `-` 开头值 exit 0（依赖 allow_hyphen_values，裁定 F4）；`--` 边界形态废止 | 翻转改写为 S-SEND-10 直传用例（用例注释钉住属性名） |
-| L1019 | dash_body_without_double_dash_is_usage | `send <PATH> alice "-fix flag text"` 无 `--` -> `.code(2)` usage + fix 教学 `--` + example `-- "-fix flag text"`（L1029-L1032） | 该形态在 v0.6 合法（--message allow_hyphen_values）-> exit 0 成功，用例整体翻转 | 翻转：改为 S-SEND-11 裸 `-` 开头 token（疑似误写 flag）教学用例，fix 引导 `--message` 形态 |
+| L1008 | dash_body_with_double_dash_send_and_edit | `-` 开头正文置 `--` 后（L1015 send、L1027 edit）-> exit 0 逐字写入 | `--message` 直传 `-` 开头值 exit 0（依赖 allow_hyphen_values，裁定 F4）；`--` 边界形态废止 | 翻转改写为 S-SEND-10 直传用例（用例注释钉住属性名） |
+| L1040 | dash_body_without_double_dash_is_usage | `send <PATH> alice "-fix flag text"` 无 `--` -> `.code(2)` usage + fix 教学 `--` + example `-- "-fix flag text"`（L1052-L1053） | 该形态在 v0.6 合法（--message allow_hyphen_values）-> exit 0 成功，用例整体翻转 | 翻转：改为 S-SEND-11 裸 `-` 开头 token（疑似误写 flag）教学用例，fix 引导 `--message` 形态 |
 
 ### 1b-C conflicts / required_unless_present 语义升级（validation exit 1 -> usage exit 2）
 
-| 实测行号 | 测试函数 | 现行断言语义（v0.5） | v0.6 目标语义 | 处置 |
+| 实测行号 | 测试函数 | 现行断言语义（合并基线，v0.5 文法） | v0.6 目标语义 | 处置 |
 |---|---|---|---|---|
-| L1288 | send_body_and_stdin_mutually_exclusive | 位置 body + `--stdin` 同给（L1295 args 行）-> `.code(1)` error validation | `--message` 与 `--stdin` 同给 -> clap conflicts -> usage exit 2（裁定 F2） | 翻转：exit 1 -> exit 2、validation -> usage；参数层改 `--message` + `--stdin`（S-SEND-07） |
-| L1303 | send_missing_body_no_stdin_is_validation | PATH + NAME 位置、正文与 --stdin 皆缺 -> `.code(1)` error validation | `--message`/`--stdin` 皆缺 -> clap required_unless_present -> usage exit 2（裁定 F2） | 翻转：同上（S-SEND-06） |
+| L1319 | send_body_and_stdin_mutually_exclusive | 位置 body + `--stdin` 同给（L1326 args 行）-> `.code(1)` error validation | `--message` 与 `--stdin` 同给 -> clap conflicts -> usage exit 2（裁定 F2） | 翻转：exit 1 -> exit 2、validation -> usage；参数层改 `--message` + `--stdin`（S-SEND-07） |
+| L1334 | send_missing_body_no_stdin_is_validation | PATH + NAME 位置、正文与 --stdin 皆缺（L1341 args 行）-> `.code(1)` error validation | `--message`/`--stdin` 皆缺 -> clap required_unless_present -> usage exit 2（裁定 F2） | 翻转：同上（S-SEND-06） |
+| L445 | name_body_confusion_single_string | `send <PATH> "some body text"`（单字符串落入 NAME 槽）-> `.code(1)` error validation + NAME/`--` 教学断言（L456-L458） | 位置 NAME 槽消失，该形态 -> clap 多余位置参数/缺必填 -> usage exit 2，静默写入路径不可达 | 翻转：validation -> usage；并入 S-SEND-15 混淆面消亡确认（v0.5 `--` 教学断言拆除） |
 
 ### 1b-D 缺必填 message 列表断言（NAME 位置槽消失）
 
-| 实测行号 | 测试函数 | 现行断言语义（v0.5） | v0.6 目标语义 | 处置 |
+| 实测行号 | 测试函数 | 现行断言语义（合并基线，v0.5 文法） | v0.6 目标语义 | 处置 |
 |---|---|---|---|---|
-| L628 | usage_missing_required_argument_full_message | 断言 message 含 "required arguments were not provided: <NAME>"（L643 默认信封、L654 --json 信封） | NAME 位置槽消失，必填改 `--author/--message`，缺失列表文案翻转 | 翻转：断言文案随 clap 新缺失列表（`--author <AUTHOR>`/`--message <MESSAGE>` 形态）更新 |
+| L649 | usage_missing_required_argument_full_message | 断言 message 含 "required arguments were not provided: <NAME>"（L664 默认信封、L675 --json 信封） | NAME 位置槽消失，必填改 `--author/--message`，缺失列表文案翻转 | 翻转：断言文案随 clap 新缺失列表（`--author <AUTHOR>`/`--message <MESSAGE>` 形态）更新 |
 
 ### 1b-E 帮助面负向断言与 post create 块（flag_inventory / format-v2 删除）
 
-| 实测行号 | 测试函数 | 现行断言语义（v0.5） | v0.6 目标语义 | 处置 |
+| 实测行号 | 测试函数 | 现行断言语义（合并基线，v0.5 文法） | v0.6 目标语义 | 处置 |
 |---|---|---|---|---|
-| L1224 | flag_inventory_matches_spec | 负向断言 `!profile_create_help.contains("--name")` | profile create 在 v0.6 有 `--name` 必填 flag | 翻转为正向：`profile_create_help.contains("--name")` |
-| L1244 | flag_inventory_matches_spec（post create 块，L1244-L1249） | `post create --help` 断言块：含 `--participants`（L1248）、不含 `--title`（L1249） | post create 随 format-v2 删除，整块失效 | 删除：L1244-L1249 块整体删除 |
-| L1038 | post_create_missing_title_usage | 缺 TITLE -> `.code(2)` usage + example 断言 | post create 命令删除，用例失效 | 删除 |
-| L1052 | post_create_duplicate_already_exists | 重复 post create -> `.code(1)` already-exists | post create 命令删除，用例失效 | 删除 |
-| L1424 | post_group_help_lists_verbs | group help 动词清单断言含 "create"（L1430） | post create 删除，动词清单为 {send, read, summary, edit} | 改写：清单断言去除 "create" |
+| L1223 | flag_inventory_matches_spec | 负向断言 `!profile_create_help.contains("--name")`（L1256） | profile create 在 v0.6 有 `--name` 必填 flag | 翻转为正向：`profile_create_help.contains("--name")` |
+
+注：前一版表中 flag_inventory 的 post create 块（旧 L1244-L1249）、post_create_missing_title_usage（旧 L1038）、post_create_duplicate_already_exists（旧 L1052）、post_group_help_lists_verbs 去 create（旧 L1424）四项已随合并基线消耗完毕：post create help 块已删除；前两用例分别由 post_create_removed_is_usage（L1059）与 post_send_title_ignored_on_existing_thread（L1075）取代；后者（L1455，断言 L1461-L1465）已不含 create。均不再属 §1b 处置面。
 
 ### 1b-F 迁移链用例的 example 跟随（断言语义保留、示例换新）
 
-| 实测行号 | 测试函数 | 现行断言语义（v0.5） | v0.6 目标语义 | 处置 |
+| 实测行号 | 测试函数 | 现行断言语义（合并基线，v0.5 文法） | v0.6 目标语义 | 处置 |
 |---|---|---|---|---|
-| L441 | usage_old_grammar_send_from | `send <PATH> --from alice body` -> `.code(2)` usage（`--from` 于 send 在 v0.6 仍非法，断言语义保留） | 语义不变，承担 v0.4->v0.5->v0.6 迁移链（S-SEND-13） | 改写：L453 example 断言随 canonical_example 换 v0.6 具名形态 |
+| L462 | usage_old_grammar_send_from | `send <PATH> --from alice body` -> `.code(2)` usage（`--from` 于 send 在 v0.6 仍非法，断言语义保留） | 语义不变，承担 v0.4->v0.5->v0.6 迁移链（S-SEND-13） | 改写：L474 example 断言随 canonical_example 换 v0.6 具名形态 |
 
 ### 1b-G example 断言跟随（canonical_example 换新引发的断言串更新，随 §3 冻结防线口径）
 
 | 实测行号 | 测试函数 | 现行 example 断言串 | v0.6 目标 | 处置 |
 |---|---|---|---|---|
-| L420 | usage_missing_body_post_send | "paperwork post send standup.post.md alice" | send 规范示例换具名形态（采 --message 通道，裁定 F5） | 改写断言串 |
-| L467 | usage_old_grammar_profile_create_name | "paperwork profile create agents/alice alice" | profile create 规范示例含 `--name alice` | 改写断言串 |
-| L512 | usage_old_grammar_post_edit_seq | "paperwork post edit standup.post.md alice 3" | edit 规范示例具名形态（--author/--seq/--message） | 改写断言串 |
+| L429 | usage_missing_body_post_send | "paperwork post send standup.post.md alice"（L441） | send 规范示例换具名形态（采 --message 通道，裁定 F5） | 改写断言串 |
+| L478 | usage_old_grammar_profile_create_name | "paperwork profile create agents/alice alice"（L488） | profile create 规范示例含 `--name alice` | 改写断言串 |
+| L492 | usage_old_grammar_brief_add_entry | "paperwork brief add onboarding.brief.md src/main.rs"（L503） | brief add 规范示例换 `--entry src/main.rs` 形态，contains 断言必红 | 改写断言串 |
+| L507 | usage_old_grammar_contacts_add_profile | "paperwork contacts add team.contacts.md"（L518） | contacts add 规范示例换 `--profile` 形态 | 改写断言串 |
+| L522 | usage_old_grammar_post_edit_seq | "paperwork post edit standup.post.md alice 3"（L533） | edit 规范示例具名形态（--author/--seq/--message） | 改写断言串 |
+| L1099 | profile_create_missing_name_usage | "paperwork profile create agents/alice alice --model gpt-4o"（L1109） | profile create 规范示例换 `--name` 形态 | 改写断言串 |
 
-注：L482（brief add）、L497（contacts add）的 example 断言串即现行 main.rs canonical_example 已含 `--entry`/`--profile` 形态，v0.6 不变，不入翻转清单；L408/L415、L516/L523、L530/L537 等触发样例仅位置文法改写（§1 按类清单覆盖），断言语义不变。
+注：前一版「L482（brief add）、L497（contacts add）example 断言不变」注记随重盘点勘误：合并基线 main.rs canonical_example 尚不含 `--entry`/`--profile` 形态（brief.add 示例为 `--regex` 形态 L332、contacts.add 示例为位置 profile 路径形态 L347），v0.6 换新后 L503/L518 两处 contains 断言必红，已入表。
 
 ### 1b-H main.rs 文案点位实测清单（usage_fix base 与旧 flag 教学，列入 impl_plan 步骤(3)）
 
-| 实测行号（main.rs） | 点位 | 现行文案（v0.5） | v0.6 目标 | 处置 |
+| 实测行号（main.rs） | 点位 | 现行文案（合并基线，v0.5 文法） | v0.6 目标 | 处置 |
 |---|---|---|---|---|
-| L25 | after_help Grammar 行 | `Grammar: paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]` | 位置槽仅剩 PATH；必填与可选一律具名 flag | 改写 |
-| L215 | usage_fix base 文案 | `required values are positional (PATH first; NAME second for post send/edit); see the canonical example below` | 必填改具名 flag（--author/--message/--name 等），base 重写 | 改写 |
-| L219-L221 | 长未知 flag 分支旧文法教学清单 | `pre-v0.5 grammar (--from/--seq/--title/--entry/...), give its value as a positional argument` | `--seq/--title/--entry`（及 `--name/--profile`）再合法化后出列；清单收窄为仍非法 flag（如 --from 作身份）；「give its value as a positional argument」引导随之失效 | 改写 |
+| L1-L7 | 文件头文法注释 | v0.5.0 grammar 描述 | v0.6 文法描述 | 改写 |
+| L25 | after_help Grammar 行 | `Grammar: paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]` | 位置槽仅剩 PATH；必填与可选一律具名 flag（必填段移出方括号） | 改写 |
+| L85-L90 | dash_body 判定（L87-L89）与 canonical_example 切换 | 疑似 `-` 开头 body 时 example 切 `--` 边界形态 | `--` 边界教学废止，换 `--message` 直传形态；双形态收敛后该切换可删除 | 改写 |
+| L214-L215 | usage_fix base 文案 | `required values are positional (PATH first; NAME second for post send/edit); see the canonical example below` | 必填改具名 flag（--author/--message/--name 等），base 重写 | 改写 |
+| L219-L221 | 长未知 flag 分支旧文法教学清单 | `pre-v0.5 grammar (--from/--seq/--title/--entry/...), give its value as a positional argument` | `--seq/--title/--entry`（及 `--name/--profile`）再合法化后出列；清单收窄为仍非法 flag（如 --from 作身份）；「give its value as a positional argument」引导随位置槽收窄失效 | 改写 |
 | L224-L227 | dash_body fix 分支（post.send/post.edit） | `if a body value starts with '-', place it after -- (e.g. ... alice -- "-fix flag text")` | `--message` 直传（allow_hyphen_values），`--` 边界教学废止 | 改写 |
 | L228-L231 | 其余命令 dash 值 fix 分支 | `if a value starts with '-', place it after --` | 按 v0.6 具名 flag 口径重写 | 改写 |
-| L85-L90 | dash_body 判定与 canonical_example(dash_body) 切换 | 疑似 `-` 开头 body 时 example 切 `--` 边界形态 | 直传形态下该切换废止或收窄 | 改写 |
+| L274/L314/L352 | 三级 fallback 示例 | `paperwork post send standup.post.md alice "Hello"` | 具名形态 | 改写 |
 | L279-L303 | canonical_example post send/edit 臂（L283/L288 send、L296/L301 edit，dash_body 双形态） | 位置文法 + `--` 边界形态示例 | 具名形态单一规范示例（--message 通道，F4/F5）；dash_body 双形态收敛 | 改写 |
-| L309-L312 | canonical_example post create 臂 | `paperwork post create standup "Daily Standup" --participants alice,bob` | post create 随 format-v2 删除 | 删除（含 L274/L314 fallback 引用核对） |
-| L317 | canonical_example profile create 臂 | `paperwork profile create agents/alice alice --model gpt-4o` | NAME 位置 -> `--name alice` | 改写 |
-| L1-L7 | 文件头文法注释 | v0.5.0 grammar 描述（NAME 第二位置参数等） | v0.6 文法描述 | 改写（impl_plan 步骤(1) m-4 条款已覆盖，此处登记防漏） |
+| L309-L312 | canonical_example post create 臂 | `paperwork post create standup "Daily Standup" --participants alice,bob` | post create 随 format-v2 删除 | 删除（落入 post fallback；示例串同步勘误 `--participants` 失实内容，见 design §11） |
+| L317/L325 | profile create 臂与 profile fallback | `paperwork profile create agents/alice alice --model gpt-4o` | `--name alice` 形态 | 改写 |
+| L328/L340 | brief create 臂与 brief fallback | `paperwork brief create onboarding "Codebase Onboarding" --owner alice` | `--title` 形态 | 改写 |
+| L332 | brief add 臂 | `paperwork brief add onboarding.brief.md src/main.rs --regex "fn main"` | `--entry src/main.rs` 形态 | 改写 |
+| L336 | brief remove 臂 | `paperwork brief remove onboarding.brief.md main.rs` | `--entry-title main.rs` 形态 | 改写 |
+| L343/L350 | contacts create 臂与 fallback | `paperwork contacts create team --title "Core Team"` | --title 本为 flag 形态，不变 | 保留 |
+| L347 | contacts add 臂 | `paperwork contacts add team.contacts.md agents/alice.profile.md` | `--profile agents/alice.profile.md` 形态 | 改写 |
+| L351 | validate 臂 | `paperwork validate mystery.md --type post` | 不变 | 保留 |
 
 **同源文案刷新清单（列入 impl_plan 步骤(3)）**：上表 1b-H 全部点位 + 各命令 after_help/long_about 中旧 flag 教学清单同步刷新；刷新后 cli_integration.rs 中断言跟随文案同步（1b-G），ASCII 契约防线覆盖新文案。
 
@@ -162,8 +171,7 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 | 空正文（`--message "   "`） | S-SEND-09 | `.code(1)`；`error validation:` |
 | ASCII 契约回归 | S-OUT-05 | 新增 usage 形态（缺必填 flag、conflicts、多余位置参数）纳入 stderr 逐字节 ASCII 断言 |
 | 命名政策白名单 | S-SHORT-02 | 组/动词集合精确等于 {profile,post,brief,contacts,validate}；flag 集合与 spec §4 一致；短形式集合精确等于 {-a, -m, -q}（F3）；全量无短形式负向断言 |
-| send `--to` 数字串登记（已知行为） | S-SEND-16 | exit 0；"5" 写入收件人名单（F1 类型判别例外登记，非缺陷） |
-| send 元数据 flag 既有线程静默忽略 | S-SEND-17 | exit 0；title 不变（F6 行为登记，本轮不改运行时行为） |
+| send 元数据 flag 既有线程静默忽略 | S-SEND-17 | exit 0；title 不变（F6 行为登记；基线勘误后缩减为仅 `--title`；既有用例 post_send_title_ignored_on_existing_thread L1075 已在合并基线落盘，步骤(4) 仅改参数层为具名形态） |
 | `--author` 空值 | S-SEND-18 | `.code(1)`；`error validation:` |
 | 缺 PATH（send） | S-SEND-19 | `.code(2)`；`error usage:` |
 | edit 仅 `--stdin` | S-EDIT-09 | exit 0；正文逐字为 stdin 内容 |

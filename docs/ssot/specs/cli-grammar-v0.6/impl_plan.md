@@ -18,13 +18,13 @@
 - **步骤(4)完成后**：`cargo test`（workspace 全量）+ clippy 全绿为硬门禁，后续步骤不得带红推进。
 - core 层锁/seq/格式/hash 逻辑零改动；`ops_tests.rs` 一行不改且必须全绿（越界即回滚）。
 - 输出协议冻结条款（spec §7）全程有效：ok/error 信封结构、七类 category、command 标识、JSON 既有 key 只增不改不删、纯 ASCII 输出契约。
-- **禁止触碰主工作区 repos/ 下 format-v2 并行未提交变更之外的任何文件语义**；步骤(0) 的合并由编排层统一执行，impl agent 仅在合并完成后的基线上工作。
+- **禁止触碰主工作区 repos/ 下任何文件**（format-v2 已随合并进入本 worktree 分支，主工作区仅 docs/ 允许勘误同步）；步骤(0) 的合并由编排层授权执行（已于本轮落盘，见步骤(0) 记录），impl agent 仅在合并完成后的基线上工作。
 
 ---
 
 ## 步骤(0) 基线合并与全量盘点（编排层前置，非 impl 步骤）
 
-- **内容**：将 cli-ux-v0.5 分支（v0.5 文法已实现）与 format-v2 工作树变更（post create 删除、send 增 `--title/--participants/--to`、core v2 格式）合并为实现基线；合并后执行三项盘点：
+- **内容**：将 cli-ux-v0.5 分支（v0.5.0 发布形态：位置文法 + v0.5 UX）与 master format-v2 分支（post create 删除、send 增 `--title` 建线程载荷、`--to/--participants` 已按 owner 追裁 D1/D2 删除、core v2 格式）合并为实现基线；合并由编排层授权在 worktree 内执行（合并提交 a07ad4c；文件格式与 D1/D2 行为以 format-v2 为准，CLI 参数文法以 v0.6 spec 为准叠加；基线事实链见 design §11 基线勘误记录）。合并后执行三项盘点：
   1. core example 点位：`rg -n "paperwork (post|brief|contacts|profile)" repos/paperwork-core/src`，确认 14 处清单（v0.5 基线实测值；format-v2 合并可能引入点位增减，以盘点输出为准）。**口径注明（rework 补录 Quinn minor）**：14 处为「需改写文案」口径（v0.5 rework 实测盘净），非全量命中数；命中行中属注释、断言、非 example 字符串的点位不计入改写清单；
   2. cli 集成测试调用点：`rg -n "\"(send|edit|create|add|remove)\"" repos/paperwork-cli/tests/cli_integration.rs`，输出 tdd §1 改写清单（命中行甄别规则见 tdd §1 末）；
   3. **SKILL.md 在场性盘点（rework 补录 Pete N7）**：确认仓库根 `SKILL.md` 存在且包含旧文法示例；盘点其全部命令行示例与错误自愈提示点位，输出步骤(6) 刷新清单；若盘点发现 SKILL.md 缺失或已移位，在 review 中报告并以实际在场文件为准。
@@ -49,7 +49,7 @@
   - **`allow_hyphen_values` 属性（rework 裁定 F4，硬性指令）**：send 与 edit 两处 `--message` 均设 `allow_hyphen_values = true`（否则 `-` 开头正文值被 clap 拒收，S-SEND-10 不成立）；**其余 flag 不设**：`--author` 复核结论为不需要（署名值为纯名字字符串，`-` 开头名字不在语料预期内，且设后会把误写的裸 flag 静默吞为署名值，反而削弱 S-SEND-11 教学防线）；`--seq`（u64 类型自防）、其余 flag 同理不设；
   - **example 字符串刷新为 v0.6 文法**：各 cmd 文件内全部 example（空正文、无正文、not-found、format 教学、validate 未知后缀分支等）逐处核对刷新；resolve_body 的 send/edit 示例区分机制沿用 v0.5（edit 错误给 edit 示例）；
   - **v0.5 混淆面教学条款拆除**：「若已给出正文请检查是否遗漏 NAME 槽位」提示与 `--` 边界教学文案删除（混淆面结构性消亡，spec §5 第 3 条）；裸 `-xxx` 残留的 usage fix 改为引导 `--message` 形态；
-  - 各子命令 after_help 示例换 v0.6 文法（design.md §2.1 文案为准；send/edit 不再需要 `--` 边界示例，改示范 `-` 开头 flag 值直传）；**after_help 教学要求（rework 裁定 F6）**：send after_help 需明示 `--title/--participants/--to` 为建线程元数据载荷，仅首次写入生效，对既有线程静默忽略（行为登记，本轮不改运行时行为）；并示范 `--to alice,bob` 收件人名单形态（与 read `--to` seq 上限的类型区分，F1）。
+  - 各子命令 after_help 示例换 v0.6 文法（design.md §2.1 文案为准；send/edit 不再需要 `--` 边界示例，改示范 `-` 开头 flag 值直传）；**after_help 教学要求（rework 裁定 F6，基线勘误后缩减，见 design §11）**：send after_help 需明示 `--title` 为建线程元数据载荷，仅首次写入生效，对既有线程静默忽略（行为登记，本轮不改运行时行为）；并注明 `--reply-to/--mention` 为糖衣 flag（值以 `@#N`/`@name` token 注入正文，D2/OQ-4）。原「`--to alice,bob` 收件人名单示范与三 flag 区分教学」随 `--to/--participants` 删除而废止。
 - **依赖**：步骤(1)（core example 与 cli example 文法约定须一致，以 spec §2 全表为准）。**验证**：cargo build + clippy 全绿（cli_integration 此步必然红，属门禁允许范围）。
 
 ## 步骤(3) main.rs usage 信封静态规范示例换 v0.6
@@ -61,7 +61,7 @@
 ## 步骤(4) cli_integration.rs 改写 + 新增
 
 - **文件**：`repos/paperwork-cli/tests/cli_integration.rs`
-- **内容**：按 tdd §1 改写全部 v0.5 位置文法调用点（只改参数层）；按 tdd §1b 处理断言语义翻转点（基线行号 L457/L501/L987/L1019/L1224/L1295，实施时以盘点实测校正）；tdd §3 输出协议断言一字不改；按 tdd §4 新增用例（缺必填 flag 各形态 usage exit 2 且 example 含完整必填形态、`--message`/`--stdin` conflicts usage exit 2、短形式等价（短形式集合 {-a, -m, -q}，F3）、v0.5 位置文法迁移、混淆面消亡确认、`--message` 值 `-` 开头直传无 `--`（注释钉住 allow_hyphen_values 属性依赖，F4）、`--mention` 无短形式负向断言、ASCII 契约扩展至新 usage 形态、命名政策白名单、S-SEND-16 `--to` 数字串登记（F1）、S-SEND-17 元数据 flag 静默忽略（F6）、S-SEND-18/19、S-EDIT-09、S-READ-06~09、S-OUT-06）；冻结回归用例（showing/window、implicit-mention、三级解析、别名、三档输出）改参数层后原样通过。
+- **内容**：按 tdd §1 改写全部 v0.5 位置文法调用点（只改参数层）；按 tdd §1b 处理断言语义翻转点（行号基线随合并提交 a07ad4c 失效，已按合并后基线重新盘点，以 tdd §1b 现行表为准）；tdd §3 输出协议断言一字不改；按 tdd §4 新增用例（缺必填 flag 各形态 usage exit 2 且 example 含完整必填形态、`--message`/`--stdin` conflicts usage exit 2、短形式等价（短形式集合 {-a, -m, -q}，F3）、v0.5 位置文法迁移、混淆面消亡确认、`--message` 值 `-` 开头直传无 `--`（注释钉住 allow_hyphen_values 属性依赖，F4）、`--mention` 无短形式负向断言、ASCII 契约扩展至新 usage 形态、命名政策白名单、S-SEND-17 `--title` 元数据 flag 对既有线程静默忽略（F6，基线勘误后缩减为仅 --title）、S-SEND-18/19、S-EDIT-09、S-READ-06~09、S-OUT-06）；冻结回归用例（showing/window、implicit-mention、三级解析、别名、三档输出）改参数层后原样通过。
 - **依赖**：步骤(1)(2)(3)全部完成。**验证**：cargo test 全量全绿 + clippy 全绿，这是文法落地主验证点（硬门禁生效）。
 
 ## 步骤(5) CI smoke 换 v0.6 文法

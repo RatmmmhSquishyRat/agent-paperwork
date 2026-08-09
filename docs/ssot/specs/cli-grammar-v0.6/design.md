@@ -29,7 +29,7 @@ owner 裁决三点（原文落盘见 v0.6_feedbacks.md §一）：
 
 **规则 2（必填与可选一律具名 flag）**：v0.5 规则 3（必填即位置参数）判据被 owner 裁决翻转：位置化的收益（少打 flag 名）不抵其混淆成本（错误注入矩阵第 3 行静默写入，研究文档 §3.2）。判据统一为「位置槽只留给无类型歧义的 PATH」，未来新命令无需再逐参数讨论。
 
-**规则 3（flag 唯一语义，含显式登记例外）**：同一命令内任何 flag 只有一种含义；跨命令 `--to` 为显式登记的类型判别例外（rework 裁定 F1）：post send `--to` = 收件人名单（字符串列表，format-v2 已随 0.5.0 发布，保留不改名），post read `--to` = seq 上限（u64），clap 类型强制互不混用。具名化后该规则反而强化：`--author` 与 `--message` 以 flag 名自带语义标签，agent 首次调用即可从名称推断含义（SOTA 报告参数无歧义原则）。`--to` 例外的残留混淆面（send 方向数字串静默接受为收件人名）为已知行为登记而非缺陷，见 §2.1 与 bdd S-SEND-16。
+**规则 3（flag 唯一语义）**：同一命令内任何 flag 只有一种含义。基线勘误后（见 §11）：format-v2 owner 追裁 D1/D2 删除了 send 的 `--to`/`--participants`，`--from/--to` 仅存于 post read（seq 起点/上限），全 CLI flag 恢复唯一语义的干净表述，原「跨命令 `--to` 类型判别例外」（rework 裁定 F1）随 flag 删除而消亡。具名化后该规则反而强化：`--author` 与 `--message` 以 flag 名自带语义标签，agent 首次调用即可从名称推断含义（SOTA 报告参数无歧义原则）。
 
 ### 1.3 与 v0.5_feedbacks 的冲突显式标注
 
@@ -44,7 +44,7 @@ v0.5_feedbacks §二.1（NAME 前置位置参数）与 v0_feedbacks #3.1（conte
 动线不变：**send（高频）-> read/summary（高频）-> edit（低频纠错）**（post create 已由 format-v2 删除，建线程并入 send 自动创建）。
 
 ```
-paperwork post send    <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply-to N] [--mention a,b] [--title T] [--participants a,b] [--to a,b]
+paperwork post send    <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply-to N] [--mention a,b] [--title T]
 paperwork post read    <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--limit 20]
 paperwork post summary <PATH>
 paperwork post edit    <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> | --stdin)
@@ -56,8 +56,8 @@ paperwork post edit    <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> | 
 - **`--author` 具名必填**：署名语义由 flag 名自明；缺省落 usage exit 2 且 example 展示完整必填形态，「每发必给」的 owner 意图由 clap required 强制兑现。
 - **`--message` 与 `--stdin` 二选一**：单行正文走 `--message`（flag 值直传，`-` 开头无需 `--` 边界）；多行大片内容走 `--stdin`（承接 v0_feedbacks #3.1 便于书写的精神，载体由位置槽改为管道）。互斥冲突在 clap conflicts 层判定，错误信号先于任何文件 I/O，落 usage exit 2。
 - **edit 的 `--seq` 保留具名必填 flag**：v0.5 曾将 SEQ 位置化（理由：必填即位置），本版随规则 2 回到 flag 层；SEQ 是寻址参数（选哪条），flag 名自带「序列号」语义，u64 类型错误信号明确（非数字即 usage exit 2）。
-- **read/summary 零改动**：`--from` 在 read 中为 seq 起点唯一语义；`--to` 在 read（seq 上限 u64）与 send（收件人名单）间为规则 3 登记例外（§1.2）：read 方向类型防线有效（`read --to bob` -> u64 解析失败 usage exit 2，显式信号）；send 方向无类型防线（任何字符串含数字串均为合法名字），登记为已知行为（spec §3.1，bdd S-SEND-16），本轮不改运行时行为。
-- **建线程元数据载荷 `--title/--participants/--to`（rework 裁定 F6）**：三者仅在 send 自动建线程（首次写入）时生效；对既有线程附这三个 flag 时静默忽略（format-v2 冻结语义，exit 0 且无信号）。论证：输出协议冻结（spec §7）使「加警告字段」在本版不可行，故本轮以「文档声明 + help/SKILL.md 教学 + BDD 场景钉住」三件套补偿（spec §3.1 登记、impl_plan 步骤(2) after_help 教学、bdd S-SEND-17）；可检测化（ok 信封 ignored 字段增补）需解冻输出协议，列入 §8 未来工作项。附带区分教学：`--to`（收件人名单，仅建线程）/`--participants`（参与者名单，仅建线程）/`--mention`（提及名单，每条消息生效）三个名字列表 flag 语义邻近，after_help 与 SKILL.md 须给一行区分注记（Pete C1 附带混淆）。
+- **read/summary 零改动**：`--from` 在 read 中为 seq 起点唯一语义；基线勘误后（§11）`--to` 仅存于 read（seq 上限 u64），规则 3 无例外：身份值误用由类型防线拦截（`read --to bob` -> u64 解析失败 usage exit 2，显式信号，bdd S-READ-08）。
+- **建线程元数据载荷 `--title`（rework 裁定 F6，基线勘误后仅剩一项）**：仅在 send 自动建线程（首次写入、锁内 size==0）时生效；对既有线程附该 flag 时静默忽略（format-v2 冻结语义，exit 0 且无信号，OQ-1）。论证：输出协议冻结（spec §7）使「加警告字段」在本版不可行，故本轮以「文档声明 + help/SKILL.md 教学 + BDD 场景钉住」三件套补偿（spec §3.1 登记、impl_plan 步骤(2) after_help 教学、bdd S-SEND-17）；可检测化（ok 信封 ignored 字段增补）需解冻输出协议，列入 §8 未来工作项。原 `--participants/--to` 两 flag 已随 owner 追裁 D1/D2 删除（§11），原「三名字列表 flag 区分教学」（Pete C1）相应废止；`--mention`（提及名单，糖衣 flag token 注入，每条消息生效）与 `--title`（建线程载荷）语义不再邻近，无需区分注记。
 
 错误指导样貌（example 全部为 v0.6 形态，每命令一条静态规范可执行示例，rework 裁定 F5）：
 
@@ -79,9 +79,9 @@ Examples:
   paperwork post send standup.post.md -a alice -m "Tests merged." --reply-to 2 --mention bob
   echo "multi-line body" | paperwork post send standup.post.md --author alice --stdin
   paperwork post send standup.post.md --author alice --message "-starts with dash is fine"
-  paperwork post send new-topic.post.md --author alice --message "kickoff" --to bob,carol
-  # --to (recipients, thread creation only) / --participants (participants, thread creation only) /
-  # --mention (mentions, per message): three name-list flags; the first two are ignored on existing threads.
+  paperwork post send new-topic.post.md --author alice --message "kickoff" --title "New Topic"
+  # --title (thread title, honoured on first write only, silently ignored on existing threads);
+  # --reply-to / --mention are sugar flags: their values are injected into the body as @#N / @name tokens.
 
 # post edit
 Examples:
@@ -93,7 +93,7 @@ Examples:
   paperwork post read standup.post.md --mention alice --limit 20
 ```
 
-Grammar 模板行必填段移出方括号（rework 修正，Pete N6）；send 示例补 `--to` 收件人语义演示与三 flag 区分注记（rework 裁定 F1/F6 教学要求，Pete C1）。
+Grammar 模板行必填段移出方括号（rework 修正，Pete N6）；send 示例补 `--title` 建线程载荷演示与糖衣 flag 注记（基线勘误后替换原 `--to` 收件人演示与三 flag 区分注记，见 §11）。
 
 ### 2.2 profile: create 回收具名
 
@@ -183,7 +183,7 @@ v0.5 design §1.1 四点否决论证经本轮复评全部成立；owner 裁决�
 - **错误层级提升的论证**：v0.5 该冲突在运行时判定（validation exit 1），因为位置 BODY 是否出现需解析完成后才可知；v0.6 两者皆为 flag，冲突在 clap 解析层即可判定，归入 usage 层（clap 层用法错误）更精确，且与「缺必填 flag = usage」的判据自洽。
 - **语义优先级声明**：编排层裁定「stdin 优先，同时给报 usage 错误」；实现上不存在真正的优先级分支（同时给直接拒绝），该表述的规范含义是「不得静默择一」，显式优于隐式。
 - 仅 `--stdin`：正文从 stdin 读取（行为沿用 v0.5）；仅 `--message`：flag 值即正文，trim 后为空落 validation exit 1（空正文拒绝沿用）。
-- **`-` 开头正文直传的 clap 前提（rework 裁定 F4，Quinn C-1）**：clap 4 默认 `allow_hyphen_values = false`，`--message` 后跟 `-` 开头 token 会被拒收为解析错误；故 send/edit 两处的 `--message` Arg 必须设 `allow_hyphen_values = true`，否则 bdd S-SEND-10 不可兑现（v0.5 时代该问题被 `--` 边界机制掩盖，本版废止 `--` 教学后此属性为硬前提）。副作用边界登记：`--message --stdin` 连写时 `--stdin` 会被吞为正文值，属显式输入，不另设护栏（两者同给的正确写法顺序不受影响，conflicts 判定仍对独立 token 生效）。其余 flag（`--author/--seq/--to/--participants/--mention` 等）不设该属性：值域无 `-` 开头合法形态，设置反扩大误解析面。
+- **`-` 开头正文直传的 clap 前提（rework 裁定 F4，Quinn C-1）**：clap 4 默认 `allow_hyphen_values = false`，`--message` 后跟 `-` 开头 token 会被拒收为解析错误；故 send/edit 两处的 `--message` Arg 必须设 `allow_hyphen_values = true`，否则 bdd S-SEND-10 不可兑现（v0.5 时代该问题被 `--` 边界机制掩盖，本版废止 `--` 教学后此属性为硬前提）。副作用边界登记：`--message --stdin` 连写时 `--stdin` 会被吞为正文值，属显式输入，不另设护栏（两者同给的正确写法顺序不受影响，conflicts 判定仍对独立 token 生效）。其余 flag（`--author/--seq/--title/--mention` 等）不设该属性：值域无 `-` 开头合法形态，设置反扩大误解析面。
 - **usage 信封 message 字段附带说明（Pete N5）**：clap 报错原文本已携带多余位置参数值（如 unexpected argument 'alice'），信封 message 取自 clap 渲染文本即自然携带，agent 可完成「alice -> --author alice」映射；不额外实现任何值重建（与 v0.5 F2 静态示例裁定不冲突：message 与 example 是两个字段）。
 
 ---
@@ -213,7 +213,7 @@ v0.5 design §7 遗留项裁决总表**整体沿用**，本轮不受影响：
 - 拒绝项维持拒绝：U-02（env 回退）、U-05（content-first/路径可省略）、R-08（--no-color）、F-09（正文 markdown 校验）。其中 U-05 与本轮 PATH 唯一位置参数、PATH 恒必填的规则一致。
 - v0.5 §7.4 规格模糊点裁定（usage category、implicit-mention 形态、showing/window 形态、exit_code 如实、command=usage、ensure_suffix 三级、help 英文）全部继续有效。
 - **本轮新增登记（rework 裁定 F6 与 Pete N3）**：
-  - send 元数据 flag（`--title/--participants/--to`）对既有线程静默忽略的可检测化：未来工作项为 ok 信封增补 `ignored` 字段（如 `ignored: title,participants`），需解冻输出协议（JSON 只增不改不删约束下可 additive 实现），由发布轮或后续 UX 线另行裁决；本轮仅行为登记与教学（spec §3.1、bdd S-SEND-17）。同批评估候选（Pete C1 建议(2)）：ok 信封回显收件人名单使 send `--to` 数字串误用可检测（与 S-SEND-16 已知行为登记配套），同样需解冻输出协议，本轮不实现。
+  - send 元数据 flag（基线勘误后仅 `--title`）对既有线程静默忽略的可检测化：未来工作项为 ok 信封增补 `ignored` 字段（如 `ignored: title`），需解冻输出协议（JSON 只增不改不删约束下可 additive 实现），由发布轮或后续 UX 线另行裁决；本轮仅行为登记与教学（spec §3.1、bdd S-SEND-17）。原同批评估候选（ok 信封回显收件人名单使 send `--to` 数字串误用可检测）随 `--to` flag 删除而废止。
   - `--reply-to` 指向不存在 seq 静默跳过（冻结沿用）与 Q-02 的张力：已登记 `docs/researches/ux-open-items-backlog-2026-08-08.md`，供发布轮或后续 UX 线裁决。
 
 ---
@@ -234,10 +234,33 @@ v0.5 design §7 遗留项裁决总表**整体沿用**，本轮不受影响：
 |---|---|---|
 | C1（混淆面结构性消除方向） | 采纳 | 被 owner 裁决直接越过过渡形态（NAME/BODY 双具名化）；design §7 记录在案 |
 | C2（枚举合法取值） | 不适用 | send 不与 profile/contacts 做 author 存在性校验（spec §3.1），无值域枚举需求，一句话结案 |
-| C3（同名 flag 冲突消解） | 采纳 | `--from` 冲突经具名化消解；`--to` 跨命令双语义经 rework 裁定 F1 登记为类型判别例外（spec §1.4），非完全消解但已钉住（bdd S-SEND-16/S-READ-08） |
+| C3（同名 flag 冲突消解） | 采纳 | `--from` 冲突经具名化消解；`--to` 跨命令双语义随基线勘误（§11，owner 追裁 D1/D2 删除 send `--to`）彻底消解，read 侧类型防线钉住（bdd S-READ-08） |
 | C4（输出四档） | 采纳 | `--json/--plain/-q` 与默认档冻结继承（spec §5/§7） |
 | C5 前半（SKILL.md 迁移补偿） | 采纳 | 三件套迁移教学（spec §8），SKILL.md 刷新入 impl_plan 步骤(6)，在场性盘点入步骤(0)（Pete N7） |
 | C5 后半（机器可读内省 agent-context/--help --json） | 拒绝 | 维持 v0.5 静默放弃：help 表面积与维护成本权衡，本轮不引入新内省通道 |
 | C6（词汇一致性/命名政策） | 采纳 | S-SHORT-02 命名政策白名单断言；rework 裁定 F3 收窄短形式后跨命令多义消除 |
 | C7（退出码分级细化） | 拒绝 | 退出码维持 0/1/2 三档（输出协议冻结，spec §7）；错误信息区分度由七类 category 承担 |
 | C10（example 永远可复制执行） | 采纳 | example 全具体值、禁占位符（spec §5 第 2 条、bdd S-SEND-05/S-SEND-12 断言）；rework 裁定 F5 重申每命令一条静态规范示例 |
+
+---
+
+## 11. 基线勘误记录（2026-08-09，实施期发现并裁决）
+
+本节记录 v0.6 实施期（task #14）发现的基线矛盾事实链与处置，为本目录全部文档相关条款的勘误依据。
+
+### 11.1 事实链
+
+1. v0.6 治理文档（初稿与 rework 轮）声称「format-v2 已随 0.5.0 发布、send `--to` 保留不改名」。实测证伪：v0.5.0 tag（= 70f7e43）为旧文件格式 + v0.5 位置文法，既无 format-v2 格式，也仍含 `post create`。
+2. master 的 format-v2 分支（61e1e89）自 a7ea07c 与 cli-ux-v0.5 分叉、互不为祖先；format-v2 按 owner 更晚近的显式追裁 D1/D2（见 `docs/dev/format-v2/spec.md` §5.2/§5.4/§5.7）删除了 send 的 `--to`/`--participants` flag，且 format-v2 在 master 未发布。
+3. 原 spec 依赖的「cli-ux-v0.5 + format-v2 合并基线」在勘误前不存在于任何分支；该基线由本轮实施在 worktree 内首次合并产生（cli-grammar-v0.6 分支 merge master，合并提交 a07ad4c）：文件格式与 D1/D2 行为取 master(format-v2)，CLI 参数文法取 v0.5 分支（位置文法，待步骤(2) 转 v0.6 具名文法）。
+4. v0.6 文档的「保留 `--to`/`--participants`」条款系基于 format-v2 中间态（工作树脏变更时期两 flag 曾短暂存在）的失实记载，予以勘误而非恢复 flag：恢复将违背 owner 更晚近的显式追裁（编排层 2026-08-09 裁决 B）。
+
+### 11.2 勘误处置清单
+
+- spec §1.4：删除 `--to` 跨命令例外登记，恢复「全 CLI flag 唯一语义」无例外表述。
+- spec §2/§3.1、v0.6_feedbacks §2.1/§2.4：send 签名删除 `[--participants a,b] [--to a,b]`；「format-v2 已随 0.5.0 发布」改为如实记载（0.5.0 = 旧格式 + 位置文法；format-v2 在 master 未发布；v0.6 基于两者合并基线）。
+- bdd：删除 S-SEND-16；S-SEND-17 缩减为仅 `--title` 静默忽略；新增 S-SEND-20/S-SEND-21 补齐合并基线行为（token 注入、preamble 仅 H1）；S-READ-08 改为独立类型防线场景；S-SHORT-02 清单删 `--participants`（25 -> 24 项）。
+- design §1.2/§2.1/§6/§8/§10：同步删除 `--to`/`--participants` 相关论证与教学条款。
+- impl_plan 步骤(0)：合并基线描述按本节事实链更正。
+- tdd：§1b 行号基线因合并失效，重盘点以合并后实测为准；删除 `--to`/`--participants` 相关用例映射。
+- format-v2 最终 send 形态（本基线下）：`post send <PATH> <NAME> <BODY>|--stdin [--reply-to N] [--mention a,b] [--title T]`（合并提交时点为 v0.5 位置文法；v0.6 具名化后 NAME -> `--author/-a`、BODY -> `--message/-m`）；`--reply-to`/`--mention` 以糖衣 flag 存续（值注入正文 `@#N`/`@name` token，OQ-4），无其他形态变化。

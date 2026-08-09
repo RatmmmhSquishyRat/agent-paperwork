@@ -104,17 +104,11 @@
 - **When** 执行 `paperwork post send standup.post.md "body text"`（v0.5 混淆面形态：单字符串）
 - **Then** exit 2；`error usage:`（多余位置参数；该字符串不再可能被绑定为署名）；example 为 v0.6 完整形态。v0.5 bdd S-SEND-12 的「静默写入错误 sender」路径（研究文档矩阵第 3 行）结构性不可达。
 
-### S-SEND-16 send --to 数字串静默接受为收件人名（已知行为登记，rework 裁定 F1）
-
-- **Given** `newtopic.post.md` 不存在
-- **When** 执行 `paperwork post send newtopic.post.md --author alice --message "hi" --to 5`
-- **Then** exit 0；线程被创建，"5" 作为收件人名字字符串写入线程收件人名单（send `--to` = 字符串列表，非 seq，规则 3 类型判别例外，spec §1.4）；本场景登记为已知行为而非缺陷（agent 从 read 习得的 seq 语义在 send 方向无类型防线，显式方向对照 S-READ-08）。
-
-### S-SEND-17 既有线程附建线程元数据 flag 静默忽略（冻结契约钉住，rework 裁定 F6）
+### S-SEND-17 既有线程附 --title 静默忽略（冻结契约钉住，rework 裁定 F6，基线勘误后缩减）
 
 - **Given** 存在线程文件 `standup.post.md`，标题为 `Old Title`
-- **When** 执行 `paperwork post send standup.post.md --author alice --message "new msg" --title "New Title" --participants bob --to carol`
-- **Then** exit 0；消息正常追加；标题仍为 `Old Title`，`--title/--participants/--to` 被静默忽略（仅首次写入生效，spec §3.1 行为登记；本轮不改运行时行为）。
+- **When** 执行 `paperwork post send standup.post.md --author alice --message "new msg" --title "New Title"`
+- **Then** exit 0；消息正常追加；标题仍为 `Old Title`，`--title` 被静默忽略（仅首次写入、锁内 size==0 时生效，spec §3.1 行为登记，OQ-1；本轮不改运行时行为）。基线勘误：本场景原覆盖 `--title/--participants/--to` 三 flag，`--participants/--to` 已随 owner 追裁 D1/D2 删除，场景相应缩减为仅 `--title`（原 S-SEND-16 一并删除）。
 
 ### S-SEND-18 --author 空值拒绝（validation，rework 补录 Pete N2-(1)）
 
@@ -125,6 +119,18 @@
 
 - **When** 执行 `paperwork post send --author alice --message "hi"`（v0.6 文法集内缺唯一位置参数）
 - **Then** exit 2；`error usage:`；example 为 v0.6 完整形态；无文件写入。
+
+### S-SEND-20 --reply-to/--mention 糖衣 flag token 注入（基线勘误后新增，format-v2 D2/OQ-4 行为补齐）
+
+- **Given** `newtopic.post.md` 不存在
+- **When** 首次执行 `paperwork post send newtopic.post.md --author alice --message "first"`，再执行 `paperwork post send newtopic.post.md --author bob --message "agreed" --reply-to 1 --mention carol`
+- **Then** 两次均 exit 0；第二条消息落盘正文首行为 `@#1 @carol`，空行后接原正文（引用状态仅存于正文文本，D2）；`post read --reply-to 1` 与 `--mention carol` 过滤均命中第二条（读取时派生）；preamble 无 `- participants:` 行（D1）；全文件无 `--to`/`--participants` 属性行残留。
+
+### S-SEND-21 首次 send 建线程 preamble 仅 H1 标题（基线勘误后新增，format-v2 D1/OQ-1 行为补齐）
+
+- **Given** `daily.post.md` 不存在
+- **When** 执行 `paperwork post send daily.post.md --author alice --message "hi" --title "Daily Standup"`
+- **Then** exit 0；落盘文件以 `# Daily Standup` H1 行起始，其后直接是 `## #1 alice (...)` 消息头（无占位创建消息、无属性行）；缺 `--title` 时标题取路径剥 `.post.md` 后缀（spec §3.1 糖衣表）。
 
 ## 2. post edit
 
@@ -216,10 +222,10 @@
 - **When** 执行 `paperwork post read standup.post.md --mention bob --limit 20`
 - **Then** exit 0；`showing: 20/25`（total 为过滤后口径而非原始 50，冻结语义）；`window` 为实际显示区间的 #a-#b。
 
-### S-READ-08 read --to 身份值落入 usage（F1 显式方向，与 S-SEND-16 对偶）
+### S-READ-08 read --to 身份值落入 usage（类型防线，基线勘误后独立成立）
 
-- **When** 执行 `paperwork post read standup.post.md --to bob`（把 send 的收件人名单语义带进 read）
-- **Then** exit 2；`error usage:`（read `--to` 为 u64 seq 上限，clap 类型解析失败，规则 3 类型判别强制，spec §1.4）；example 示范 seq 范围用法；无文件写入。
+- **When** 执行 `paperwork post read standup.post.md --to bob`
+- **Then** exit 2；`error usage:`（read `--to` 为 u64 seq 上限，clap 类型解析失败，spec §1.4）；example 示范 seq 范围用法；无文件写入。基线勘误：原与 S-SEND-16 构成对偶，S-SEND-16 已随 send `--to` flag 删除而删除，本场景作为 read 侧类型防线独立保留。
 
 ### S-READ-09 read --author 习惯迁移（usage，rework 补录 Pete N2-(4)）
 
@@ -229,7 +235,7 @@
 ### S-SUM-01 summary 行为不变
 
 - **When** 执行 `paperwork post summary standup.post.md`
-- **Then** exit 0；字段含 title/participants/messages/last.sender/last.time/last.snippet（与 v0.5 相同）；缺线程报 not-found 形态同 read。
+- **Then** exit 0；字段含 title/participants/messages/last.sender/last.time/last.snippet（字段集与 v0.5 相同；基线勘误后 title 取自 H1 preamble、participants 由消息 sender 集合派生，D1）；缺线程报 not-found 形态同 read。
 
 ## 4. profile
 
@@ -382,4 +388,4 @@ ensure_suffix 三级解析行为逐条沿用 v0.5 bdd S-PATH-01~08（原路径�
 ### S-SHORT-02 命名政策白名单断言（冻结，SOTA C6）
 
 - **When** 检查 `--help` 输出
-- **Then** 组/动词集合精确等于 {profile,post,brief,contacts,validate}（隐藏别名不出现）；全 CLI flag 名集合与 spec §4 全表一致；短形式集合精确等于 {-a, -m, -q}（rework 裁定 F3）；spec §4「其余全部 flag」行枚举的全量清单逐一断言无短形式：`--seq`、`--stdin`、`--title`、`--participants`、`--to`、`--from`、`--entry`、`--entry-title`、`--profile`、`--name`、`--model`、`--description`、`--owner`、`--note`、`--regex`、`--scope-read/--scope-write/--scope-owns`（--scope-* 三 flag）、`--full`、`--limit`、`--base-dir`、`--type`、`--json`、`--plain`，另含 post send/read 两侧 `--reply-to` 与 post read `--mention`（均无短形式，共 25 项；NF-2 补录 --description/--scope-*/--full/--base-dir 四项，与 spec §4 L187 枚举逐字对齐并保留原清单 --name）（F3 收窄后本白名单断言重获完整防线意义）。
+- **Then** 组/动词集合精确等于 {profile,post,brief,contacts,validate}（隐藏别名不出现）；全 CLI flag 名集合与 spec §4 全表一致；短形式集合精确等于 {-a, -m, -q}（rework 裁定 F3）；spec §4「其余全部 flag」行枚举的全量清单逐一断言无短形式：`--seq`、`--stdin`、`--title`、`--to`、`--from`、`--entry`、`--entry-title`、`--profile`、`--name`、`--model`、`--description`、`--owner`、`--note`、`--regex`、`--scope-read/--scope-write/--scope-owns`（--scope-* 三 flag）、`--full`、`--limit`、`--base-dir`、`--type`、`--json`、`--plain`，另含 post send/read 两侧 `--reply-to` 与 post read `--mention`（均无短形式，共 24 项；基线勘误删除 `--participants`，其余与 spec §4 枚举逐字对齐并保留原清单 --name）（F3 收窄后本白名单断言重获完整防线意义）。

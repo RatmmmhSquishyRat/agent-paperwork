@@ -8,7 +8,7 @@
   - `docs/researches/cli-grammar-v06-reassessment-2026-08-09.md`（三视角重评估与 path-first 复评结论）
   - `docs/ssot/specs/cli-ux-redesign/`（v0.5 文档集：输出协议、ensure_suffix、usage 信封、别名、validate --type 等继承基线）
   - `docs/ssot/adr/feedbacks/v0_feedbacks.md`、`docs/dev/adr-v1.md`（ADR-011）
-- 实现基线：cli-ux-v0.5 分支（v0.5 文法已实现）+ format-v2 工作树变更（post create 删除、send 增 `--title/--participants/--to`）的合并结果。
+- 实现基线（基线勘误后，见 design.md 基线勘误记录）：cli-ux-v0.5 分支（v0.5.0 发布形态：旧文件格式 + v0.5 位置文法）与 master 的 format-v2 分支（post create 删除、send 增 `--title`、core v2 格式；`--to`/`--participants` flag 已按 owner 追裁 D1/D2 删除，未随 0.5.0 发布）的合并结果。
 
 ---
 
@@ -30,9 +30,9 @@ action-first 槽位顺序（组、动词先于路径）经 owner 显式裁决保
 
 NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填参数均为具名必填 flag，不占位置槽；可选修饰保持 flag。v0.5 规则 3（「必填即位置参数」判据）废止。必填 flag 缺省落入 usage 信封（exit 2），example 展示该命令完整必填形态。
 
-### 1.4 规则 3（flag 唯一语义，含显式登记例外）
+### 1.4 规则 3（flag 唯一语义）
 
-同一命令内任何 flag 只有一种含义；跨命令 `--to` 为显式登记的类型判别例外（rework 轮编排层裁定 F1，v0.6_feedbacks §2.1）：post send 的 `--to` = 收件人名单（字符串列表，format-v2 已随 0.5.0 发布，保留不改名），post read 的 `--to` = seq 上限（u64），clap 类型强制互不混用。`--author` 恒指署名身份（仅 post send / post edit）；`--message` 恒指写入正文（仅 post send / post edit）；`--from` 仅存于 post read 且仅表 seq 起点。
+同一命令内任何 flag 只有一种含义。基线勘误后（format-v2 owner 追裁 D1/D2 删除 send 的 `--to`/`--participants`），全 CLI flag 恢复唯一语义的干净表述：`--from`/`--to` 仅存于 post read，仅表 seq 起点/上限（u64）；`--author` 恒指署名身份（仅 post send / post edit）；`--message` 恒指写入正文（仅 post send / post edit）。
 
 裁定（规则 3 边界，沿用 v0.5 spec §1.3）：`--mention/--reply-to` 在 send 中为「设置」、在 read 中为「过滤」，视为同一语义对象的同构延伸，不构成双语义。
 
@@ -44,7 +44,7 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 
 | 命令 | v0.6 签名 | 相对 v0.5 变更 |
 |---|---|---|
-| post send | `post send <PATH> --author <NAME> (--message <BODY> \| --stdin) [--reply-to N] [--mention a,b] [--title T] [--participants a,b] [--to a,b]` | NAME/BODY 位置参数 -> `--author/-a`、`--message/-m` 具名必填（owner 裁决）；`--title/--participants/--to` 为 format-v2 建线程载荷 |
+| post send | `post send <PATH> --author <NAME> (--message <BODY> \| --stdin) [--reply-to N] [--mention a,b] [--title T]` | NAME/BODY 位置参数 -> `--author/-a`、`--message/-m` 具名必填（owner 裁决）；`--title` 为 format-v2 建线程载荷；`--reply-to`/`--mention` 为糖衣 flag，值以 `@#N`/`@name` token 注入正文（format-v2 D2，OQ-4） |
 | post edit | `post edit <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> \| --stdin)` | NAME、SEQ、NEW_BODY 位置参数 -> `--author/-a`、`--seq`、`--message/-m` 具名必填 |
 | post read | `post read <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--limit 20]` | 不变；`--mention` 无短形式（避免 -m 双义） |
 | post summary | `post summary <PATH>` | 不变 |
@@ -59,7 +59,7 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 | contacts read | `contacts read <PATH>` | 不变 |
 | validate | `validate <PATH> [--type post\|profile\|brief\|contacts]` | 不变 |
 
-注：v0.5 的 `post create` 已被 format-v2 删除（建线程职责由 send 自动创建承担，`--title/--participants` 为建线程时的线程元数据载荷），v0.6 不恢复。
+注：v0.5 的 `post create` 已被 format-v2 删除（建线程职责由 send 自动创建承担，`--title` 为建线程时的线程元数据载荷），v0.6 不恢复；format-v2 同批按 owner 追裁 D1/D2 删除了 send 的 `--to`/`--participants` flag，v0.6 同样不恢复。
 
 ---
 
@@ -70,7 +70,7 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 ### 3.1 post send
 
 ```
-paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply-to N] [--mention a,b] [--title T] [--participants a,b] [--to a,b]
+paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply-to N] [--mention a,b] [--title T]
 ```
 
 | 参数 | 形态 | 必填 | 说明 |
@@ -79,16 +79,14 @@ paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply
 | `--author/-a` | 具名 flag | 是 | 发送者名字（署名）；语义与校验沿用 v0.5 NAME（trim 后为空拒绝 validation；可含空格；不与 profile/contacts 做存在性校验）；不设 `allow_hyphen_values`（名字值无 `-` 开头合法形态，设置反扩大误解析面，F4 复核结论） |
 | `--message/-m` | 具名 flag | 与 `--stdin` 二选一 | 消息正文；flag 值直传，以 `-` 开头的正文无需 `--` 边界；clap 属性 `allow_hyphen_values = true`（rework 裁定 F4，impl_plan 步骤(2) 硬性指令） |
 | `--stdin` | 开关 flag | 与 `--message` 二选一 | 从 stdin 读正文（多行大片内容首选通道） |
-| `--reply-to` | 具名 flag | 否 | 回复锚点 seq；指向不存在 seq 静默跳过（沿用 v0.5，已登记 ux-open-items-backlog） |
-| `--mention` | 具名 flag | 否 | 提及名单（逗号分隔名字）；无短形式（§4） |
-| `--title` | 具名 flag | 否 | 建线程载荷：线程标题；仅首次写入（自动建线程）时生效，对既有线程静默忽略（行为登记见下） |
-| `--participants` | 具名 flag | 否 | 建线程载荷：参与者名单（逗号分隔）；生效条件同上 |
-| `--to` | 具名 flag | 否 | 建线程载荷：收件人名单（逗号分隔字符串列表，非 seq，规则 3 登记例外 §1.4）；生效条件同上 |
+| `--reply-to` | 具名 flag | 否 | 回复锚点 seq；format-v2 D2 下为糖衣 flag：值以 `@#N` token 注入正文首行，读取时派生（OQ-4）；指向不存在 seq 静默跳过（沿用 v0.5，已登记 ux-open-items-backlog） |
+| `--mention` | 具名 flag | 否 | 提及名单（逗号分隔名字）；同为糖衣 flag：值以 `@name` token 注入正文（D2，OQ-4）；无短形式（§4） |
+| `--title` | 具名 flag | 否 | 建线程载荷：线程标题（preamble 仅 H1 标题，D1）；仅首次写入（自动建线程、锁内 size==0）时生效，对既有线程静默忽略（行为登记见下，OQ-1） |
 
 - **`--message` 与 `--stdin` 互斥语义**：二选一必填。同时给出 -> clap conflicts 层拒绝，**usage exit 2**（v0.5 时该冲突为 validation exit 1，本版提升为 usage 层，见 §5）；两者皆缺 -> usage exit 2（clap `required_unless_present` 组合在解析层判定 MissingRequiredArgument，命令层无需管道，rework 裁定 F2）；仅 `--stdin` 时正文从 stdin 读取；`--message` 值 trim 后为空 -> validation exit 1（空正文拒绝，行为沿用）。
 - **NAME/BODY 混淆面结构性归零**：两参数均不占位置槽，v0.5 spec §3.1 记载的混淆面（PATH+单字符串无法区分漏 NAME 与缺 body）不复存在；v0.5 的三重教学补偿条款随混淆面消亡而废止。
 - 行为保留：线程不存在时自动创建（ensure_suffix 第(3)级落点）。
-- **建线程元数据载荷行为登记（rework 裁定 F6，本轮不改运行时行为）**：`--title/--participants/--to` 仅在线程首次写入（自动建线程）时生效；对既有线程附这三个 flag 时**静默忽略**（format-v2 冻结语义，exit 0 且无信号；改标题不在本版能力范围）。该静默面为已知行为登记而非缺陷（bdd S-SEND-17 钉住）；可检测化的未来工作项（ok 信封 ignored 字段增补）见 design.md §8。
+- **建线程元数据载荷行为登记（rework 裁定 F6，本轮不改运行时行为）**：`--title` 仅在线程首次写入（自动建线程）时生效；对既有线程附该 flag 时**静默忽略**（format-v2 冻结语义，exit 0 且无信号；改标题不在本版能力范围，OQ-1）。该静默面为已知行为登记而非缺陷（bdd S-SEND-17 钉住）；可检测化的未来工作项（ok 信封 ignored 字段增补）见 design.md §8。
 - 输出增补 `implicit-mention`（U-10）行为沿用 v0.5 spec §3.1，不变。
 
 错误映射：缺 `--author` / 缺 `--message` 且无 `--stdin` / 两者同给 / 未知 flag / 多余位置参数 -> usage exit 2；空正文 -> validation exit 1；异型文件 -> format exit 1；`--reply-to` 指向不存在 seq -> 静默跳过（沿用）。
@@ -116,7 +114,7 @@ paperwork post read <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--l
 paperwork post summary <PATH>
 ```
 
-- `--from` 仅表 seq 起点；`--to` 在 read 中仅表 seq 上限（u64 类型，非数字即 usage exit 2，显式信号）；`--to` 在 post send 中为收件人名单（字符串列表），属规则 3 显式登记例外（§1.4，rework 裁定 F1）。`--limit` 默认 20；`--mention` 与 read 的 `--reply-to` 均**无短形式**（短形式全表见 §4）。
+- `--from` 仅表 seq 起点；`--to` 仅表 seq 上限（u64 类型，非数字即 usage exit 2，显式信号）。基线勘误后 `--from/--to` 仅存于 post read，规则 3 唯一语义无例外（§1.4）。`--limit` 默认 20；`--mention` 与 read 的 `--reply-to` 均**无短形式**（短形式全表见 §4）。
 - 输出增补（恒显 `showing: n/total` + `window: #first-#last`，U-11）沿用 v0.5 spec §3.1，不变。
 - 缺 PATH -> usage exit 2；文件不存在 -> not-found exit 1。
 
@@ -184,7 +182,7 @@ paperwork validate <PATH> [--type post|profile|brief|contacts]
 | 全局 `-q` | `-q` | 既有全局 flag（v0.5 已发布，冻结） |
 | post read `--mention` | 无 | 编排层裁定：避免 `-m` 在 post 组内双义 |
 | post read `--reply-to` | 无 | rework 补录（Quinn m-1）：read 过滤低频；与 send 的 `--reply-to` 同无短形式，保持对称 |
-| 其余全部 flag（`--seq/--stdin/--title/--participants/--to/--from/--entry/--entry-title/--profile/--model/--description/--owner/--note/--regex/--scope-*/--full/--limit/--base-dir/--type/--json/--plain` 等） | 无 | F3 收窄裁定：除 `-a/-m/-q` 外一律仅长形式，从根上消除跨命令短形式多义 |
+| 其余全部 flag（`--seq/--stdin/--title/--from/--to/--entry/--entry-title/--profile/--model/--description/--owner/--note/--regex/--scope-*/--full/--limit/--base-dir/--type/--json/--plain` 等） | 无 | F3 收窄裁定：除 `-a/-m/-q` 外一律仅长形式，从根上消除跨命令短形式多义 |
 
 短形式与全称严格等价（clap 同一 Arg 的 short/long 两面），BDD 断言见 bdd.md S-SHORT-01。
 
