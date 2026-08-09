@@ -4,6 +4,7 @@
 //! Files are independent — no cross-references managed by the CLI.
 
 pub mod contacts;
+pub mod lock;
 pub mod manifest;
 pub mod profile;
 pub mod thread;
