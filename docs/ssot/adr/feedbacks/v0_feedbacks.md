@@ -25,3 +25,5 @@
    1. 输入的时候, 把content类型的参数放在最后方便书写有换行的大片内容
    2. 输入之后给一个markdown validation机制帮助检查markdown语法是否正确
    3. 在我们的managed文件中, 以fenced code block形式包裹, 并设置为markdown block, 这样就能够让文件支持多层markdown了.
+
+> 注记（2026-08-09 追加，不改写原文）：v0.2 feedback 第 3 条之 3.1 字面条款（content 类型参数放在最后）已于 2026-08-09 被 owner v0.6 指令翻转，正文改经 `--message`/`--stdin` 具名传递，书写便利精神保留；见 `docs/ssot/adr/feedbacks/v0.6_feedbacks.md` §3.1（Nora ISSUE-m1 补链）。

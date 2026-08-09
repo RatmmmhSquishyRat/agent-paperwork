@@ -106,4 +106,10 @@
 - v0.4: envelope 输出协议, fix/example 错误自愈, --stdin, 空正文拒绝, validate 真实解析, --plain 范围过滤, contacts 富化, summary title/participants, brief --full 详情, profile list 结构化, 纯 ASCII 输出 (Q-01..Q-02, R-02..R-07, R-09, R-11..R-14)
 
 ---
+
+## 八、v0.6 rework 轮补录项（2026-08-09 追加，不改写原文）
+
+- B-01（低，冻结行为登记，Pete N3）：`post send/edit --reply-to` 指向不存在 seq 时「静默跳过」（reply 关系丢失且无信号，消息照常落盘）。属 v0.5 冻结行为（spec v0.6 §3.1 错误映射沿用），与 Q-02 失败自愈存在张力。本轮不改；供发布轮或后续 UX 线裁决（候选方向：ok 信封增补 reply-dropped 字段，需解冻输出协议，与 F6 的 ignored 字段同批评估）。
+
+---
 (报告完)
