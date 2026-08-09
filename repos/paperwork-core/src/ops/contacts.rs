@@ -1,6 +1,8 @@
-//! Contacts operations: create, add, read — all path-explicit.
+//! Contacts operations: create, add, remove, update, read — all path-explicit.
 //!
 //! A contacts file is a bullet list of Markdown links to profile files.
+//! The three write paths (add/remove/update) run their read-modify-write
+//! cycle under an exclusive fs2 lock (spec cli-grammar-v0.6 §3.9).
 
 use std::fs;
 use std::path::Path;
@@ -8,6 +10,7 @@ use std::path::Path;
 use crate::error::{PaperworkError, Result};
 use crate::format::contacts::{parse_contacts, parse_contacts_title, serialize_contacts};
 use crate::format::profile::parse_profile;
+use crate::ops::lock::locked_read_modify_write;
 use crate::ContactEntry;
 
 /// Create a new empty contacts file at the given path.
@@ -60,35 +63,116 @@ pub fn contacts_add(path: &Path, profile_path: &str) -> Result<()> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    locked_read_modify_write(path, |content| {
+        let title = parse_contacts_title(&content)?;
+        let mut contacts = parse_contacts(&content)?;
 
-    let title = parse_contacts_title(&content)?;
-    let mut contacts = parse_contacts(&content)?;
+        // Idempotent: skip if already present
+        if contacts.iter().any(|c| c.profile_path == profile_path) {
+            return Ok(content);
+        }
 
-    // Idempotent: skip if already present
-    if contacts.iter().any(|c| c.profile_path == profile_path) {
-        return Ok(());
+        contacts.push(ContactEntry {
+            label: derive_label(path, profile_path),
+            profile_path: profile_path.to_string(),
+        });
+
+        Ok(serialize_contacts(&title, &contacts))
+    })
+}
+
+/// Remove a profile path from a contacts file.
+///
+/// The key is the profile path string exactly as stored (same matching
+/// rule as the add idempotency check); labels are derived data and are
+/// never usable as keys.
+pub fn contacts_remove(path: &Path, profile_path: &str) -> Result<()> {
+    if !path.exists() {
+        return Err(PaperworkError::NotFound {
+            resource: "Contacts".to_string(),
+            name: path.display().to_string(),
+            fix: format!("run `paperwork contacts create {}` first", path.display()),
+            example: format!("paperwork contacts create {}", path.display()),
+        });
     }
 
-    contacts.push(ContactEntry {
-        label: derive_label(path, profile_path),
-        profile_path: profile_path.to_string(),
-    });
+    locked_read_modify_write(path, |content| {
+        let title = parse_contacts_title(&content)?;
+        let mut contacts = parse_contacts(&content)?;
 
-    let serialized = serialize_contacts(&title, &contacts);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the target path is writable".to_string(),
-        example: String::new(),
-    })?;
+        let original_len = contacts.len();
+        contacts.retain(|c| c.profile_path != profile_path);
 
-    Ok(())
+        if contacts.len() == original_len {
+            return Err(PaperworkError::NotFound {
+                resource: "Contacts entry".to_string(),
+                name: profile_path.to_string(),
+                fix: format!(
+                    "run `paperwork contacts read {}` to list entries; the key is the profile path as stored in the contacts file, not the label",
+                    path.display()
+                ),
+                example: format!("paperwork contacts read {}", path.display()),
+            });
+        }
+
+        Ok(serialize_contacts(&title, &contacts))
+    })
+}
+
+/// Re-bind an entry's destination profile path (in-place replacement).
+///
+/// Judgment order: the OLD-hit check precedes the NEW-exists check (when
+/// OLD == NEW and OLD is present, the result is AlreadyExists). The label
+/// is re-derived for NEW per spec §7.3 (R11); entry order is preserved.
+/// A non-existent/unreadable NEW still succeeds silently (label falls back
+/// to the file-name stem), matching add's frozen behavior (spec §3.6).
+pub fn contacts_update(path: &Path, old_profile: &str, new_profile: &str) -> Result<()> {
+    if !path.exists() {
+        return Err(PaperworkError::NotFound {
+            resource: "Contacts".to_string(),
+            name: path.display().to_string(),
+            fix: format!("run `paperwork contacts create {}` first", path.display()),
+            example: format!("paperwork contacts create {}", path.display()),
+        });
+    }
+
+    locked_read_modify_write(path, |content| {
+        let title = parse_contacts_title(&content)?;
+        let mut contacts = parse_contacts(&content)?;
+
+        // OLD hit check first.
+        let index = match contacts.iter().position(|c| c.profile_path == old_profile) {
+            Some(idx) => idx,
+            None => {
+                return Err(PaperworkError::NotFound {
+                    resource: "Contacts entry".to_string(),
+                    name: old_profile.to_string(),
+                    fix: format!(
+                        "run `paperwork contacts read {}` to list entries; the key is the profile path as stored in the contacts file, not the label",
+                        path.display()
+                    ),
+                    example: format!("paperwork contacts read {}", path.display()),
+                });
+            }
+        };
+
+        // NEW already present (covers OLD == NEW with OLD hit).
+        if contacts.iter().any(|c| c.profile_path == new_profile) {
+            return Err(PaperworkError::AlreadyExists {
+                resource: "Contacts entry".to_string(),
+                name: new_profile.to_string(),
+                fix: "remove the existing entry first or use a different profile path".to_string(),
+                example: format!("paperwork contacts remove {} --profile {}", path.display(), new_profile),
+            });
+        }
+
+        contacts[index] = ContactEntry {
+            label: derive_label(path, new_profile),
+            profile_path: new_profile.to_string(),
+        };
+
+        Ok(serialize_contacts(&title, &contacts))
+    })
 }
 
 /// Read all contacts from a contacts file.
