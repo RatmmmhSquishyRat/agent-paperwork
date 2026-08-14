@@ -135,4 +135,24 @@ N1~N7；其中 N2（BDD 缺口）与 N7（SKILL.md 在场性盘点）直接影�
 rework 范围限于文档层修正：新文法三规则、具名化方向、usage 信封迁移教学、输出协议冻结策略本身均通过 agent 消费视角检验，无需推翻。v0.5 评审遗留的 example 占位符问题（该文 M6 / SOTA 结论 10）在本版已确认修复。
 
 ---
+
+## Rework 回应（2026-08-09 追加，rework 轮销账记录）
+
+| 问题 | 处置 | 落点 |
+|---|---|---|
+| C1（--to 规则矛盾与静默面） | 按编排层裁定 F1 处理 | send `--to`（收件人名单，format-v2 已随 0.5.0 发布）保留不改名；规则 3 改写为「同一命令内任何 flag 只有一种含义；跨命令 --to 为显式登记的类型判别例外」（v0.6_feedbacks §2.1(3)、spec §1.4/§3.3、design §1.2/§2.1）；双向场景：bdd S-SEND-16（静默接受登记为已知行为）与 S-READ-08（显式方向 usage exit 2）；附带混淆（三名字列表 flag 区分）落 design §2.1 与 impl_plan 步骤(2) after_help 教学；建议(2)值域校验/回显收件人：不采纳为本轮实现（输出协议冻结），回显候选与 F6 的 ignored 字段同批挂 design §8 未来工作项 |
+| M1（退出码分歧） | 按编排层裁定 F2 处理 | 两者皆缺 -> usage exit 2，clap `required_unless_present` 组合实现（命令层无管道）；v0.6_feedbacks §2.3 修正 exit 1 表述并附裁定补记；spec §3.1/§5、design §6、bdd S-SEND-06/S-EDIT-04、tdd §4 统一为 usage exit 2 |
+| M2（短形式政策自相矛盾） | 按编排层裁定 F3 处理 | 短形式收窄为仅 `-a/--author`、`-m/--message` 加既有全局 `-q`，其余全部 flag（含 `-m`/`-p`/`-t`/`-d` 四处冲突点）收回仅长形式；spec §4 全表重写、design §3 补跨命令多义对 agent 泛化影响论证与收窄理由、bdd S-SHORT-01/02 更新（短形式集合 {-a,-m,-q} 与全量无短形式负向断言）、v0.6_feedbacks §2.2 同步；「全 CLI 短形式语义无冲突」在新表下自然成立 |
+| M3（元数据 flag 静默忽略） | 按编排层裁定 F6 处理 | 本轮不改运行时行为；spec §3.1 补三 flag 参数契约（含「仅首次写入生效、既有线程静默忽略」行为登记）；design §2.1 补论证（三件套补偿）；bdd S-SEND-17 钉住；after_help 教学要求入 impl_plan 步骤(2)；可检测化（ignored 字段）列 design §8 未来工作项 |
+| N1（token 量化） | 已修复 | design §3 补典型 send 调用前后字符对比（v0.5 55 字符 -> 全称 74/+19 约 5 token；短形式 61/+6 约 2 token），正面闭合 token 经济学维度 |
+| N2（BDD 五处缺口） | 已修复 | (1) S-SEND-18（--author 空值 validation）；(2) S-EDIT-09（仅 --stdin 成功）；(3) S-SEND-19（缺 PATH usage）；(4) S-READ-09（read --author 习惯迁移，fix 点名 --mention）；(5) S-OUT-06（--json x conflicts）；tdd §4 同步补用例行 |
+| N3（--reply-to 静默跳过） | 已修复 | 登记 docs/researches/ux-open-items-backlog-2026-08-08.md §八 B-01（冻结行为、本轮不改、候选方向与 F6 ignored 字段同批评估）；design §8 同步登记 |
+| N4（SOTA 状态表） | 已修复 | design 新增 §10 SOTA 结论采纳状态表，逐条结案（含 C2 不适用一句话结案、C5 后半/C7 拒绝去向） |
+| N5（message 点名多余参数值） | 已修复（不额外实现） | design §6 注明 usage 信封 message 字段天然携带 clap 报错原文中的多余参数值（message 与 example 是两个字段，不违反静态示例裁定）；impl_plan 步骤(3) 同步注明，无需额外实现 |
+| N6（Grammar 模板行必填段） | 已修复 | spec §1.1、design §2.1、impl_plan 步骤(3) 三处必填 flags 移出方括号 |
+| N7（SKILL.md 在场性盘点） | 已修复 | impl_plan 步骤(0) 补第三项盘点（SKILL.md 在场性确认与刷新清单输出，缺失时报告并以实际在场文件为准） |
+
+遗留未决项：0。全部修正均为文档层变更，未触碰代码/CI/CHANGELOG。
+
+---
 （报告完）

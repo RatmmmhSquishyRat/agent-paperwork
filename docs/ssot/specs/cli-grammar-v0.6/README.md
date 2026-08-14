@@ -2,7 +2,7 @@
 
 - 日期：2026-08-09
 - 版本：v0.6（本轮不发布：不 bump 版本、不打 tag、不 publish、不写 CHANGELOG 发布段，owner 显式约束）
-- **状态：文档初稿落盘（2026-08-09），待对抗评审**（实现流程原则.md：评审闭合后方可开工）
+- **状态：rework 轮修正完成（2026-08-09），待对抗评审闭合确认**（实现流程原则.md：评审闭合后方可开工）
 
 ---
 
@@ -11,7 +11,8 @@
 | 顺序 | 文件 | 内容 |
 |---|---|---|
 | 0 | `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（目录外） | owner 指令落盘，全套文档的 architectural basis，最高优先级 |
-| 0b | `docs/researches/cli-grammar-v06-reassessment-2026-08-09.md`（目录外） | 三视角重评估报告（基线核实 / 错误注入矩阵 / path-first 复评 / Rejected Alternatives 再评估） |
+| 0b | `docs/researches/cli-grammar-v06-reassessment-2026-08-09.md`（目录外） | 三视角重评估报告（基线核实 / 三视角方案取舍与错误注入矩阵 / path-first 复评 / 混淆面枚举 / owner 裁决记录 / Rejected Alternatives 再评估；rework 修正 Nora ISSUE-m6，与 v0.6_feedbacks §五 描述对齐） |
+| 0c | `docs/roles/cli-grammar-v0.6-implementer.role.md`（目录外） | 实施者 role 文档（rework 补录 Nora ISSUE-m2，体例仿 v0.5 implementer role：职责/原则/BOOTSTRAP） |
 | 1 | `spec.md` | 行为规范：新文法三规则、逐命令签名契约全表、短形式全表、错误 category 映射、输出协议冻结条款、兼容策略 |
 | 2 | `design.md` | 设计方案：逐 tool 动线与参数布局论证、三方案对比与 owner 裁决依据、path-first 复评否决记录、短形式论证、互斥语义设计、Rejected Alternatives 状态更新 |
 | 3 | `bdd.md` | 行为场景：Given/When/Then 覆盖全部命令的正常与错误路径（重点：缺必填 flag / 互斥冲突 / 短形式等价 / 旧文法迁移 / 混淆面消亡） |
@@ -55,7 +56,9 @@
 - [x] owner 裁决落盘（v0.6_feedbacks.md）与 v0.5_feedbacks 翻转记录追加
 - [x] 三视角重评估研究落盘（cli-grammar-v06-reassessment-2026-08-09.md）
 - [x] spec / design / BDD / TDD / impl_plan 五份文档齐备（本目录）
-- [ ] 对抗评审 loop 至闭合（任务 #13，实现流程原则.md 门槛）
+- [x] role 文档落盘（docs/roles/cli-grammar-v0.6-implementer.role.md，rework 轮补录）
+- [x] 对抗评审 rework 轮完成：三份评审报告全部问题销账，编排层裁定 F1-F6 贯穿七份文档（Rework 回应段见各评审报告末尾）
+- [ ] 对抗评审闭合确认（任务 #13，实现流程原则.md 门槛）
 - [ ] 基线合并（cli-ux-v0.5 + format-v2，编排层执行，impl_plan 步骤 (0)）
 - [ ] 按 impl_plan 步骤 (1) 至 (7) 实现（评审闭合后）
 - [ ] 发布（不在本轮：owner 于功能稳定后另行裁定）

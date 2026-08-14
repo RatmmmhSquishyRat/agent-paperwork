@@ -106,4 +106,11 @@
 - v0.4: envelope 输出协议, fix/example 错误自愈, --stdin, 空正文拒绝, validate 真实解析, --plain 范围过滤, contacts 富化, summary title/participants, brief --full 详情, profile list 结构化, 纯 ASCII 输出 (Q-01..Q-02, R-02..R-07, R-09, R-11..R-14)
 
 ---
+
+## 八、v0.6 rework 轮补录项（2026-08-09 追加，不改写原文）
+
+- B-01（低，冻结行为登记，Pete N3）：`post send/edit --reply-to` 指向不存在 seq 时「静默跳过」（reply 关系丢失且无信号，消息照常落盘）。属 v0.5 冻结行为（spec v0.6 §3.1 错误映射沿用），与 Q-02 失败自愈存在张力。本轮不改；供发布轮或后续 UX 线裁决（候选方向：ok 信封增补 reply-dropped 字段，需解冻输出协议，与 F6 的 ignored 字段同批评估）。
+- B-02（低，静默面候选增强，contacts CRUD 轮 rework 补录 2026-08-09，Ryan M-3 ④）：contacts add/update 对目标 profile 路径**写前存在性校验/回显**。现状（冻结）：add/update 对目标 profile 不做任何可读性校验，不存在/不可读时静默写入 + label 依 R11 回退文件名主干（format-v2 spec §7.3，与 add 既有行为一致）；agent 路径笔误（忘后缀/传名字当路径）时 exit 0 且 destination 不可用，需下一轮 contacts read 才见 `(unreadable)`。行为本身本轮不改（裁决维持现状，避免 add/remove/update 三动词行为分叉）；声明与钉住已落 spec §3.6「NEW 不存在时的行为契约」+ bdd S-CONTACTS-14；候选方向：写前 destination 存在性校验或 ok 信封增补 destination-unverified 回显字段（需评估与输出协议冻结的关系），供发布轮裁决。
+
+---
 (报告完)

@@ -107,4 +107,22 @@
 对抗立场下的总体评价：文档集在指令链忠实性（三条 owner 裁决引文落盘、task #12 更正记录）、翻转程序双向合规、继承声明与 v0.5 原文逐条吻合、ADR-011 五约束、不发布约束贯穿性（七份文档全部声明、impl_plan 无任何发布残留步骤）上表现扎实，且相对 v0.5 文档集改进了盘点前置与行号基线声明。唯一 Major 属文档内部规则表述与 owner 裁决文档的矛盾，修复为纯文字改写；6 项 Minor 均为追溯链完整性与映射闭环层面的补漏。全部问题均不构成对 owner 指令或 pillars 的实质违背，修复后可闭合。
 
 ---
+
+## Rework 回应（2026-08-09 追加，rework 轮销账记录）
+
+| 问题 | 处置 | 落点 |
+|---|---|---|
+| ISSUE-M1（规则 3 与 --to 矛盾） | 按编排层裁定 F1 处理 | v0.6_feedbacks §2.1(3) 规则改写；spec §1.4/§3.3 同步（`--from` 仅存于 read、`--to` 双命令分布与类型判别例外）；design §1.2/§2.1 同步；bdd 新增 S-SEND-16（send --to 5 静默接受登记）与 S-READ-08（read --to bob 显式方向） |
+| ISSUE-m1（v0_feedbacks 缺 #3.1 翻转指针） | 已修复 | v0_feedbacks.md v0.2 feedback 节末追加不改写原文的注记行 |
+| ISSUE-m2（role 文档缺位与治理清单缺口） | 已修复 | 新建 docs/roles/cli-grammar-v0.6-implementer.role.md（职责/原则/BOOTSTRAP 体例仿 v0.5 role）；README §一清单补 0c 行、§四补勾选行；impl_plan 前置门槛改为显式引用该 role 文档 |
+| ISSUE-m3（S-READ-06/07 对等场景缺口） | 已修复 | bdd 新增 S-READ-06（零命中 total 口径与空 window）与 S-READ-07（过滤+limit 口径）；tdd §4 新增用例行（对应 BDD 列同步补入） |
+| ISSUE-m4（spec §3.1 参数表缺三 flag） | 按裁定 F1/F6 处理 | spec §3.1 参数表扩为 9 行（补 `--title/--participants/--to` 含形态、必填性与「仅首次写入生效、既有线程静默忽略」行为登记）；design §2.1 补论证；bdd S-SEND-17 钉住 |
+| ISSUE-m5（场景编号跨版本撞号） | 已修复 | bdd 文首补编号约定（v0.6 独立编号、引 v0.5 场景一律带前缀）；tdd 文首同步补编号约定，§4 跨版本引用处补 v0.5 前缀 |
+| ISSUE-m6（feedbacks §五互指缺失与 README 0b 描述不符） | 已修复 | v0.6_feedbacks §五补治理文档集互指行；README 0b 行描述改为与 v0.6_feedbacks §五 一致的六段式 |
+| 观察 1（--mention 短形式论证表述） | 已修复 | design §3 改为「违反规则 3 的短形式延伸约束（v0.6_feedbacks §2.2 裁定）」 |
+| 观察 2（S-OUT-04 数字口径） | 已修复 | bdd S-OUT-04 Then 改为「与 v0.5 bdd S-OUT-04~07 逐条一致，含 --help 各层级与 -V」 |
+| 观察 3（步骤(5) CI 绿为实现阶段事项） | 不采纳（无修复对象） | 纯记录性观察，impl_plan 步骤(5) 表述维持 |
+
+遗留未决项：0。全部修正均为文档层变更，未触碰代码/CI/CHANGELOG。
+
 （评审报告完 - SSOT/pillars 合规视角，评审者：第三方批判性评审 subagent）
