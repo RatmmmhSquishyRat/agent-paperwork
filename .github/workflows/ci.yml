@@ -21,6 +21,11 @@ jobs:
       - name: Fmt check
         run: cargo fmt --all -- --check
 
+      # Doc-link gate (T8): rustdoc must build with zero warnings — broken
+      # intra-doc links regress silently during refactors otherwise.
+      - name: Doc check
+        run: cargo doc --no-deps --workspace
+
   test:
     strategy:
       fail-fast: false
@@ -35,13 +40,13 @@ jobs:
           components: clippy
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
   smoke:
     strategy:

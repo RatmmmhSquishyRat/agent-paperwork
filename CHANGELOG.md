@@ -3,6 +3,54 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+The v0.5 perfection round (debt-closure batch). All CLI output contracts stay byte-frozen: golden envelope snapshots, frozen error wordings, JSON key names and key order (see `repos/paperwork-cli/tests/char_tests.rs`). Everything below is internal consolidation plus explicitly disclosed behavior additions — **zero behavior change for legitimate v0.5 files**.
+
+### Changed (internal)
+
+DRY consolidation across core and CLI, behavior-locked end to end:
+
+- Shared fence scanner family in `format/mod.rs` (`for_each_outside_fence` / `first_outside_fence` / `collect_outside_fence`): 8 line-level fence state machines converged; the 2 byte-level scans keep their byte loops but share the fence predicates, pinned by differential corpora (CRLF / indented fence / tilde / broken fence / lone-`\r`)
+- Head-family regexes centralized in the format layer; the redundant `SEQ_RE` deleted in favor of the `header_seq` predicate
+- ~31 seven-line `IoContext` boilerplate blocks collapsed onto the `io_ctx` helper; the 5 read-modify-write lock sequences unified behind the `LockedFile` RAII guard (no manual early-exit unlock paths left)
+- `ops/thread.rs` split into `thread.rs` (send/edit orchestration) + `thread_read.rs` (read/summary) + `thread_scan.rs` (legacy guard / tail scans); the public re-export surface is unchanged
+- 9 command-side hand-rolled JSON payloads converged onto the `output.rs` `JsonBuilder` (`serde_json::Map` insertion order kept; key order byte-frozen)
+- Single-pass `normalize_line_endings` with one top-level normalization and Cow hand-down (the validate path no longer re-normalizes 3–4 times)
+- Streaming SHA-256 `hash_file` (64KB chunks; digest bit-identical to the one-shot form)
+- `thread_edit` incremental last-message rewrite (byte-identical to the full rewrite, pinned by a differential corpus)
+- Single-pass `hex_encode`
+- `--reply-to` sender lookup via bounded reverse tail scan instead of a whole-file re-parse
+
+### Added
+
+Behavior additions (write-side guards and hardening; disclosed per the closure rules):
+
+- Write-side injection guards: single-line fields (thread title, profile name/model, contacts title/label/path, brief title/owner) reject `\n` / `\r`; prose carrying a dangerous attribute-shaped line (`- model:` / `- owner:` / `- created:` / `- path:` / `- hash:` / `- regex:`) is rejected, because it would shadow the real structural attribute on re-parse
+- Brief partial-migration residue guard: a brief that already uses lowercase keys but still carries the v0.4 `## Entries` wrapper heading or `### ` entry headers is refused at parse (and by `validate`) — it would otherwise parse silently and be destroyed by the next read-modify-write
+- `profile create` / `brief create` / `contacts create` are atomic: `create_new` replaces the two-step `exists()` + write, closing the race window where two racing creators could both succeed
+- `brief verify` surfaces genuine IO failures (permission denied, interrupted reads) as real `io` errors instead of collapsing them into `Stale`; a MISSING target stays `Stale` — that is the frozen spec three-state contract, not error swallowing
+- `contacts read` enrichment uses the core two-level path resolver (entry path as given first, then relative to the contacts file's directory) shared with the write-side `derive_label` — no more drift between the two resolution paths
+- `parse_contacts_title` is fence-aware: a pseudo-title inside a fenced code block is no longer adopted
+
+### Removed
+
+- `PaperworkError::Io` dead variant (Rust API disclosure: a public enum variant of `paperwork-core` is removed). Verified before deletion: no construction site and no implicit `?` conversion depended on it — every IO site constructs `IoContext` explicitly, and the variant carried no pinned default wording. Downstream consumers matching `PaperworkError` exhaustively need to drop the arm.
+
+### Fixed
+
+- `ensure_suffix` no longer routes paths through `to_string_lossy`: non-UTF-8 file names survive suffix enforcement untouched (native `OsStr` concatenation)
+- `profile create` with a scope section no longer opens and locks the target file twice — single write pass
+- The reply-to double read is gone: the implicit-mention sender lookup runs as a bounded tail scan under the already-held lock
+
+### Known downgrade re-check
+
+The v0.4 legacy stance is unchanged: reading an unmigrated v0.4 file stays a silent empty result (`post read` -> 0 messages, `contacts read` -> empty list), and writing into one stays refused (`post send` / `contacts add` / `brief add` -> `error format:`). The perfection round added the brief residue guard to that same stance; nothing about the silent-empty-read / write-refusal position changed.
+
+### Version
+
+No version bump: this batch stays 0.5.0 pending the owner's release decision.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal
