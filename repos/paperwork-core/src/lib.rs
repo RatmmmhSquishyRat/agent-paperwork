@@ -66,11 +66,14 @@ pub struct Message {
 
 /// Summary information about a thread.
 ///
+/// `title` is the preamble H1 captured in the same parse pass (review M8:
+/// callers no longer need a second `thread_meta` walk over the file).
 /// `participants` is derived from the set of message senders, deduplicated
 /// in first-appearance order (spec §5.4, D1); it is never stored on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub thread_path: String,
+    pub title: String,
     pub message_count: u64,
     pub participants: Vec<String>,
     pub last_sender: Option<String>,

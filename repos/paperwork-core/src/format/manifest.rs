@@ -10,20 +10,43 @@
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
 use super::{
     compute_fence_length, extract_attribute, fence_close_matches, fence_info, fence_open_len,
-    normalize_line_endings,
+    normalize_line_endings, parse_timestamp, RFC3339_FMT,
 };
+
+/// Named-capture-group scanner (`(?<name>...)`), compiled once (M-review M5).
+static CAPTURE_GROUP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(\?<([^>]+)>").expect("valid regex"));
 
 /// Extract named capture group names from a regex pattern.
 pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
-    let re = Regex::new(r"\(\?<([^>]+)>").expect("valid regex");
-    re.captures_iter(pattern)
+    CAPTURE_GROUP_RE
+        .captures_iter(pattern)
         .map(|cap| cap[1].to_string())
         .collect()
+}
+
+/// Representability check for a brief entry note (M-review M1).
+///
+/// A note whose FIRST non-blank line is attribute-shaped (`- key: value`,
+/// matching the attribute regex) or opens a ```` ```regex ```` fence cannot
+/// survive a parse → serialize roundtrip: the attribute-zone rule (blank
+/// lines do not terminate it) would re-absorb that line as an attribute or
+/// as a regex carrier. Returns a human-readable reason if unrepresentable.
+pub fn note_representation_issue(note: &str) -> Option<&'static str> {
+    let first = note.lines().find(|l| !l.trim().is_empty())?;
+    if extract_attribute(first).is_some() {
+        return Some("note starts with an attribute-shaped line '- key: value'");
+    }
+    if fence_info(first) == "regex" && fence_open_len(first).is_some() {
+        return Some("note starts with a ```regex fence opening line");
+    }
+    None
 }
 
 /// Locate fence-aware H2 line indices (entry boundaries, spec §3.3/§6.2).
@@ -89,12 +112,10 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
         }
     }
 
-    let name = name.ok_or_else(|| {
-        PaperworkError::Parse {
-            message: "missing title heading (# <title>)".to_string(),
-            fix: "add a top-level heading with the brief title".to_string(),
-            example: "# onboarding".to_string(),
-        }
+    let name = name.ok_or_else(|| PaperworkError::Parse {
+        message: "missing title heading (# <title>)".to_string(),
+        fix: "add a top-level heading with the brief title".to_string(),
+        example: "# onboarding".to_string(),
     })?;
 
     let author = if owner_present {
@@ -107,12 +128,10 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
         });
     };
 
-    let created = created.ok_or_else(|| {
-        PaperworkError::Parse {
-            message: format!("missing or invalid - created: line for brief '{}'", name),
-            fix: "add a '- created: <RFC3339>' bullet line".to_string(),
-            example: "- created: 2026-01-15T10:00:00Z".to_string(),
-        }
+    let created = created.ok_or_else(|| PaperworkError::Parse {
+        message: format!("missing or invalid - created: line for brief '{}'", name),
+        fix: "add a '- created: <RFC3339>' bullet line".to_string(),
+        example: "- created: 2026-01-15T10:00:00Z".to_string(),
     })?;
 
     // ---- entries ----
@@ -124,10 +143,7 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
         } else {
             lines.len()
         };
-        entries.push(parse_entry_body(
-            title,
-            &lines[header_line + 1..body_end],
-        ));
+        entries.push(parse_entry_body(title, &lines[header_line + 1..body_end]));
     }
 
     Ok(Manifest {
@@ -250,17 +266,6 @@ fn parse_entry_body(title: String, lines: &[&str]) -> ManifestEntry {
     }
 }
 
-/// Parse timestamp from RFC 3339 string (spec §3.5).
-pub(crate) fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
-    }
-    Err(format!("cannot parse '{}' as RFC 3339 timestamp", s))
-}
-
 /// Serialize a manifest to Markdown content (spec §6.3).
 pub fn serialize_manifest(manifest: &Manifest) -> String {
     let mut out = format!("# {}\n\n", manifest.name);
@@ -273,7 +278,7 @@ pub fn serialize_manifest(manifest: &Manifest) -> String {
     out.push_str(&format!("- owner: {}\n", manifest.author));
     out.push_str(&format!(
         "- created: {}\n",
-        manifest.created.format("%Y-%m-%dT%H:%M:%SZ")
+        manifest.created.format(RFC3339_FMT)
     ));
 
     for entry in &manifest.entries {
@@ -317,8 +322,7 @@ mod tests {
         Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
     }
 
-    const HASH64: &str =
-        "42b664743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540";
+    const HASH64: &str = "42b664743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540";
 
     // T-FB-01 (BRIEF-01)
     #[test]
@@ -367,7 +371,9 @@ mod tests {
         let entry = &manifest.entries[0];
         assert_eq!(
             entry.regex,
-            Some("(?<year>\\d{4})-(?<month>\\d{2})\nwith `backtick` and\nmultiple lines".to_string())
+            Some(
+                "(?<year>\\d{4})-(?<month>\\d{2})\nwith `backtick` and\nmultiple lines".to_string()
+            )
         );
         assert_eq!(entry.groups, vec!["year", "month"]);
 

@@ -17,11 +17,11 @@ use crate::output::OutputMode;
 #[command(name = "paperwork", version, about, long_about = None)]
 struct Cli {
     /// Output as JSON
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "plain")]
     json: bool,
 
     /// Output raw file content
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "json")]
     plain: bool,
 
     /// Suppress status line (still outputs fields and body)

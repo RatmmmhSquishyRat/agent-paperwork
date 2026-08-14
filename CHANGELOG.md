@@ -154,9 +154,9 @@ after:
 
 ### Migration guide (manual)
 
-1. **post**: delete the `---` boundary lines; rewrite each message header `### #N sender · ts` as `## #N sender (ts)`; delete the seq #1 system message and lift its `[Thread created: X | participants: Y]` payload into the preamble as a bare `# X` H1 (the `- participants: Y` list is dropped — participants derive from the senders), renumbering the remaining messages consecutively from 1; convert every message attribute block into body-text tokens on the first body line: `- Reply-To: #N` -> `@#N`, `- Mentions: a,b` -> `@a @b` (space-separated, then a blank line before the original body); drop `- To:` lines entirely — directed messages no longer exist as a structured concept, write `@name` in the body instead; replace fixed 4-backtick body fences with the minimal fence longer than any backtick run in the body (usually 3) and change the fence info `markdown` to `md`.
+1. **post**: delete the `---` boundary lines; rewrite each message header `### #N sender · ts` as `## #N sender (ts)`; delete the seq #1 system message and lift its `[Thread created: X | participants: Y]` payload into the preamble as a bare `# X` H1 (the `- participants: Y` list is dropped — participants derive from the senders), renumbering the remaining messages consecutively from 1; after renumbering, remap every `@#N` reply token in body text to the target message's new seq (old seq numbers are stale once messages shift — e.g. if the old #3 becomes the new #2 and it replied to old #2 which became the new #1, rewrite `@#2` as `@#1`); convert every message attribute block into body-text tokens written on the same first line of the body as the original text: `- Reply-To: #N` -> `@#N`, `- Mentions: a,b` -> `@a @b` (space-separated, directly before the original body text — see the `@#1 @alice Agreed. Ship it.` line in the example above); drop `- To:` lines entirely — directed messages no longer exist as a structured concept, write `@name` in the body instead; replace fixed 4-backtick body fences with the minimal fence longer than any backtick run in the body (usually 3) and change the fence info `markdown` to `md`.
 2. **profile**: lowercase `- Model:`; move `- Description:` text into a prose paragraph after the H1; rewrite the `## Scope` bullets as `- <permission>: <glob>` with bare globs (no backticks); delete `—` placeholder lines (empty scope = omit the section).
-3. **brief**: lowercase `- Owner:` / `- Created:`; move `- Description:` text into prose after the H1; drop the `## Entries` wrapper and promote each entry H3 to H2; unwrap backticks from `- Path:` / `- Regex:`; write the hash in full (64 hex chars, no truncation); rewrite blockquote notes as bare prose paragraphs.
+3. **brief**: lowercase `- Owner:` / `- Created:`; move `- Description:` text into prose after the H1; drop the `## Entries` wrapper and promote each entry H3 to H2; unwrap backticks from `- Path:` / `- Regex:`; write the hash in full (64 hex chars, no truncation); rewrite blockquote notes as bare prose paragraphs. Migration is not atomic — apply all steps to a brief file in one pass before running any write command (`brief add` / `brief remove`) on it, so no intermediate state is exposed to writers; do the structural moves (drop the `## Entries` wrapper, promote H3s) first, then lowercase the attribute keys.
 4. **contacts**: turn each bare-path bullet into a Markdown link `- [name](path)`.
 
 Known downgrade after the break (expected, not a bug): old-format profiles (capitalized `- Model:` key) parse as missing their model, so `profile list` shows them as `(unreadable)` and `contacts read` skips their enrichment. Convert the file as above to restore it.
@@ -171,6 +171,7 @@ Behavior contract changes worth knowing before upgrading:
 - `brief read --full` prints the full 64-hex-char hash on stdout (the body-line `(hash: …)` was truncated to 12 chars in v0.4).
 - Reading an unmigrated v0.4 file is a **silent empty result**, not an error: `post read` returns `ok` with 0 messages, `contacts read` returns an empty list (old constructs receive no parsing support). Use `paperwork validate <file>` as the machine check for migration completeness — it reports `error format:` until the file is fully migrated.
 - `post send` into an unmigrated v0.4 thread is **rejected** (`error format:`) instead of appending — appending would silently produce a mixed-format corrupt file. Migrate the file per the guide above first.
+- `contacts add` into an unmigrated v0.4 contacts file is **rejected** (`error format:`) instead of rewriting — v0.5 parsing ignores bare-path bullets, so the read-modify-rewrite would silently drop every existing entry. Migrate the file per the guide above first.
 - Files written by early 0.5.0 builds that still carry `- reply-to:` / `- mentions:` attribute lines read fine: those attribute lines are ignored (references derive from the body `@` tokens only), and any rewrite operation (`post edit`) drops them.
 
 ### Rust API (paperwork-core) breaking
@@ -181,7 +182,7 @@ Compile-level breaks for library consumers (IDE plugins, agent harnesses, other 
 - `ThreadMeta`: brand-new type in 0.5.0 (`ThreadMeta { title }`) — v0.4 had no thread-preamble type at all, so nothing was removed here.
 - `ThreadSummary`: gained a `participants: Vec<String>` field (derived from the message sender set, first-appearance order) — struct-literal construction breaks at compile time, and `post summary --json` payloads carry a new `participants` key.
 - `Message`: the `to` field is deleted; `reply_to` / `mentions` survive as parse-time derivations from body tokens (`@#N` / `@name`) and are never serialized back (Serialize/Deserialize shape change for `post read --json` payloads).
-- `ContactEntry`: the `summary` field is removed and replaced by `label` (Serialize/Deserialize shape change; `contacts read --json` entries carry `label` instead of `summary`).
+- `ContactEntry`: `contacts read --json` entries gain a new `label` key (the core `ContactEntry` serde shape replaces `summary` with `label`).
 - `format::thread::serialize_thread` signature changed: `(&[Message])` → `(&ThreadMeta, &[Message])`.
 - Removed public functions: `extract_bullet_key`, `parse_message_header`, `is_boundary_line`, `find_message_boundaries`, `parse_scope_globs`, `serialize_scope_globs`.
 
@@ -191,7 +192,7 @@ Compile-level breaks for library consumers (IDE plugins, agent harnesses, other 
 - `post send --reply-to` / `--mention`: sugar flags injecting `@#N` / `@name` tokens at the body head; replies implicitly `@` the original sender
 - `post summary`: title read from the preamble H1; participants derived from the message sender set
 - `validate`: seq monotonicity (starts at 1, no gaps) and fence-closure checks wired in; suspected malformed message headers reported as warnings with a fix hint
-- New smoke corpus `test-v05/` in the new format
+- Local smoke corpus `test-v05/` in the new format (not tracked by git; see docs/dev/format-v2/impl_plan.md S5.1)
 
 ### Technical debt repaid
 

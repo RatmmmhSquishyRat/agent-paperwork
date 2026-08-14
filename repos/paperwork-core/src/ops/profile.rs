@@ -1,7 +1,17 @@
 //! Profile operations: create, show, edit — all path-explicit.
+//!
+//! Concurrency (review M7): the read-modify-write op (`edit_profile`)
+//! holds an fs2 exclusive lock for the whole read → modify → rewrite
+//! cycle, so concurrent writers serialize and no update is lost. The
+//! rewrite is an in-lock `truncate + write_all`; a crash inside that
+//! window can leave the file truncated (accepted, identical to
+//! `thread_edit`, spec §5.7 note).
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+
+use fs2::FileExt;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::profile::{parse_profile, serialize_profile};
@@ -17,7 +27,10 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
             resource: "Profile".to_string(),
             name: path.display().to_string(),
             fix: "use `paperwork profile edit` to modify an existing profile".to_string(),
-            example: format!("paperwork profile edit {} --model <new-model>", path.display()),
+            example: format!(
+                "paperwork profile edit {} --model <new-model>",
+                path.display()
+            ),
         });
     }
 
@@ -75,6 +88,9 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
 /// Edit an existing profile's fields.
 ///
 /// Only updates the fields that are `Some`.
+///
+/// Runs under an fs2 exclusive lock for the whole read → modify → rewrite
+/// cycle (review M7).
 pub fn edit_profile(
     path: &Path,
     model: Option<&str>,
@@ -92,12 +108,34 @@ pub fn edit_profile(
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
+        })?;
+
+    // Exclusive lock around the full read-modify-write cycle (review M7).
+    file.lock_exclusive()
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "another process may hold the lock; retry shortly".to_string(),
+            example: String::new(),
+        })?;
+
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
+        })?;
 
     let mut profile = parse_profile(&content)?;
 
@@ -118,10 +156,33 @@ pub fn edit_profile(
     }
 
     let serialized = serialize_profile(&profile);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
+
+    // Rewrite through the locked handle (truncate + write within the lock).
+    file.set_len(0).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
-        fix: "check that the target path is writable".to_string(),
+        fix: "check file permissions".to_string(),
+        example: String::new(),
+    })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
+        })?;
+    file.write_all(serialized.as_bytes())
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check disk space and file permissions".to_string(),
+            example: String::new(),
+        })?;
+
+    file.unlock().map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
+        source: e,
+        fix: "check file handle validity".to_string(),
         example: String::new(),
     })?;
 

@@ -9,13 +9,40 @@ pub mod manifest;
 pub mod profile;
 pub mod thread;
 
+use std::borrow::Cow;
+
+use chrono::{DateTime, Utc};
 use regex::Regex;
 use std::sync::LazyLock;
 
 /// Normalize CRLF → LF (invariant I11).
 /// All parsers must call this before processing.
-pub fn normalize_line_endings(content: &str) -> String {
-    content.replace("\r\n", "\n").replace('\r', "\n")
+///
+/// Zero-copy when the content carries no `\r` at all (M-review n14).
+pub fn normalize_line_endings(content: &str) -> Cow<'_, str> {
+    if !content.contains('\r') {
+        return Cow::Borrowed(content);
+    }
+    Cow::Owned(content.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+/// Canonical write-side RFC 3339 timestamp format (spec §3.5) — the single
+/// format string shared by every timestamp serialization site (M-review M6).
+pub const RFC3339_FMT: &str = "%Y-%m-%dT%H:%M:%SZ";
+
+/// Parse timestamp from RFC 3339 string (spec §3.5).
+///
+/// Accepts any RFC 3339 offset (normalized to UTC); a timezone-less
+/// `%Y-%m-%dT%H:%M:%S` is treated as UTC. Single shared implementation
+/// for the whole format layer (M-review M6).
+pub(crate) fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
+    }
+    Err(format!("cannot parse '{}' as RFC 3339 timestamp", s))
 }
 
 /// Regex for attribute lines (spec §3.2): `- key: value` with a lowercase
@@ -30,12 +57,9 @@ static ATTRIBUTE_RE: LazyLock<Regex> =
 /// empty). Uppercase-key bullets (legacy format) never match and are treated
 /// as unknown content (spec §3.6).
 pub fn extract_attribute(line: &str) -> Option<(String, String)> {
-    ATTRIBUTE_RE.captures(line).map(|caps| {
-        (
-            caps[1].to_string(),
-            caps[2].trim().to_string(),
-        )
-    })
+    ATTRIBUTE_RE
+        .captures(line)
+        .map(|caps| (caps[1].to_string(), caps[2].trim().to_string()))
 }
 
 /// Count the leading spaces of a line (capped: returns `None` once more

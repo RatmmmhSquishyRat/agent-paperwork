@@ -76,7 +76,7 @@ cd agent-paperwork
 cargo install --path repos/paperwork-cli
 ```
 
-Requires Rust 1.74+.
+Requires Rust 1.89+.
 
 ---
 
@@ -237,7 +237,7 @@ git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
 cd agent-paperwork
 
 cargo build                                     # build
-cargo test                                      # 154 tests
+cargo test                                      # 176 tests
 cargo clippy --all-targets -- -D warnings       # lint
 ```
 

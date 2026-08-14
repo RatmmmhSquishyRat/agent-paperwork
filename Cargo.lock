@@ -442,12 +442,10 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "chrono",
  "clap",
  "paperwork-core",
  "predicates",
  "regex",
- "serde",
  "serde_json",
  "tempfile",
 ]

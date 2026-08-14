@@ -2,15 +2,26 @@
 //!
 //! A brief is a standalone reading list / knowledge brief.
 //! All operations take explicit file paths — no workspace root.
+//!
+//! Concurrency (review M7): every read-modify-write op (`brief_add_entry`,
+//! `brief_remove_entry`) holds an fs2 exclusive lock for the whole
+//! read → modify → rewrite cycle, so concurrent writers serialize and no
+//! update is lost. The rewrite is an in-lock `truncate + write_all`; a
+//! crash inside that window can leave the file truncated (accepted,
+//! identical to `thread_edit`, spec §5.7 note).
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use chrono::Utc;
+use fs2::FileExt;
 use regex::Regex;
 
 use crate::error::{PaperworkError, Result};
-use crate::format::manifest::{extract_regex_groups, parse_manifest, serialize_manifest};
+use crate::format::manifest::{
+    extract_regex_groups, note_representation_issue, parse_manifest, serialize_manifest,
+};
 use crate::hash;
 use crate::{Manifest, ManifestEntry, VerifyResult};
 
@@ -66,6 +77,13 @@ pub fn brief_create(
 /// The entry title is derived from the file name of `entry_path`.
 /// Computes the SHA-256 hash of the file at `entry_path` (resolved relative
 /// to the brief file's parent directory).
+///
+/// Note representability guard (review M1): a note whose first non-blank
+/// line is attribute-shaped (`- key: value`) or opens a ```` ```regex ````
+/// fence would be re-absorbed into the attribute zone on the next parse,
+/// silently corrupting the entry — such notes are refused with a
+/// Validation error before anything touches disk. The whole read → modify
+/// → rewrite cycle runs under an fs2 exclusive lock (review M7).
 pub fn brief_add_entry(
     path: &Path,
     entry_path: &str,
@@ -81,12 +99,45 @@ pub fn brief_add_entry(
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    // Note representability guard (review M1) — reject before locking/writing.
+    if let Some(note_text) = note {
+        if let Some(reason) = note_representation_issue(note_text) {
+            return Err(PaperworkError::Validation {
+                message: format!("note is not representable in brief format: {}", reason),
+                fix: "start the note with a plain prose line; attribute-shaped '- key: value' first lines and ```regex fence openings are reserved for entry attributes".to_string(),
+                example: format!("paperwork brief add {} --entry {} --note \"Reading notes for this file\"", path.display(), entry_path),
+            });
+        }
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
+        })?;
+
+    // Exclusive lock around the full read-modify-write cycle (review M7).
+    file.lock_exclusive()
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "another process may hold the lock; retry shortly".to_string(),
+            example: String::new(),
+        })?;
+
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
+        })?;
 
     let mut manifest = parse_manifest(&content)?;
 
@@ -98,11 +149,15 @@ pub fn brief_add_entry(
 
     // Check for duplicate title
     if manifest.entries.iter().any(|e| e.title == title) {
+        file.unlock().ok();
         return Err(PaperworkError::AlreadyExists {
             resource: "Brief entry".to_string(),
             name: title,
             fix: "use a different entry path or remove the existing entry first".to_string(),
-            example: format!("paperwork brief remove {} --entry-title <title>", path.display()),
+            example: format!(
+                "paperwork brief remove {} --entry-title <title>",
+                path.display()
+            ),
         });
     }
 
@@ -131,10 +186,33 @@ pub fn brief_add_entry(
     manifest.entries.push(entry);
 
     let serialized = serialize_manifest(&manifest);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
+
+    // Rewrite through the locked handle (truncate + write within the lock).
+    file.set_len(0).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
-        fix: "check that the target path is writable".to_string(),
+        fix: "check file permissions".to_string(),
+        example: String::new(),
+    })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
+        })?;
+    file.write_all(serialized.as_bytes())
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check disk space and file permissions".to_string(),
+            example: String::new(),
+        })?;
+
+    file.unlock().map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
+        source: e,
+        fix: "check file handle validity".to_string(),
         example: String::new(),
     })?;
 
@@ -142,6 +220,9 @@ pub fn brief_add_entry(
 }
 
 /// Remove an entry from a brief by title.
+///
+/// Runs under an fs2 exclusive lock for the whole read → modify → rewrite
+/// cycle (review M7).
 pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     if !path.exists() {
         return Err(PaperworkError::NotFound {
@@ -152,12 +233,34 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
+        })?;
+
+    // Exclusive lock around the full read-modify-write cycle (review M7).
+    file.lock_exclusive()
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "another process may hold the lock; retry shortly".to_string(),
+            example: String::new(),
+        })?;
+
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file permissions".to_string(),
+            example: String::new(),
+        })?;
 
     let mut manifest = parse_manifest(&content)?;
 
@@ -165,6 +268,7 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     manifest.entries.retain(|e| e.title != title);
 
     if manifest.entries.len() == original_len {
+        file.unlock().ok();
         return Err(PaperworkError::NotFound {
             resource: "Brief entry".to_string(),
             name: title.to_string(),
@@ -174,10 +278,33 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     }
 
     let serialized = serialize_manifest(&manifest);
-    fs::write(path, serialized).map_err(|e| PaperworkError::IoContext {
+
+    // Rewrite through the locked handle (truncate + write within the lock).
+    file.set_len(0).map_err(|e| PaperworkError::IoContext {
         path: path.to_path_buf(),
         source: e,
-        fix: "check that the target path is writable".to_string(),
+        fix: "check file permissions".to_string(),
+        example: String::new(),
+    })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
+        })?;
+    file.write_all(serialized.as_bytes())
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check disk space and file permissions".to_string(),
+            example: String::new(),
+        })?;
+
+    file.unlock().map_err(|e| PaperworkError::IoContext {
+        path: path.to_path_buf(),
+        source: e,
+        fix: "check file handle validity".to_string(),
         example: String::new(),
     })?;
 
@@ -226,19 +353,25 @@ pub fn brief_verify(path: &Path, base_dir: &Path) -> Result<Vec<(ManifestEntry, 
 }
 
 /// Verify a single brief entry against the current file state.
+///
+/// Reads the target file ONCE as bytes (review n15): the regex check runs
+/// on a `from_utf8_lossy` view and the hash on the raw bytes — non-UTF-8
+/// files no longer collapse to Stale, and the hash matches `hash_file`
+/// (raw-byte SHA-256) exactly.
 fn verify_entry(base_dir: &Path, entry: &ManifestEntry) -> Result<VerifyResult> {
     let abs_path = base_dir.join(&entry.path);
 
-    let file_content = match fs::read_to_string(&abs_path) {
-        Ok(content) => content,
+    let bytes = match fs::read(&abs_path) {
+        Ok(bytes) => bytes,
         Err(_) => return Ok(VerifyResult::Stale),
     };
 
-    // Check regex if present
+    // Check regex if present (lossy view: non-UTF-8 bytes become U+FFFD).
     if let Some(ref pattern) = entry.regex {
         match Regex::new(pattern) {
             Ok(re) => {
-                if !re.is_match(&file_content) {
+                let text = String::from_utf8_lossy(&bytes);
+                if !re.is_match(&text) {
                     return Ok(VerifyResult::Stale);
                 }
             }
@@ -246,8 +379,8 @@ fn verify_entry(base_dir: &Path, entry: &ManifestEntry) -> Result<VerifyResult> 
         }
     }
 
-    // Compute current hash
-    let current_hash = hash::hash_file(&abs_path)?;
+    // Hash the same bytes in memory (no second file read).
+    let current_hash = hash::hash_bytes(&bytes);
 
     if current_hash == entry.hash {
         Ok(VerifyResult::Fresh)

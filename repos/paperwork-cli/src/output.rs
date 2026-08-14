@@ -71,7 +71,10 @@ pub fn emit_ok(ctx: &Context, env: Envelope) {
             if !env.body.is_empty() {
                 obj.insert("body".to_string(), serde_json::json!(env.body));
             }
-            println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
+            );
         }
         OutputMode::Plain => {
             // Plain mode: raw content only (handled by caller)
@@ -109,7 +112,10 @@ pub fn emit_err(ctx: &Context, category: &str, message: &str, fix: &str, example
                 obj.insert("example".to_string(), serde_json::json!(example));
             }
             obj.insert("exit_code".to_string(), serde_json::json!(1));
-            println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
+            );
         }
         _ => {
             eprintln!("error {}: {}", category, message);

@@ -12,13 +12,15 @@
 //!   on the write side (D3); the parse side leniently accepts any info
 //!   string, `md`/`markdown` included; first fence wins.
 
-use chrono::{DateTime, Utc};
 use regex::Regex;
 use std::sync::LazyLock;
 
 use crate::{Message, PaperworkError, Result, ThreadMeta};
 
-use super::{compute_fence_length, fence_close_matches, fence_open_len, normalize_line_endings};
+use super::{
+    compute_fence_length, fence_close_matches, fence_open_len, normalize_line_endings,
+    parse_timestamp, RFC3339_FMT,
+};
 
 /// Message header regex (spec §5.3, exact).
 ///
@@ -88,7 +90,12 @@ pub fn derive_message_refs(body: &str, sender: &str) -> (Option<u64>, Vec<String
 /// parse side AND the `thread_edit` preamble carry-over — must agree on
 /// what counts as a message header.
 pub fn header_seq(line: &str) -> Option<u64> {
-    let seq: u64 = MESSAGE_HEADER_RE.captures(line)?.get(1)?.as_str().parse().ok()?;
+    let seq: u64 = MESSAGE_HEADER_RE
+        .captures(line)?
+        .get(1)?
+        .as_str()
+        .parse()
+        .ok()?;
     (seq != 0).then_some(seq)
 }
 
@@ -114,6 +121,29 @@ fn header_indices(lines: &[&str]) -> Vec<usize> {
     indices
 }
 
+/// Short-circuit variant of [`header_indices`]: the index of the FIRST
+/// fence-aware message header only (M-review M8). `parse_preamble` needs
+/// just the first boundary and must not walk the whole file.
+fn first_header_index(lines: &[&str]) -> Option<usize> {
+    let mut open: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+            continue;
+        }
+        if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+            continue;
+        }
+        if header_seq(line).is_some() {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// Parse the thread preamble (spec §5.2, owner ruling D1).
 ///
 /// The preamble is everything before the first fence-aware message header.
@@ -128,7 +158,7 @@ pub fn parse_preamble(content: &str) -> ThreadMeta {
     }
 
     let lines: Vec<&str> = content.lines().collect();
-    let preamble_end = header_indices(&lines).first().copied().unwrap_or(lines.len());
+    let preamble_end = first_header_index(&lines).unwrap_or(lines.len());
 
     let mut meta = ThreadMeta::default();
     for line in &lines[..preamble_end] {
@@ -164,19 +194,19 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
 
     for (idx, &header_line) in headers.iter().enumerate() {
         let seq = header_seq(lines[header_line]).expect("filtered by header_indices");
-        let caps = MESSAGE_HEADER_RE.captures(lines[header_line]).expect("matched");
+        let caps = MESSAGE_HEADER_RE
+            .captures(lines[header_line])
+            .expect("matched");
         let sender = caps[2].to_string();
         let timestamp_str = caps[3].to_string();
 
-        let timestamp = parse_timestamp(&timestamp_str).map_err(|e| {
-            PaperworkError::Parse {
-                message: format!(
-                    "invalid timestamp '{}' in message #{}: {}",
-                    timestamp_str, seq, e
-                ),
-                fix: "use RFC 3339 format: YYYY-MM-DDTHH:MM:SSZ".to_string(),
-                example: "2026-01-15T10:30:00Z".to_string(),
-            }
+        let timestamp = parse_timestamp(&timestamp_str).map_err(|e| PaperworkError::Parse {
+            message: format!(
+                "invalid timestamp '{}' in message #{}: {}",
+                timestamp_str, seq, e
+            ),
+            fix: "use RFC 3339 format: YYYY-MM-DDTHH:MM:SSZ".to_string(),
+            example: "2026-01-15T10:30:00Z".to_string(),
         })?;
 
         let content_start = header_line + 1;
@@ -200,20 +230,6 @@ pub fn parse_messages(content: &str) -> Result<Vec<Message>> {
     }
 
     Ok(messages)
-}
-
-/// Parse timestamp from RFC 3339 string (spec §3.5).
-///
-/// Accepts any RFC 3339 offset (normalized to UTC); a timezone-less
-/// `%Y-%m-%dT%H:%M:%S` is treated as UTC.
-fn parse_timestamp(s: &str) -> std::result::Result<DateTime<Utc>, String> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
-    }
-    Err(format!("cannot parse '{}' as RFC 3339 timestamp", s))
 }
 
 /// Extract the body of a message: the first fenced block after the header
@@ -260,9 +276,11 @@ fn parse_message_body(lines: &[&str]) -> String {
     while body_lines.last().is_some_and(|l| l.trim().is_empty()) {
         body_lines.pop();
     }
-    while body_lines.first().is_some_and(|l| l.trim().is_empty()) {
-        body_lines.remove(0);
-    }
+    let lead = body_lines
+        .iter()
+        .position(|l| !l.trim().is_empty())
+        .unwrap_or(body_lines.len());
+    let body_lines: Vec<&str> = body_lines.drain(lead..).collect();
 
     body_lines.join("\n")
 }
@@ -272,12 +290,17 @@ fn parse_message_body(lines: &[&str]) -> String {
 /// Non-empty, no whitespace (space/tab/newline), no `(` or `)`.
 pub fn validate_sender(sender: &str) -> Result<()> {
     let valid = !sender.is_empty()
-        && !sender.chars().any(|c| c.is_whitespace() || c == '(' || c == ')');
+        && !sender
+            .chars()
+            .any(|c| c.is_whitespace() || c == '(' || c == ')');
     if valid {
         Ok(())
     } else {
         Err(PaperworkError::Validation {
-            message: format!("invalid sender '{}': must be a single token without spaces or parentheses", sender),
+            message: format!(
+                "invalid sender '{}': must be a single token without spaces or parentheses",
+                sender
+            ),
             fix: "sender must be a single token without spaces or parentheses".to_string(),
             example: "paperwork post send standup --from alice \"Hello\"".to_string(),
         })
@@ -301,7 +324,7 @@ pub fn serialize_message(msg: &Message) -> String {
         "## #{} {} ({})\n\n",
         msg.seq,
         msg.sender,
-        msg.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+        msg.timestamp.format(RFC3339_FMT),
     );
 
     let fence_len = compute_fence_length(&msg.body);
@@ -337,10 +360,7 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
     // First message should be seq 1
     if messages[0].seq != 1 {
         return Err(PaperworkError::Validation {
-            message: format!(
-                "first message has seq {}, expected 1",
-                messages[0].seq
-            ),
+            message: format!("first message has seq {}, expected 1", messages[0].seq),
             fix: "thread messages must start at seq 1".to_string(),
             example: String::new(),
         });
@@ -374,7 +394,7 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{DateTime, TimeZone, Utc};
 
     fn make_timestamp(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
@@ -419,7 +439,12 @@ mod tests {
     fn test_preamble_participants_line_ignored() {
         let content = "# Standup\n\n- participants: alice, bob\n\nSome prose.\n";
         let meta = parse_preamble(content);
-        assert_eq!(meta, ThreadMeta { title: "Standup".to_string() });
+        assert_eq!(
+            meta,
+            ThreadMeta {
+                title: "Standup".to_string()
+            }
+        );
     }
 
     // D2: attribute-shaped lines in the message zone carry no semantics.
@@ -460,10 +485,7 @@ mod tests {
     #[test]
     fn test_derive_mentions_self_exclusion() {
         assert!(derive_mentions("@alice doing this myself", "alice").is_empty());
-        assert_eq!(
-            derive_mentions("@alice @bob @alice", "alice"),
-            vec!["bob"]
-        );
+        assert_eq!(derive_mentions("@alice @bob @alice", "alice"), vec!["bob"]);
         // self-reply references are NOT excluded (only mentions are)
         assert_eq!(derive_reply_to("@#3 following up"), Some(3));
     }
@@ -475,10 +497,7 @@ mod tests {
         assert_eq!(derive_reply_to("@#2 then @#3 and @#4"), Some(2));
         assert_eq!(derive_reply_to("no refs here"), None);
         // lenient: overflowing digit runs are skipped, the next one wins
-        assert_eq!(
-            derive_reply_to("@#99999999999999999999999999 @#5"),
-            Some(5)
-        );
+        assert_eq!(derive_reply_to("@#99999999999999999999999999 @#5"), Some(5));
     }
 
     // §5.4 (BDD:POST-33/34): bare / malformed `@` derives nothing, no error.
@@ -510,7 +529,9 @@ mod tests {
         let messages = parse_messages(content).expect("should parse");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].seq, 1);
-        assert!(messages[0].body.contains("## #99 mallory (2026-01-01T00:00:00Z)"));
+        assert!(messages[0]
+            .body
+            .contains("## #99 mallory (2026-01-01T00:00:00Z)"));
         assert_eq!(messages[1].seq, 2);
         assert!(!messages.iter().any(|m| m.seq == 99));
     }
@@ -593,7 +614,8 @@ mod tests {
     // T-FT-11 (POST-13)
     #[test]
     fn test_parse_unicode() {
-        let content = "# t\n\n## #1 alicé (2026-01-15T10:30:00Z)\n\n```md\nHéllo 🚀 你好世界\n```\n";
+        let content =
+            "# t\n\n## #1 alicé (2026-01-15T10:30:00Z)\n\n```md\nHéllo 🚀 你好世界\n```\n";
         let messages = parse_messages(content).expect("should parse unicode");
         assert_eq!(messages[0].sender, "alicé");
         assert!(messages[0].body.contains("🚀"));
@@ -695,7 +717,8 @@ mod tests {
     // T-FT-17 (POST-23)
     #[test]
     fn test_body_normalization() {
-        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\n\n\nfirst\nsecond\n\n\n```\n";
+        let content =
+            "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\n\n\nfirst\nsecond\n\n\n```\n";
         let messages = parse_messages(content).expect("parse");
         assert_eq!(messages[0].body, "first\nsecond");
     }
@@ -704,7 +727,8 @@ mod tests {
     #[test]
     fn test_fence_indent_policy() {
         // 3 leading spaces: recognized fence
-        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n   ```md\nindented fence body\n   ```\n";
+        let content =
+            "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n   ```md\nindented fence body\n   ```\n";
         let messages = parse_messages(content).expect("parse");
         assert_eq!(messages[0].body, "indented fence body");
 
@@ -722,14 +746,18 @@ mod tests {
     fn test_body_fence_info_lenient() {
         // no info string
         let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```\nplain fence\n```\n";
-        assert_eq!(parse_messages(content).expect("parse")[0].body, "plain fence");
+        assert_eq!(
+            parse_messages(content).expect("parse")[0].body,
+            "plain fence"
+        );
 
         // `md` (canonical write form)
         let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nmd fence\n```\n";
         assert_eq!(parse_messages(content).expect("parse")[0].body, "md fence");
 
         // `markdown` (legacy/handwritten form, D3 lenience)
-        let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```markdown\nmarkdown fence\n```\n";
+        let content =
+            "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```markdown\nmarkdown fence\n```\n";
         assert_eq!(
             parse_messages(content).expect("parse")[0].body,
             "markdown fence"
@@ -737,7 +765,10 @@ mod tests {
 
         // arbitrary info string
         let content = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```rust\nfn main() {}\n```\n";
-        assert_eq!(parse_messages(content).expect("parse")[0].body, "fn main() {}");
+        assert_eq!(
+            parse_messages(content).expect("parse")[0].body,
+            "fn main() {}"
+        );
 
         // writer side always emits `md`
         let serialized = serialize_message(&msg(1, "alice", "b"));

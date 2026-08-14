@@ -138,24 +138,52 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                 return Err(paperwork_core::PaperworkError::Validation {
                     message: "message body is empty".to_string(),
                     fix: "provide a non-empty message body".to_string(),
-                    example: format!("paperwork post send {} --from {} \"Hello\"", path.display(), from),
-                }.into());
+                    example: format!(
+                        "paperwork post send {} --from {} \"Hello\"",
+                        path.display(),
+                        from
+                    ),
+                }
+                .into());
             }
 
-            // Validate every --mention value at the flag layer (review MJ-2):
-            // values are injected verbatim as `@name` body tokens, so shapes
-            // that the spec §5.4 derivation would silently mangle or drop are
-            // rejected up front instead of writing corrupted references.
-            for value in &mention {
+            // Reject --reply-to 0 up front (review n4): seq numbers start at
+            // 1 (spec §5.3), so 0 can never reference an existing message.
+            if reply_to == Some(0) {
+                return Err(paperwork_core::PaperworkError::Validation {
+                    message: "reply-to must be >= 1".to_string(),
+                    fix: "pass the seq number of an existing message (seq numbers start at 1)"
+                        .to_string(),
+                    example: format!(
+                        "paperwork post send {} --from {} --reply-to 1 \"Hello\"",
+                        path.display(),
+                        from
+                    ),
+                }
+                .into());
+            }
+
+            // Clean the --mention list first (trim each segment, drop empty
+            // segments so "alice, bob" and trailing commas are legal —
+            // review n3), then validate every surviving value at the flag
+            // layer (review MJ-2): values are injected verbatim as `@name`
+            // body tokens, so shapes that the spec §5.4 derivation would
+            // silently mangle or drop are rejected up front instead of
+            // writing corrupted references.
+            let mut mentions = clean_list(mention);
+            for value in &mentions {
                 validate_mention_value(value, &from)?;
             }
 
             // Reply carries an implicit @: auto-add the original sender to
             // the mention list (boundaries unchanged: self-reply, already
             // listed, and missing seq never trigger).
-            let mut mentions = clean_list(mention);
             if let Some(reply_seq) = reply_to {
-                if let Ok(msgs) = paperwork_core::ops::thread::thread_read(&path, Some(reply_seq), Some(reply_seq)) {
+                if let Ok(msgs) = paperwork_core::ops::thread::thread_read(
+                    &path,
+                    Some(reply_seq),
+                    Some(reply_seq),
+                ) {
                     if let Some(original) = msgs.first() {
                         if !mentions.contains(&original.sender) && original.sender != from {
                             mentions.push(original.sender.clone());
@@ -184,9 +212,7 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                 title: title.unwrap_or(default_title),
             };
 
-            let seq = paperwork_core::ops::thread::thread_send(
-                &path, &from, &body, Some(&meta),
-            )?;
+            let seq = paperwork_core::ops::thread::thread_send(&path, &from, &body, Some(&meta))?;
 
             let conclusion = format!("#{} -> {}", seq, path.display());
             let env = output::Envelope::new("post.send", conclusion)
@@ -197,7 +223,14 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             Ok(())
         }
 
-        PostCommand::Read { path, from, to, mention, reply_to, limit } => {
+        PostCommand::Read {
+            path,
+            from,
+            to,
+            mention,
+            reply_to,
+            limit,
+        } => {
             let path = ensure_suffix(path, ".post.md");
             let all_messages = paperwork_core::ops::thread::thread_read(&path, from, to)?;
 
@@ -225,12 +258,21 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                     let mut obj = serde_json::Map::new();
                     obj.insert("status".to_string(), serde_json::json!("ok"));
                     obj.insert("command".to_string(), serde_json::json!("post.read"));
-                    obj.insert("conclusion".to_string(), serde_json::json!(format!("{} messages", total)));
+                    obj.insert(
+                        "conclusion".to_string(),
+                        serde_json::json!(format!("{} messages", total)),
+                    );
                     if total > limit {
-                        obj.insert("showing".to_string(), serde_json::json!(format!("{}/{}", messages.len(), total)));
+                        obj.insert(
+                            "showing".to_string(),
+                            serde_json::json!(format!("{}/{}", messages.len(), total)),
+                        );
                     }
                     obj.insert("messages".to_string(), serde_json::json!(messages));
-                    println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
+                    );
                 }
                 OutputMode::Plain => {
                     // Serialize only selected messages back to file format
@@ -247,7 +289,12 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                     for msg in &messages {
                         // reply/mentions shown from parse-time derivations
                         // (D2); no `to` output remains (field deleted).
-                        let mut header = format!("#{} {} {}", msg.seq, msg.sender, msg.timestamp.format("%Y-%m-%dT%H:%M:%SZ"));
+                        let mut header = format!(
+                            "#{} {} {}",
+                            msg.seq,
+                            msg.sender,
+                            msg.timestamp.format(paperwork_core::format::RFC3339_FMT)
+                        );
                         if let Some(r) = msg.reply_to {
                             header.push_str(&format!(" reply:#{}", r));
                         }
@@ -270,11 +317,11 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             let path = ensure_suffix(path, ".post.md");
             let summary = paperwork_core::ops::thread::thread_summary(&path)?;
 
-            // Title comes straight from the preamble (ops thread_meta);
+            // Title comes straight from the summary (parsed in the same
+            // pass — review M8: no second full-file thread_meta walk);
             // participants are derived from the message sender set (D1,
             // spec §5.4) and carried by the summary.
-            let meta = paperwork_core::ops::thread::thread_meta(&path)?;
-            let title = meta.title;
+            let title = summary.title.clone();
             let participants = summary.participants.join(", ");
 
             let last_snippet = summary.snippets.last().cloned().unwrap_or_default();
@@ -284,18 +331,32 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                     let mut obj = serde_json::Map::new();
                     obj.insert("status".to_string(), serde_json::json!("ok"));
                     obj.insert("command".to_string(), serde_json::json!("post.summary"));
-                    obj.insert("conclusion".to_string(), serde_json::json!(path.display().to_string()));
+                    obj.insert(
+                        "conclusion".to_string(),
+                        serde_json::json!(path.display().to_string()),
+                    );
                     obj.insert("title".to_string(), serde_json::json!(title));
                     obj.insert("participants".to_string(), serde_json::json!(participants));
-                    obj.insert("messages".to_string(), serde_json::json!(summary.message_count));
+                    obj.insert(
+                        "messages".to_string(),
+                        serde_json::json!(summary.message_count),
+                    );
                     if let Some(ref s) = summary.last_sender {
                         obj.insert("last.sender".to_string(), serde_json::json!(s));
                     }
                     if let Some(t) = summary.last_timestamp {
-                        obj.insert("last.time".to_string(), serde_json::json!(t.format("%Y-%m-%dT%H:%M:%SZ").to_string()));
+                        obj.insert(
+                            "last.time".to_string(),
+                            serde_json::json!(t
+                                .format(paperwork_core::format::RFC3339_FMT)
+                                .to_string()),
+                        );
                     }
                     obj.insert("last.snippet".to_string(), serde_json::json!(last_snippet));
-                    println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
+                    );
                 }
                 _ => {
                     let mut env = output::Envelope::new("post.summary", path.display().to_string())
@@ -306,7 +367,10 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                         env = env.field("last.sender", s);
                     }
                     if let Some(t) = summary.last_timestamp {
-                        env = env.field("last.time", &t.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                        env = env.field(
+                            "last.time",
+                            &t.format(paperwork_core::format::RFC3339_FMT).to_string(),
+                        );
                     }
                     env = env.field("last.snippet", &last_snippet);
                     output::emit_ok(ctx, env);
@@ -441,12 +505,30 @@ fn resolve_body(
 ) -> Result<String> {
     let (stdin_example, body_example) = match command {
         BodyCommand::Send => (
-            format!("paperwork post send {} --from {} --stdin", path.display(), from),
-            format!("paperwork post send {} --from {} \"Hello\"", path.display(), from),
+            format!(
+                "paperwork post send {} --from {} --stdin",
+                path.display(),
+                from
+            ),
+            format!(
+                "paperwork post send {} --from {} \"Hello\"",
+                path.display(),
+                from
+            ),
         ),
         BodyCommand::Edit { seq } => (
-            format!("paperwork post edit {} --seq {} --from {} --stdin", path.display(), seq, from),
-            format!("paperwork post edit {} --seq {} --from {} \"New body\"", path.display(), seq, from),
+            format!(
+                "paperwork post edit {} --seq {} --from {} --stdin",
+                path.display(),
+                seq,
+                from
+            ),
+            format!(
+                "paperwork post edit {} --seq {} --from {} \"New body\"",
+                path.display(),
+                seq,
+                from
+            ),
         ),
     };
     match (positional, stdin) {
@@ -454,12 +536,14 @@ fn resolve_body(
             message: "both positional body and --stdin provided".to_string(),
             fix: "use either a positional body argument or --stdin, not both".to_string(),
             example: stdin_example,
-        }.into()),
+        }
+        .into()),
         (None, false) => Err(paperwork_core::PaperworkError::Validation {
             message: "no message body provided".to_string(),
             fix: "provide a body as a positional argument or use --stdin".to_string(),
             example: body_example,
-        }.into()),
+        }
+        .into()),
         (Some(body), false) => Ok(body),
         (None, true) => {
             let mut buf = String::new();

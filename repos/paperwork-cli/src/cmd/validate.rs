@@ -46,16 +46,18 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
             message: format!("unknown file type: {}", path_str),
             fix: "file must end with .post.md, .profile.md, .brief.md, or .contacts.md".to_string(),
             example: "paperwork validate myfile.post.md".to_string(),
-        }.into());
+        }
+        .into());
     };
 
-    let content = std::fs::read_to_string(&args.path)
-        .map_err(|e| paperwork_core::PaperworkError::IoContext {
+    let content = std::fs::read_to_string(&args.path).map_err(|e| {
+        paperwork_core::PaperworkError::IoContext {
             path: args.path.clone(),
             source: e,
             fix: "check that the file exists and is readable".to_string(),
             example: format!("paperwork validate {}", path_str),
-        })?;
+        }
+    })?;
 
     let mut env = output::Envelope::new("validate", path_str);
 
@@ -67,9 +69,12 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
             if messages.is_empty() {
                 return Err(paperwork_core::PaperworkError::Parse {
                     message: "no valid messages found".to_string(),
-                    fix: "expected '## #<seq> <sender> (<timestamp>)' headers with dynamic md fences".to_string(),
+                    fix:
+                        "expected '## #<seq> <sender> (<timestamp>)' headers with dynamic md fences"
+                            .to_string(),
                     example: "paperwork post send myfile --from alice \"hello\"".to_string(),
-                }.into());
+                }
+                .into());
             }
 
             // Step 2: seq monotonicity (Validation surfaces directly, R10).
@@ -94,7 +99,20 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
             fence_check(&content)?;
         }
         FileType::Contacts => {
-            paperwork_core::format::contacts::parse_contacts(&content)?;
+            let entries = paperwork_core::format::contacts::parse_contacts(&content)?;
+            // Lower bound symmetric with post (review M2): zero link bullets
+            // PLUS fence-outside bare bullets = unmigrated v0.4 legacy form.
+            // Empty files keep the existing pass-through semantics (no
+            // bullets at all -> nothing to migrate).
+            if entries.is_empty()
+                && paperwork_core::format::contacts::contains_bare_bullet(&content)
+            {
+                return Err(paperwork_core::PaperworkError::Parse {
+                    message: "contacts file contains legacy bare-path bullets but no link bullets".to_string(),
+                    fix: "this file is in the v0.4 legacy format; migrate it by hand per the CHANGELOG migration guide: wrap each path in a Markdown link bullet '- [label](path)'".to_string(),
+                    example: "- [alice](agents/alice.profile.md)".to_string(),
+                }.into());
+            }
             fence_check(&content)?;
         }
     }
@@ -112,9 +130,12 @@ fn fence_check(content: &str) -> Result<()> {
     }
     Err(paperwork_core::PaperworkError::Parse {
         message: issues.join("; "),
-        fix: "close every code fence with a backtick-only line at least as long as the opening fence".to_string(),
+        fix:
+            "close every code fence with a backtick-only line at least as long as the opening fence"
+                .to_string(),
         example: String::new(),
-    }.into())
+    }
+    .into())
 }
 
 /// Suspected message header heuristic (spec §8 step 4, R9).

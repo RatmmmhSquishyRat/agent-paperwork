@@ -7,7 +7,7 @@
 
 use crate::{ContactEntry, PaperworkError, Result};
 
-use super::normalize_line_endings;
+use super::{fence_close_matches, fence_open_len, normalize_line_endings};
 
 /// Extract the title from contacts content (the H1 heading).
 pub fn parse_contacts_title(content: &str) -> Result<String> {
@@ -46,6 +46,35 @@ pub fn parse_contacts(content: &str) -> Result<Vec<ContactEntry>> {
     }
 
     Ok(entries)
+}
+
+/// Whether the content carries at least one BARE bullet outside fences
+/// (review B1): a `- ` bullet (flush left or indented, matching the
+/// lenient trim policy of [`parse_contacts`]) that is NOT a Markdown link
+/// bullet. v0.4 contacts files store bare paths this way; v0.5 parsing
+/// silently ignores them, so a read-modify-rewrite would drop the legacy
+/// entries — the write side uses this predicate as a refusal guard.
+pub fn contains_bare_bullet(content: &str) -> bool {
+    let content = normalize_line_endings(content);
+    let mut open: Option<usize> = None;
+    for line in content.lines() {
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+            continue;
+        }
+        if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+            continue;
+        }
+        if let Some(rest) = line.trim().strip_prefix("- ") {
+            if parse_link_bullet(rest).is_none() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Parse `[label](destination)` (spec §7.2), returning `None` for
@@ -207,17 +236,15 @@ mod tests {
     // T-FC-01 (CONT-01)
     #[test]
     fn test_parse_links() {
-        let content = "# Core Team\n\n- [alice](agents/alice.profile.md)\n- [bob](agents/bob.profile.md)\n";
+        let content =
+            "# Core Team\n\n- [alice](agents/alice.profile.md)\n- [bob](agents/bob.profile.md)\n";
         let contacts = parse_contacts(content).expect("should parse");
         assert_eq!(contacts.len(), 2);
         assert_eq!(contacts[0].label, "alice");
         assert_eq!(contacts[0].profile_path, "agents/alice.profile.md");
         assert_eq!(contacts[1].label, "bob");
         assert_eq!(contacts[1].profile_path, "agents/bob.profile.md");
-        assert_eq!(
-            parse_contacts_title(content).expect("title"),
-            "Core Team"
-        );
+        assert_eq!(parse_contacts_title(content).expect("title"), "Core Team");
     }
 
     // T-FC-02 (CONT-02)
@@ -312,8 +339,7 @@ mod tests {
 
         // roundtrip of escaped label
         let contacts_in = vec![entry("we]ird", "plain.md")];
-        let parsed =
-            parse_contacts(&serialize_contacts("t", &contacts_in)).expect("roundtrip");
+        let parsed = parse_contacts(&serialize_contacts("t", &contacts_in)).expect("roundtrip");
         assert_eq!(parsed, contacts_in);
     }
 
@@ -337,14 +363,12 @@ mod tests {
 
         // label with consecutive backslashes
         let contacts = vec![entry("a\\\\b", "p.md")];
-        let parsed =
-            parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
+        let parsed = parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
         assert_eq!(parsed, contacts);
 
         // bare-form path ending in a backslash
         let contacts = vec![entry("alice", "docs\\")];
-        let parsed =
-            parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
+        let parsed = parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
         assert_eq!(parsed, contacts);
 
         // angle-bracket path ending in a backslash (Windows dir-style)
@@ -355,8 +379,7 @@ mod tests {
 
         // angle-bracket path with consecutive backslashes
         let contacts = vec![entry("alice", "C:\\team\\\\share\\\\ docs\\\\")];
-        let parsed =
-            parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
+        let parsed = parse_contacts(&serialize_contacts("t", &contacts)).expect("parse");
         assert_eq!(parsed, contacts);
     }
 
@@ -368,5 +391,31 @@ mod tests {
         assert_eq!(contacts.len(), 1);
         assert_eq!(contacts[0].label, "bob");
         assert_eq!(contacts[0].profile_path, "ok.md");
+    }
+
+    // B1: bare-bullet detection for the legacy write guard
+    #[test]
+    fn test_contains_bare_bullet() {
+        // v0.4 legacy shape: bare path bullets
+        assert!(contains_bare_bullet(
+            "# t\n\n- agents/alice.profile.md\n- agents/bob.profile.md\n"
+        ));
+        // mixed file: one bare bullet among links still triggers
+        assert!(contains_bare_bullet(
+            "# t\n\n- [alice](a.md)\n- bare/path.md\n"
+        ));
+        // pure v0.5 link file: no bare bullets
+        assert!(!contains_bare_bullet(
+            "# t\n\n- [alice](a.md)\n- [bob](b.md)\n"
+        ));
+        // empty / title-only files
+        assert!(!contains_bare_bullet("# t\n"));
+        assert!(!contains_bare_bullet(""));
+        // bare bullet inside a fence is quoted content, not a legacy entry
+        assert!(!contains_bare_bullet("# t\n\n```\n- bare/path.md\n```\n"));
+        // CRLF variant
+        assert!(contains_bare_bullet("# t\r\n\r\n- bare/path.md\r\n"));
+        // malformed link bullet counts as bare (not parseable -> would drop)
+        assert!(contains_bare_bullet("# t\n\n- [unclosed(a.md\n"));
     }
 }

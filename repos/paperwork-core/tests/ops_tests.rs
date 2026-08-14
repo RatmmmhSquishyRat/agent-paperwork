@@ -24,7 +24,10 @@ fn meta(title: &str) -> ThreadMeta {
 /// Manual message serialization with a fixed timestamp (for size-precise
 /// fixtures). Matches the spec §5.9 canonical shape.
 fn manual_msg(seq: u64, sender: &str, ts: &str, body: &str) -> String {
-    format!("## #{} {} ({})\n\n```md\n{}\n```\n\n", seq, sender, ts, body)
+    format!(
+        "## #{} {} ({})\n\n```md\n{}\n```\n\n",
+        seq, sender, ts, body
+    )
 }
 
 // ============================================================================
@@ -36,8 +39,7 @@ fn create_profile_writes_file() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("alice.profile.md");
 
-    profile::create_profile(&path, "alice", "gpt-4", "Test agent")
-        .expect("create_profile failed");
+    profile::create_profile(&path, "alice", "gpt-4", "Test agent").expect("create_profile failed");
 
     assert!(path.is_file());
     let content = fs::read_to_string(&path).expect("read failed");
@@ -53,10 +55,13 @@ fn create_profile_writes_file() {
 #[test]
 fn create_profile_creates_parent_dirs() {
     let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("nested").join("deep").join("alice.profile.md");
+    let path = dir
+        .path()
+        .join("nested")
+        .join("deep")
+        .join("alice.profile.md");
 
-    profile::create_profile(&path, "alice", "gpt-4", "")
-        .expect("create_profile failed");
+    profile::create_profile(&path, "alice", "gpt-4", "").expect("create_profile failed");
 
     assert!(path.is_file());
 }
@@ -107,8 +112,7 @@ fn edit_profile_updates_fields() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("alice.profile.md");
 
-    profile::create_profile(&path, "alice", "gpt-4", "Original")
-        .expect("create failed");
+    profile::create_profile(&path, "alice", "gpt-4", "Original").expect("create failed");
 
     profile::edit_profile(
         &path,
@@ -165,8 +169,7 @@ fn thread_send_creates_parent_dirs() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("alice.dm").join("bob.post.md");
 
-    let seq = thread::thread_send(&path, "alice", "Hi", None)
-        .expect("thread_send failed");
+    let seq = thread::thread_send(&path, "alice", "Hi", None).expect("thread_send failed");
 
     assert_eq!(seq, 1);
     assert!(path.is_file());
@@ -203,8 +206,7 @@ fn thread_read_range_subset() {
     let path = dir.path().join("thread.post.md");
 
     for i in 1..=5 {
-        thread::thread_send(&path, "alice", &format!("Msg {}", i), None)
-            .expect("send failed");
+        thread::thread_send(&path, "alice", &format!("Msg {}", i), None).expect("send failed");
     }
 
     let messages = thread::thread_read(&path, Some(2), Some(4)).expect("read failed");
@@ -234,6 +236,8 @@ fn thread_summary_correct() {
 
     let summary = thread::thread_summary(&path).expect("summary failed");
     assert_eq!(summary.message_count, 3);
+    // M8: the preamble title rides along in the same parse pass
+    assert_eq!(summary.title, "t");
     // D1: participants derived from senders, first-appearance order
     assert_eq!(summary.participants, vec!["alice", "bob"]);
     assert_eq!(summary.last_sender, Some("alice".to_string()));
@@ -247,6 +251,7 @@ fn thread_summary_empty_for_missing_file() {
 
     let summary = thread::thread_summary(&path).expect("summary failed");
     assert_eq!(summary.message_count, 0);
+    assert_eq!(summary.title, "");
     assert_eq!(summary.last_sender, None);
 }
 
@@ -295,7 +300,10 @@ fn concurrent_thread_send_safety() {
     }
 
     for handle in handles {
-        handle.join().expect("thread panicked").expect("send failed");
+        handle
+            .join()
+            .expect("thread panicked")
+            .expect("send failed");
     }
 
     let messages = thread::thread_read(&path, None, None).expect("read failed");
@@ -366,14 +374,16 @@ fn thread_send_on_preamble_only_file() {
     let path = dir.path().join("thread.post.md");
 
     // existing preamble-only file (handwritten)
-    fs::write(&path, "# Custom Title\n\nHandwritten prose.\n\n- participants: carol\n")
-        .expect("write");
+    fs::write(
+        &path,
+        "# Custom Title\n\nHandwritten prose.\n\n- participants: carol\n",
+    )
+    .expect("write");
 
     // --title is ignored for a non-empty file (OQ-1); the historical
     // `- participants:` line is plain ignored preamble content (D1)
     let m = meta("Other Title");
-    let seq = thread::thread_send(&path, "alice", "first real message", Some(&m))
-        .expect("send");
+    let seq = thread::thread_send(&path, "alice", "first real message", Some(&m)).expect("send");
     assert_eq!(seq, 1);
 
     let content = fs::read_to_string(&path).expect("read");
@@ -496,11 +506,7 @@ fn thread_edit_preserves_preamble_lone_cr() {
 
     let after = fs::read_to_string(&path).expect("read");
     // preamble bytes carried over verbatim (byte-for-byte, R5 / I9)
-    assert!(
-        after.starts_with("# Title\r"),
-        "preamble lost: {:?}",
-        after
-    );
+    assert!(after.starts_with("# Title\r"), "preamble lost: {:?}", after);
     assert!(after.contains("newbody"));
 
     let messages = thread::thread_read(&path, None, None).expect("read");
@@ -534,11 +540,7 @@ fn thread_edit_preserves_preamble_pseudo_headers() {
 
     let after = fs::read_to_string(&path).expect("read");
     // byte-for-byte preamble preservation incl. pseudo headers and prose
-    assert!(
-        after.starts_with(preamble),
-        "preamble lost: {:?}",
-        after
-    );
+    assert!(after.starts_with(preamble), "preamble lost: {:?}", after);
     assert!(after.contains("prose after the seq-0 pseudo header"));
     assert!(after.contains("prose after the overflow pseudo header"));
     assert!(after.contains("edited"));
@@ -745,8 +747,7 @@ fn tail_scan_buffer_boundaries() {
         assert!(read_start > 5 && read_start < (5 + 140_000) as u64);
         assert_ne!(content.as_bytes()[read_start as usize - 1], b'\n');
 
-        let seq = thread::thread_send(&path, "carol", "three", None)
-            .expect("send");
+        let seq = thread::thread_send(&path, "carol", "three", None).expect("send");
         assert_eq!(seq, 3);
         let messages = thread::thread_read(&path, None, None).expect("read");
         let seqs: Vec<u64> = messages.iter().map(|m| m.seq).collect();
@@ -779,8 +780,7 @@ fn tail_scan_buffer_boundaries() {
         assert_eq!(content.as_bytes()[read_start as usize - 1], b'\n');
         assert!(content[read_start as usize..].starts_with("## #1"));
 
-        let seq = thread::thread_send(&path, "carol", "three", None)
-            .expect("send");
+        let seq = thread::thread_send(&path, "carol", "three", None).expect("send");
         assert_eq!(seq, 3);
         let messages = thread::thread_read(&path, None, None).expect("read");
         let seqs: Vec<u64> = messages.iter().map(|m| m.seq).collect();
@@ -797,8 +797,7 @@ fn tail_scan_buffer_boundaries() {
         assert!((content.len() as u64) < SCAN);
         fs::write(&path, &content).expect("write");
 
-        let seq = thread::thread_send(&path, "bob", "two", None)
-            .expect("send");
+        let seq = thread::thread_send(&path, "bob", "two", None).expect("send");
         assert_eq!(seq, 2);
         let messages = thread::thread_read(&path, None, None).expect("read");
         let seqs: Vec<u64> = messages.iter().map(|m| m.seq).collect();
@@ -815,8 +814,13 @@ fn brief_create_writes_file() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("onboarding.brief.md");
 
-    manifest::brief_create(&path, "onboarding", Some("alice"), "Understanding the codebase")
-        .expect("brief_create failed");
+    manifest::brief_create(
+        &path,
+        "onboarding",
+        Some("alice"),
+        "Understanding the codebase",
+    )
+    .expect("brief_create failed");
 
     assert!(path.is_file());
     let content = fs::read_to_string(&path).expect("read");
@@ -923,8 +927,7 @@ fn brief_verify_three_states() {
 
     // Stale target (regex stops matching)
     fs::write(dir.path().join("stale.txt"), "fn main() {}").expect("write");
-    manifest::brief_add_entry(&brief_path, "stale.txt", Some(r"fn main\(\)"), None)
-        .expect("add");
+    manifest::brief_add_entry(&brief_path, "stale.txt", Some(r"fn main\(\)"), None).expect("add");
 
     fs::write(dir.path().join("shift.txt"), "modified content").expect("write");
     fs::write(dir.path().join("stale.txt"), "no functions here").expect("write");
@@ -1066,16 +1069,15 @@ fn e2e_profile_post_workflow() {
 
     // Create alice's profile
     let alice_profile = dir.path().join("alice.profile.md");
-    profile::create_profile(&alice_profile, "alice", "gpt-4", "Alice agent")
-        .expect("create alice");
+    profile::create_profile(&alice_profile, "alice", "gpt-4", "Alice agent").expect("create alice");
 
     // Create a post thread via first send (preamble first write)
     let post_path = dir.path().join("discussion.post.md");
     let m = meta("Discussion");
     thread::thread_send(&post_path, "alice", "@bob Hello Bob!", Some(&m)).expect("send 1");
 
-    let seq2 = thread::thread_send(&post_path, "bob", "@#1 @alice Hi Alice!", Some(&m))
-        .expect("send 2");
+    let seq2 =
+        thread::thread_send(&post_path, "bob", "@#1 @alice Hi Alice!", Some(&m)).expect("send 2");
     assert_eq!(seq2, 2);
 
     // Read the thread
@@ -1090,6 +1092,7 @@ fn e2e_profile_post_workflow() {
     assert_eq!(read_meta.title, "Discussion");
     let summary = thread::thread_summary(&post_path).expect("summary");
     assert_eq!(summary.message_count, 2);
+    assert_eq!(summary.title, "Discussion");
     assert_eq!(summary.participants, vec!["alice", "bob"]);
     assert_eq!(summary.last_sender, Some("bob".to_string()));
 }
@@ -1115,7 +1118,10 @@ fn thread_send_repairs_missing_trailing_newline() {
 
     // The new header must land on its own line, never glued to the fence.
     let raw = fs::read_to_string(&post_path).expect("read raw");
-    assert!(raw.contains("\n## #2 bob ("), "header must start a new line");
+    assert!(
+        raw.contains("\n## #2 bob ("),
+        "header must start a new line"
+    );
     assert!(!raw.contains("```##"), "no glued fence+header line");
 
     // Both messages survive intact (previously #2 was swallowed into #1).
@@ -1142,4 +1148,213 @@ fn thread_send_keeps_well_formed_file_untouched() {
     let raw = fs::read_to_string(&post_path).expect("read raw");
     assert!(raw.contains("```\n\n## #2 bob ("));
     assert!(!raw.contains("```\n\n\n##"), "no extra blank line injected");
+}
+
+// ============================================================================
+// v0.5 full-review regressions (B1 / M1 / M7 / M8 / n1 / n2 / n15)
+// ============================================================================
+
+// B1 regression: contacts add on an unmigrated v0.4 contacts file (bare
+// path bullets) must refuse with a Parse error and leave the file intact —
+// the read-modify-rewrite would otherwise silently drop the legacy entries.
+#[test]
+fn contacts_add_rejects_legacy_bare_bullets() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("legacy.contacts.md");
+
+    // v0.4 shape: bare path bullets, no Markdown links
+    let legacy = "# team\n\n- agents/alice.profile.md\n- agents/bob.profile.md\n";
+    fs::write(&path, legacy).expect("write");
+
+    let err = contacts::contacts_add(&path, "agents/carol.profile.md")
+        .expect_err("legacy contacts must be rejected");
+    assert_eq!(err.category(), "format");
+    assert!(err.fix().contains("v0.4 legacy format"));
+    assert!(err.fix().contains("CHANGELOG migration guide"));
+
+    // file byte-for-byte unchanged (no silent entry loss)
+    assert_eq!(fs::read_to_string(&path).expect("read"), legacy);
+}
+
+// B1 variant: a bare bullet quoted inside a fence is not a legacy trace;
+// a migrated file keeps accepting adds.
+#[test]
+fn contacts_add_allows_fenced_bare_bullet_example() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("team.contacts.md");
+
+    contacts::contacts_create(&path, "team").expect("create");
+    // append a fence quoting the old format (documentation-style note)
+    let mut content = fs::read_to_string(&path).expect("read");
+    content.push_str("\n```\n- legacy/example.profile.md\n```\n");
+    fs::write(&path, content).expect("write");
+
+    contacts::contacts_add(&path, "agents/alice.profile.md").expect("add");
+    let entries = contacts::contacts_read(&path).expect("read");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].profile_path, "agents/alice.profile.md");
+}
+
+// M7 regression: concurrent contacts_add calls serialize on the fs2 lock
+// and no update is lost.
+#[test]
+fn concurrent_contacts_add_no_lost_updates() {
+    let dir = tempdir().expect("tempdir");
+    let path = Arc::new(dir.path().join("team.contacts.md"));
+    contacts::contacts_create(&path, "team").expect("create");
+
+    let barrier = Arc::new(Barrier::new(8));
+    let mut handles = vec![];
+    for i in 0..8 {
+        let path = Arc::clone(&path);
+        let barrier = Arc::clone(&barrier);
+        handles.push(std_thread::spawn(move || {
+            barrier.wait();
+            contacts::contacts_add(&path, &format!("agents/agent{}.profile.md", i))
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("thread panicked").expect("add failed");
+    }
+
+    let entries = contacts::contacts_read(&path).expect("read");
+    assert_eq!(entries.len(), 8, "no concurrent update may be lost");
+    for i in 0..8 {
+        let needle = format!("agents/agent{}.profile.md", i);
+        assert!(entries.iter().any(|e| e.profile_path == needle));
+    }
+}
+
+// M1 regression: a note whose first non-blank line is attribute-shaped
+// would be re-absorbed into the attribute zone on the next parse — the
+// write side refuses it with a Validation envelope.
+#[test]
+fn brief_add_entry_rejects_attribute_shaped_note() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "content").expect("write target");
+
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+
+    let err = manifest::brief_add_entry(
+        &brief_path,
+        "test.txt",
+        None,
+        Some("- path: sneaky override\nrest of note"),
+    )
+    .expect_err("attribute-shaped note first line must be rejected");
+    assert_eq!(err.category(), "validation");
+    assert!(err.to_string().contains("attribute-shaped"));
+
+    // nothing landed on disk
+    let m = manifest::brief_read(&brief_path).expect("read");
+    assert!(m.entries.is_empty());
+}
+
+// M1 regression: a note starting with a ```regex fence opening line would
+// be re-parsed as the regex carrier — refused with a Validation envelope.
+#[test]
+fn brief_add_entry_rejects_regex_fence_note() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.brief.md");
+    let test_file = dir.path().join("test.txt");
+    fs::write(&test_file, "content").expect("write target");
+
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+
+    let err = manifest::brief_add_entry(
+        &brief_path,
+        "test.txt",
+        None,
+        Some("\n```regex\n(?<sneaky>x)\n```\n"),
+    )
+    .expect_err("```regex note first line must be rejected");
+    assert_eq!(err.category(), "validation");
+    assert!(err.to_string().contains("```regex"));
+
+    let m = manifest::brief_read(&brief_path).expect("read");
+    assert!(m.entries.is_empty());
+
+    // a normal note with a later attribute-shaped line stays legal
+    manifest::brief_add_entry(
+        &brief_path,
+        "test.txt",
+        None,
+        Some("Prose first.\n- path: fine inside note"),
+    )
+    .expect("prose-first note accepted");
+    let m = manifest::brief_read(&brief_path).expect("read");
+    assert_eq!(m.entries.len(), 1);
+}
+
+// n1 regression: seq exhaustion at u64::MAX is a Validation error, never a
+// panic or silent wrap-around.
+#[test]
+fn thread_send_seq_exhaustion_at_u64_max() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("full.post.md");
+
+    // Fixture: a single real message at seq u64::MAX (parses fine).
+    let content = format!(
+        "# t\n\n{}",
+        manual_msg(u64::MAX, "alice", "2026-01-15T10:30:00Z", "last")
+    );
+    fs::write(&path, content).expect("write");
+
+    let err =
+        thread::thread_send(&path, "bob", "one too many", None).expect_err("seq space exhausted");
+    assert_eq!(err.category(), "validation");
+    assert!(err.to_string().contains("thread seq exhausted"));
+    assert!(err.fix().contains("start a new thread file"));
+}
+
+// n2 regression: a seq-0 pseudo header AFTER the last real message must not
+// reset the tail-scan last_seq (the scan shares the parse-side predicate).
+#[test]
+fn tail_scan_seq0_pseudo_header_keeps_last_seq() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("pseudo.post.md");
+
+    // Real message #1, then a seq-0 pseudo header outside any fence.
+    let content = format!(
+        "# t\n\n{}## #0 bob (2026-01-15T10:31:00Z)\n\nsome preamble-shaped prose\n",
+        manual_msg(1, "alice", "2026-01-15T10:30:00Z", "real")
+    );
+    fs::write(&path, content).expect("write");
+
+    // Before the fix the tail scan took seq 0 as last_seq and the next
+    // send reused #1, overwriting nothing but corrupting the sequence.
+    let seq = thread::thread_send(&path, "bob", "next", None).expect("send");
+    assert_eq!(seq, 2);
+
+    let messages = thread::thread_read(&path, None, None).expect("read");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].seq, 2);
+}
+
+// n15 regression: a non-UTF-8 target file verifies by raw-byte hash instead
+// of collapsing to Stale (old code failed the UTF-8 read and misjudged).
+#[test]
+fn brief_verify_non_utf8_target_is_fresh() {
+    let dir = tempdir().expect("tempdir");
+    let brief_path = dir.path().join("brief.brief.md");
+    let target = dir.path().join("binary.bin");
+
+    // invalid UTF-8 bytes
+    fs::write(&target, [0x00u8, 0xFF, 0xFE, 0x80, 0x41]).expect("write target");
+
+    manifest::brief_create(&brief_path, "test", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path, "binary.bin", None, None).expect("add");
+
+    let results = manifest::brief_verify(&brief_path, dir.path()).expect("verify");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].1, VerifyResult::Fresh);
+
+    // and a regex entry over non-UTF-8 content still runs (lossy view)
+    let brief_path2 = dir.path().join("regex.brief.md");
+    manifest::brief_create(&brief_path2, "test2", None, "").expect("create");
+    manifest::brief_add_entry(&brief_path2, "binary.bin", Some("A"), None).expect("add");
+    let results = manifest::brief_verify(&brief_path2, dir.path()).expect("verify");
+    assert_eq!(results[0].1, VerifyResult::Fresh); // byte 0x41 == 'A'
 }

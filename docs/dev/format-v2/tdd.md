@@ -4,7 +4,7 @@
 >
 > **编号约定**：`T-FM-*`（format/mod.rs 内联单测）、`T-FT-*`（format/thread.rs）、`T-FP-*`（format/profile.rs）、`T-FB-*`（format/manifest.rs）、`T-FC-*`（format/contacts.rs）、`T-OPS-*`（`repos/paperwork-core/tests/ops_tests.rs`）、`T-CLI-*`（`repos/paperwork-cli/tests/cli_integration.rs`）、`T-CI-*`（`.github/workflows/ci.yml` smoke）。
 >
-> **覆盖义务**：bdd.md 全部 78 个场景必须出现在下表的"BDD 场景"列中；实现完成时以本表为验收核对单。
+> **覆盖义务**：bdd.md 全部 79 个场景必须出现在下表的"BDD 场景"列中；实现完成时以本表为验收核对单。
 >
 > **2026-08-09 owner 追裁（D1–D3）联动**：改写 T-FT-01/02/03/09/12/13/19/20、T-OPS-07/12/14/16/26、T-CLI-06/09/11、T-CI-01/02；新增 T-FT-23/24/25（派生类测试）；T-FM-02 断言示例改用 profile/brief 键。
 

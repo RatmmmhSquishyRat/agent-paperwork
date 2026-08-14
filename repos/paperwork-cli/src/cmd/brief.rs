@@ -148,49 +148,67 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     let mut obj = serde_json::Map::new();
                     obj.insert("status".to_string(), serde_json::json!("ok"));
                     obj.insert("command".to_string(), serde_json::json!("brief.read"));
-                    obj.insert("conclusion".to_string(), serde_json::json!(format!("{} entries", manifest.entries.len())));
+                    obj.insert(
+                        "conclusion".to_string(),
+                        serde_json::json!(format!("{} entries", manifest.entries.len())),
+                    );
                     obj.insert("title".to_string(), serde_json::json!(manifest.name));
                     obj.insert("owner".to_string(), serde_json::json!(manifest.author));
-                    let entries_json: Vec<serde_json::Value> = manifest.entries.iter().map(|e| {
-                        let mut entry_obj = serde_json::Map::new();
-                        entry_obj.insert("title".to_string(), serde_json::json!(e.title));
-                        entry_obj.insert("path".to_string(), serde_json::json!(e.path));
-                        entry_obj.insert("hash".to_string(), serde_json::json!(e.hash));
-                        if full {
-                            if let Some(ref re) = e.regex {
-                                entry_obj.insert("regex".to_string(), serde_json::json!(re));
+                    let entries_json: Vec<serde_json::Value> = manifest
+                        .entries
+                        .iter()
+                        .map(|e| {
+                            let mut entry_obj = serde_json::Map::new();
+                            entry_obj.insert("title".to_string(), serde_json::json!(e.title));
+                            entry_obj.insert("path".to_string(), serde_json::json!(e.path));
+                            entry_obj.insert("hash".to_string(), serde_json::json!(e.hash));
+                            if full {
+                                if let Some(ref re) = e.regex {
+                                    entry_obj.insert("regex".to_string(), serde_json::json!(re));
+                                }
+                                if let Some(ref note) = e.note {
+                                    entry_obj.insert("note".to_string(), serde_json::json!(note));
+                                }
                             }
-                            if let Some(ref note) = e.note {
-                                entry_obj.insert("note".to_string(), serde_json::json!(note));
-                            }
-                        }
-                        serde_json::Value::Object(entry_obj)
-                    }).collect();
+                            serde_json::Value::Object(entry_obj)
+                        })
+                        .collect();
                     obj.insert("entries".to_string(), serde_json::json!(entries_json));
-                    println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
+                    );
                 }
                 OutputMode::Plain => {
                     let content = std::fs::read_to_string(&path)?;
                     output::print_plain(&content);
                 }
                 OutputMode::Default => {
-                    let mut env = output::Envelope::new("brief.read", format!("{} entries", manifest.entries.len()))
-                        .field("title", &manifest.name)
-                        .field("owner", &manifest.author);
-                    let body_lines: Vec<String> = manifest.entries.iter().map(|e| {
-                        if full {
-                            let mut line = format!("{}: {} (hash: {})", e.title, e.path, e.hash);
-                            if let Some(ref re) = e.regex {
-                                line.push_str(&format!(" regex: {}", re));
+                    let mut env = output::Envelope::new(
+                        "brief.read",
+                        format!("{} entries", manifest.entries.len()),
+                    )
+                    .field("title", &manifest.name)
+                    .field("owner", &manifest.author);
+                    let body_lines: Vec<String> = manifest
+                        .entries
+                        .iter()
+                        .map(|e| {
+                            if full {
+                                let mut line =
+                                    format!("{}: {} (hash: {})", e.title, e.path, e.hash);
+                                if let Some(ref re) = e.regex {
+                                    line.push_str(&format!(" regex: {}", re));
+                                }
+                                if let Some(ref note) = e.note {
+                                    line.push_str(&format!(" note: {}", note));
+                                }
+                                line
+                            } else {
+                                format!("{}: {}", e.title, e.path)
                             }
-                            if let Some(ref note) = e.note {
-                                line.push_str(&format!(" note: {}", note));
-                            }
-                            line
-                        } else {
-                            format!("{}: {}", e.title, e.path)
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     env = env.body_lines(body_lines);
                     output::emit_ok(ctx, env);
                 }
@@ -208,7 +226,10 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
 
             let results = paperwork_core::ops::manifest::brief_verify(&path, &resolved_base)?;
 
-            let fresh_count = results.iter().filter(|(_, r)| *r == paperwork_core::VerifyResult::Fresh).count();
+            let fresh_count = results
+                .iter()
+                .filter(|(_, r)| *r == paperwork_core::VerifyResult::Fresh)
+                .count();
             let total = results.len();
 
             match ctx.mode {
@@ -226,20 +247,32 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     let mut obj = serde_json::Map::new();
                     obj.insert("status".to_string(), serde_json::json!("ok"));
                     obj.insert("command".to_string(), serde_json::json!("brief.verify"));
-                    obj.insert("conclusion".to_string(), serde_json::json!(format!("{}/{} fresh", fresh_count, total)));
+                    obj.insert(
+                        "conclusion".to_string(),
+                        serde_json::json!(format!("{}/{} fresh", fresh_count, total)),
+                    );
                     obj.insert("results".to_string(), serde_json::json!(json_results));
-                    println!("{}", serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
+                    );
                 }
                 _ => {
-                    let mut env = output::Envelope::new("brief.verify", format!("{}/{} fresh", fresh_count, total));
-                    let body_lines: Vec<String> = results.iter().map(|(entry, result)| {
-                        let status = match result {
-                            paperwork_core::VerifyResult::Fresh => "fresh",
-                            paperwork_core::VerifyResult::Shifted => "shifted",
-                            paperwork_core::VerifyResult::Stale => "stale",
-                        };
-                        format!("{}: {}", entry.title, status)
-                    }).collect();
+                    let mut env = output::Envelope::new(
+                        "brief.verify",
+                        format!("{}/{} fresh", fresh_count, total),
+                    );
+                    let body_lines: Vec<String> = results
+                        .iter()
+                        .map(|(entry, result)| {
+                            let status = match result {
+                                paperwork_core::VerifyResult::Fresh => "fresh",
+                                paperwork_core::VerifyResult::Shifted => "shifted",
+                                paperwork_core::VerifyResult::Stale => "stale",
+                            };
+                            format!("{}: {}", entry.title, status)
+                        })
+                        .collect();
                     env = env.body_lines(body_lines);
                     output::emit_ok(ctx, env);
                 }

@@ -30,6 +30,12 @@ const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 /// Size of reverse-scan buffer for finding last seq (64KB + 256B, spec §5.5).
 const REVERSE_SCAN_SIZE: u64 = (64 * 1024 + 256) as u64;
 
+/// Number of trailing messages quoted in `thread_summary` snippets (review n10).
+const SNIPPET_COUNT: usize = 3;
+
+/// Character budget of a single summary snippet before ellipsis (review n10).
+const SNIPPET_CHAR_LIMIT: usize = 50;
+
 /// Tail-scan seq regex (spec §5.5). Applied per line while scanning;
 /// `[ \t]+` is the intra-line equivalent of the header's `\s+`.
 static SEQ_RE: LazyLock<Regex> =
@@ -91,21 +97,26 @@ pub fn thread_send(
         })?;
 
     // Acquire exclusive lock (blocks concurrent writers)
-    file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "another process may hold the lock; retry shortly".to_string(),
-        example: String::new(),
-    })?;
+    file.lock_exclusive()
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "another process may hold the lock; retry shortly".to_string(),
+            example: String::new(),
+        })?;
 
     // First-write gate: the in-lock file size is the single source of truth
     // (spec §5.7; an exists() pre-check would be TOCTOU).
-    let file_empty = file.metadata().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
-    })?.len() == 0;
+    let file_empty = file
+        .metadata()
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "check file handle validity".to_string(),
+            example: String::new(),
+        })?
+        .len()
+        == 0;
 
     // Read last seq within lock
     let last_seq = read_last_seq_locked(&file, path)?;
@@ -124,7 +135,13 @@ pub fn thread_send(
         });
     }
 
-    let new_seq = last_seq + 1;
+    let new_seq = last_seq
+        .checked_add(1)
+        .ok_or_else(|| PaperworkError::Validation {
+            message: "thread seq exhausted".to_string(),
+            fix: "start a new thread file".to_string(),
+            example: String::new(),
+        })?;
 
     // `reply_to` / `mentions` are derived from the final body text (D2);
     // serialization ignores them, keeping disk and model consistent.
@@ -160,11 +177,14 @@ pub fn thread_send(
     // written by this tool always do, but external edits may strip the final
     // newline; without this check the new header glues onto the previous
     // line and the message is silently swallowed into the prior body.
-    let mut prefix = "";
-    if !file_empty {
+    // The last-byte probe returns a bool; no closure mutates outer state
+    // (review n10).
+    let needs_leading_newline = if file_empty {
+        false
+    } else {
         // Non-empty branch guarantees len > 0, so End(-1) is valid.
         let mut file_ref = &file;
-        file_ref
+        let last = file_ref
             .seek(SeekFrom::End(-1))
             .and_then(|_| {
                 let mut last = [0u8; 1];
@@ -175,20 +195,18 @@ pub fn thread_send(
                 source: e,
                 fix: "check that the file is readable".to_string(),
                 example: String::new(),
-            })
-            .map(|last| {
-                if last[0] != b'\n' {
-                    prefix = "\n";
-                }
             })?;
-    }
+        last[0] != b'\n'
+    };
     let payload = if file_empty {
         match preamble {
             Some(meta) => format!("{}{}", serialize_preamble(meta), serialized),
             None => serialized,
         }
+    } else if needs_leading_newline {
+        format!("\n{}", serialized)
     } else {
-        format!("{}{}", prefix, serialized)
+        serialized
     };
 
     // Single write() call for atomicity (invariant I4)
@@ -240,7 +258,10 @@ pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Ve
             resource: "Thread".to_string(),
             name: path.display().to_string(),
             fix: "send a message first to create the thread".to_string(),
-            example: format!("paperwork post send {} --from <name> <body>", path.display()),
+            example: format!(
+                "paperwork post send {} --from <name> <body>",
+                path.display()
+            ),
         });
     }
 
@@ -269,6 +290,7 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
     if !path.exists() {
         return Ok(ThreadSummary {
             thread_path: path.display().to_string(),
+            title: String::new(),
             message_count: 0,
             participants: Vec::new(),
             last_sender: None,
@@ -283,6 +305,10 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
         fix: "check file permissions".to_string(),
         example: String::new(),
     })?;
+
+    // Title from the preamble in the SAME pass (review M8): callers no
+    // longer need a second full-file `thread_meta` walk.
+    let title = parse_preamble(&content).title;
 
     let messages = parse_messages(&content)?;
 
@@ -299,19 +325,12 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
         }
     }
 
-    // Snippets from last 3 messages (chronological order)
+    // Snippets from the last SNIPPET_COUNT messages (chronological order)
     let snippets: Vec<String> = messages
         .iter()
         .rev()
-        .take(3)
-        .map(|m| {
-            let preview: String = m.body.chars().take(50).collect();
-            if m.body.chars().count() > 50 {
-                format!("{}...", preview)
-            } else {
-                preview
-            }
-        })
+        .take(SNIPPET_COUNT)
+        .map(|m| snippet_of(&m.body))
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -319,12 +338,33 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
 
     Ok(ThreadSummary {
         thread_path: path.display().to_string(),
+        title,
         message_count,
         participants,
         last_sender,
         last_timestamp,
         snippets,
     })
+}
+
+/// One summary snippet: first `SNIPPET_CHAR_LIMIT` chars of the body,
+/// `...` appended when truncated. Single `char_indices` pass decides both
+/// the cut point and the truncation flag (review n10).
+fn snippet_of(body: &str) -> String {
+    let mut end = body.len();
+    let mut truncated = false;
+    for (i, (byte_idx, _ch)) in body.char_indices().enumerate() {
+        if i == SNIPPET_CHAR_LIMIT {
+            end = byte_idx;
+            truncated = true;
+            break;
+        }
+    }
+    let mut snippet = body[..end].to_string();
+    if truncated {
+        snippet.push_str("...");
+    }
+    snippet
 }
 
 /// Edit a message body in a thread (self-edit).
@@ -348,7 +388,10 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             resource: "Thread".to_string(),
             name: path.display().to_string(),
             fix: "cannot edit a non-existent thread".to_string(),
-            example: format!("paperwork post send {} --from <name> <body>", path.display()),
+            example: format!(
+                "paperwork post send {} --from <name> <body>",
+                path.display()
+            ),
         });
     }
 
@@ -363,12 +406,13 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             example: String::new(),
         })?;
 
-    file.lock_exclusive().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "another process may hold the lock; retry shortly".to_string(),
-        example: String::new(),
-    })?;
+    file.lock_exclusive()
+        .map_err(|e| PaperworkError::IoContext {
+            path: path.to_path_buf(),
+            source: e,
+            fix: "another process may hold the lock; retry shortly".to_string(),
+            example: String::new(),
+        })?;
 
     // Read content through the locked file handle
     let mut content = String::new();
@@ -395,7 +439,10 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             resource: "Message".to_string(),
             name: format!("#{}", seq),
             fix: "thread is empty; send a message first".to_string(),
-            example: format!("paperwork post send {} --from <name> <body>", path.display()),
+            example: format!(
+                "paperwork post send {} --from <name> <body>",
+                path.display()
+            ),
         });
     }
 
@@ -425,7 +472,12 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 seq, msg.sender, sender
             ),
             fix: "you can only edit your own messages".to_string(),
-            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), seq, msg.sender),
+            example: format!(
+                "paperwork post edit {} --seq {} --from {} <body>",
+                path.display(),
+                seq,
+                msg.sender
+            ),
         });
     }
 
@@ -446,7 +498,12 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 seq, sender_last_seq
             ),
             fix: "you can only edit your most recent message".to_string(),
-            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), sender_last_seq, sender),
+            example: format!(
+                "paperwork post edit {} --seq {} --from {} <body>",
+                path.display(),
+                sender_last_seq,
+                sender
+            ),
         });
     }
 
@@ -461,7 +518,12 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
                 seq, last_seq
             ),
             fix: "you can only edit the final message in a thread".to_string(),
-            example: format!("paperwork post edit {} --seq {} --from {} <body>", path.display(), last_seq, sender),
+            example: format!(
+                "paperwork post edit {} --seq {} --from {} <body>",
+                path.display(),
+                last_seq,
+                sender
+            ),
         });
     }
 
@@ -704,8 +766,11 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
             open = Some(n);
             continue;
         }
-        if let Some(caps) = SEQ_RE.captures(line) {
-            if let Ok(seq) = caps[1].parse::<u64>() {
+        if SEQ_RE.is_match(line) {
+            // header_seq re-check shares the parse-side predicate (review
+            // n2): seq-0 pseudo-headers and overflowing seqs never reset
+            // last_seq, exactly like `header_indices` on the read path.
+            if let Some(seq) = header_seq(line) {
                 last_seq = seq;
             }
         }

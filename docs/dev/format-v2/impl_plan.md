@@ -163,7 +163,7 @@ S1 format 层 → S2 ops 层 → S3 CLI 层 → S4 测试重写
 
 ## §4 阶段 S4：测试收尾
 
-- 对照 tdd.md §6 覆盖核对表逐行销项；确认 bdd.md 78 个场景无遗漏。
+- 对照 tdd.md §6 覆盖核对表逐行销项；确认 bdd.md 79 个场景无遗漏。
 - 补充等价类抽查：动态围栏 3/4/5/6（POST-06）、fence 内伪造头（POST-05）、sender 空格/括号（POST-07/17）、Windows 带空格路径（CONT-03）、CRLF、Unicode、空文件（VAL-07）、0 消息、seq gap（category validation）、断 fence、疑似头 warning（VAL-08）、并发四例（CONC-01..04）、尾扫边界（POST-32）。
 - 门槛命令：`cargo test --workspace`、`cargo clippy --all-targets -- -D warnings`。
 
@@ -199,7 +199,7 @@ S1 format 层 → S2 ops 层 → S3 CLI 层 → S4 测试重写
 
 1. `cargo test --workspace` 三平台语义全绿（本地至少 Windows 全绿；CI 三平台通过）。
 2. `cargo clippy --all-targets -- -D warnings` 零告警。
-3. tdd.md §6 覆盖核对表全部销项；bdd.md 78 场景无遗漏。
+3. tdd.md §6 覆盖核对表全部销项；bdd.md 79 场景无遗漏。
 4. `test-v05/` 正例全部通过 `paperwork validate`，坏例全部被拒绝。
 5. README（根、paperwork-cli、paperwork-core）/CHANGELOG/ci.yml smoke 与新格式一致。全仓精确检索（排除范围：历史语料目录 `test-v03/`、`test-v04/`、`_fix/`；`docs/` 下评审与历史记录；两个 Cargo.toml 的 description 英文标点 `—`），全部命中为零（F-5，可机器判定）：
    - 无 `- to: all` 行，无 `- To: all` 行；

@@ -73,20 +73,16 @@ pub fn parse_profile(content: &str) -> Result<Profile> {
         }
     }
 
-    let name = name.ok_or_else(|| {
-        PaperworkError::Parse {
-            message: "missing agent name heading (# <name>)".to_string(),
-            fix: "add a top-level heading with the agent name".to_string(),
-            example: "# alice".to_string(),
-        }
+    let name = name.ok_or_else(|| PaperworkError::Parse {
+        message: "missing agent name heading (# <name>)".to_string(),
+        fix: "add a top-level heading with the agent name".to_string(),
+        example: "# alice".to_string(),
     })?;
 
-    let model = model.ok_or_else(|| {
-        PaperworkError::Parse {
-            message: format!("missing - model: line for profile '{}'", name),
-            fix: "add a '- model: <model-id>' bullet line".to_string(),
-            example: "- model: gpt-4o".to_string(),
-        }
+    let model = model.ok_or_else(|| PaperworkError::Parse {
+        message: format!("missing - model: line for profile '{}'", name),
+        fix: "add a '- model: <model-id>' bullet line".to_string(),
+        example: "- model: gpt-4o".to_string(),
     })?;
 
     Ok(Profile {
@@ -281,7 +277,10 @@ mod tests {
             scope_write: vec![],
             scope_owns: vec![],
         };
-        assert_eq!(parse_profile(&serialize_profile(&minimal)).expect("roundtrip"), minimal);
+        assert_eq!(
+            parse_profile(&serialize_profile(&minimal)).expect("roundtrip"),
+            minimal
+        );
     }
 
     // T-FP-11 (PROF-11)
@@ -290,7 +289,8 @@ mod tests {
         // attribute-shaped lines inside the description zone are recognized
         // as attribute lines (unknown key → ignored) and never enter the
         // description text
-        let content = "# alice\n\nProse line one.\n- anything: value\nProse line two.\n\n- model: gpt-4o\n";
+        let content =
+            "# alice\n\nProse line one.\n- anything: value\nProse line two.\n\n- model: gpt-4o\n";
         let profile = parse_profile(content).expect("should parse");
         assert_eq!(profile.description, "Prose line one.\nProse line two.");
         assert!(!profile.description.contains("anything"));
