@@ -1743,3 +1743,23 @@ fn brief_note_fenced_reserved_heading_shape_roundtrips() {
     assert_eq!(m.entries.len(), 1);
     assert_eq!(m.entries[0].note.as_deref(), Some(note));
 }
+
+// ============================================================================
+// Ultra Review F2: spec-aligned suffix chains at the ops call sites — the
+// degenerate cross-shaped inputs keep their spec-correct stems.
+// ============================================================================
+
+#[test]
+fn derive_label_post_shaped_entry_keeps_post_stem() {
+    let dir = tempdir().expect("tempdir");
+    let contacts = dir.path().join("team.contacts.md");
+    contacts::contacts_create(&contacts, "team").expect("create");
+
+    // Unresolvable post-shaped profile path: label fallback strips per
+    // spec §7.3 R11 (`.profile.md` first, then `.md`) — the stem keeps
+    // `.post` instead of collapsing to `x`.
+    contacts::contacts_add(&contacts, "x.post.md").expect("add");
+    let entries = contacts::contacts_read(&contacts).expect("read");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].label, "x.post");
+}

@@ -328,17 +328,38 @@ where
     out
 }
 
-/// Strip the known managed-file suffixes from a file name: `.profile.md`
-/// first, then `.post.md`, then `.md`; anything else is kept as-is
-/// (spec §7.3 R11 label fallback). Single shared definition (T4; T5 wired
-/// the CLI `default_title` onto it — Sam-m-γ): consumed by
-/// `ops/contacts.rs::derive_label` and `cmd/post.rs::default_title`.
-pub fn strip_known_suffix(file_name: &str) -> &str {
+/// Minimal single-suffix strip primitive shared by the two spec suffix
+/// chains below (Ultra Review F2): strip the FIRST matching suffix, once.
+fn strip_first_of<'a>(file_name: &'a str, suffixes: &[&str]) -> &'a str {
+    for suffix in suffixes {
+        if let Some(stripped) = file_name.strip_suffix(suffix) {
+            return stripped;
+        }
+    }
     file_name
-        .strip_suffix(".profile.md")
-        .or_else(|| file_name.strip_suffix(".post.md"))
-        .or_else(|| file_name.strip_suffix(".md"))
-        .unwrap_or(file_name)
+}
+
+/// Default post-title suffix chain (spec §5.7): strip `.post.md` first,
+/// then `.md`; anything else is kept as-is. Consumed by
+/// `cmd/post.rs::default_title`.
+///
+/// Ultra Review F2: the historical `strip_known_suffix` superset
+/// (`.profile.md` → `.post.md` → `.md`) over-stripped degenerate inputs —
+/// `x.profile.md` used as a post path derived title `x` where spec §5.7
+/// derives `x.profile`. Each consumer now owns its spec chain.
+pub fn strip_title_suffix(file_name: &str) -> &str {
+    strip_first_of(file_name, &[".post.md", ".md"])
+}
+
+/// Contacts label fallback suffix chain (spec §7.3 R11): strip
+/// `.profile.md` first, then `.md`; anything else is kept as-is. Consumed
+/// by `ops/contacts.rs::derive_label`.
+///
+/// Ultra Review F2: split out of the historical `strip_known_suffix`
+/// superset — a post-shaped entry name `x.post.md` derives label `x.post`
+/// per R11, not the over-stripped `x`.
+pub fn strip_label_suffix(file_name: &str) -> &str {
+    strip_first_of(file_name, &[".profile.md", ".md"])
 }
 
 // ============================================================================
@@ -740,6 +761,28 @@ mod tests {
         assert!(prose_representation_issue("Prose.\n### Background section").is_some());
         assert!(prose_representation_issue("Prose.\n## Entries").is_some());
         assert!(prose_representation_issue("Prose.\n```\n### inside\n```\n").is_none());
+    }
+
+    // Ultra Review F2: the two spec suffix chains strip exactly their own
+    // chain — including the degenerate cross-shaped inputs the historical
+    // superset over-stripped.
+    #[test]
+    fn test_strip_suffix_spec_chains() {
+        // title chain (spec §5.7): `.post.md` first, then `.md`
+        assert_eq!(strip_title_suffix("chat.post.md"), "chat");
+        assert_eq!(strip_title_suffix("chat.md"), "chat");
+        assert_eq!(strip_title_suffix("chat"), "chat");
+        // degenerate: a profile-shaped name used as a post path keeps its
+        // `.profile` stem (spec-correct `x.profile`, not `x`)
+        assert_eq!(strip_title_suffix("x.profile.md"), "x.profile");
+
+        // label chain (spec §7.3 R11): `.profile.md` first, then `.md`
+        assert_eq!(strip_label_suffix("alice.profile.md"), "alice");
+        assert_eq!(strip_label_suffix("alice.md"), "alice");
+        assert_eq!(strip_label_suffix("alice"), "alice");
+        // degenerate: a post-shaped contacts entry name keeps its `.post`
+        // stem (spec-correct `x.post`, not `x`)
+        assert_eq!(strip_label_suffix("x.post.md"), "x.post");
     }
 
     // ========================================================================

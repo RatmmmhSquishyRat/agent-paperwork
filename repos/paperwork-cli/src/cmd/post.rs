@@ -391,15 +391,18 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
     }
 }
 
-/// Default preamble title (spec §5.7): strip the known managed-file
-/// suffixes via the shared core helper (Sam-m-γ: `.post.md`, else `.md`,
-/// else keep the file name as-is — same shape as `derive_label`).
+/// Default preamble title (spec §5.7): strip `.post.md` first, then
+/// `.md`, else keep the file name as-is — via the spec-aligned core
+/// helper. Ultra Review F2: `default_title` owns the §5.7 title chain
+/// (`paperwork_core::format::strip_title_suffix`); the historical
+/// `strip_known_suffix` superset (shared with `derive_label`'s §7.3 R11
+/// chain) over-stripped degenerate inputs.
 fn default_title(path: &Path) -> String {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
-    paperwork_core::format::strip_known_suffix(&name).to_string()
+    paperwork_core::format::strip_title_suffix(&name).to_string()
 }
 
 /// Trim each segment of a comma-separated list and drop empty segments.
