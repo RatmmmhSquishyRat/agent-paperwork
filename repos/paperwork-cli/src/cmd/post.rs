@@ -328,25 +328,21 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("post.read"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{} messages", total)),
-                    );
-                    obj.insert(
-                        "showing".to_string(),
-                        serde_json::json!(format!("{}/{}", messages.len(), total)),
-                    );
-                    if let Some(ref w) = window {
-                        obj.insert("window".to_string(), serde_json::json!(w));
-                    }
-                    obj.insert("messages".to_string(), serde_json::json!(messages));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("post.read"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{} messages", total)),
+                        )
+                        .insert(
+                            "showing",
+                            serde_json::json!(format!("{}/{}", messages.len(), total)),
+                        )
+                        .insert_opt("window", window.as_ref().map(|w| serde_json::json!(w)))
+                        .insert("messages", serde_json::json!(messages))
+                        .build();
+                    output::print_json(obj);
                 }
                 OutputMode::Plain => {
                     // Serialize only selected messages back to file format
@@ -425,35 +421,28 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("post.summary"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(path.display().to_string()),
-                    );
-                    obj.insert("title".to_string(), serde_json::json!(title));
-                    obj.insert("participants".to_string(), serde_json::json!(participants));
-                    obj.insert(
-                        "messages".to_string(),
-                        serde_json::json!(summary.message_count),
-                    );
-                    if let Some(ref s) = summary.last_sender {
-                        obj.insert("last.sender".to_string(), serde_json::json!(s));
-                    }
-                    if let Some(t) = summary.last_timestamp {
-                        obj.insert(
-                            "last.time".to_string(),
-                            serde_json::json!(t
-                                .format(paperwork_core::format::RFC3339_FMT)
-                                .to_string()),
-                        );
-                    }
-                    obj.insert("last.snippet".to_string(), serde_json::json!(last_snippet));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("post.summary"))
+                        .insert("conclusion", serde_json::json!(path.display().to_string()))
+                        .insert("title", serde_json::json!(title))
+                        .insert("participants", serde_json::json!(participants))
+                        .insert("messages", serde_json::json!(summary.message_count))
+                        .insert_opt(
+                            "last.sender",
+                            summary.last_sender.as_ref().map(|s| serde_json::json!(s)),
+                        )
+                        .insert_opt(
+                            "last.time",
+                            summary.last_timestamp.map(|t| {
+                                serde_json::json!(t
+                                    .format(paperwork_core::format::RFC3339_FMT)
+                                    .to_string())
+                            }),
+                        )
+                        .insert("last.snippet", serde_json::json!(last_snippet))
+                        .build();
+                    output::print_json(obj);
                 }
                 _ => {
                     let mut env = output::Envelope::new("post.summary", path.display().to_string())
@@ -585,14 +574,33 @@ fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
 }
 
 /// Default preamble title (spec section 5.7): strip the managed-file
-/// suffixes via the shared core helper (P-3: `.profile.md` first, then
-/// `.post.md`, then `.md`, else keep the file name as-is).
+/// suffixes (`.profile.md`, `.post.md`, `.md`) from the file name, else
+/// keep the file name as-is.
+///
+/// NEW-3 (P-6): the suffix stripping runs on the native `OsStr` so a
+/// non-Unicode file name is never rewritten by a `to_string_lossy()`
+/// roundtrip BEFORE stripping; the final `String` conversion is lossless
+/// for every valid-Unicode name (the only shape that can produce legal
+/// file content anyway), and falls back to the lossy representation with
+/// U+FFFD only for the non-representable remainder.
 fn default_title(path: &Path) -> String {
-    let name = path
+    use std::ffi::OsStr;
+
+    let name: std::ffi::OsString = path
         .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string());
-    paperwork_core::format::strip_known_suffix(&name).to_string()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| path.as_os_str().to_os_string());
+
+    let mut stem = name;
+    for suffix in [".profile.md", ".post.md", ".md"] {
+        if let Some(base) = crate::cmd::os_strip_suffix(&stem, OsStr::new(suffix)) {
+            stem = base;
+            break;
+        }
+    }
+
+    stem.into_string()
+        .unwrap_or_else(|os| os.to_string_lossy().into_owned())
 }
 
 /// Trim each segment of a comma-separated list and drop empty segments.

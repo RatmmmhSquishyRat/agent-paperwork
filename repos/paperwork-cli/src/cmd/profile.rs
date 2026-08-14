@@ -152,40 +152,34 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("profile.show"));
-                    obj.insert("conclusion".to_string(), serde_json::json!(profile.name));
-                    obj.insert("name".to_string(), serde_json::json!(profile.name));
-                    obj.insert("model".to_string(), serde_json::json!(profile.model));
-                    if !profile.description.is_empty() {
-                        obj.insert(
-                            "description".to_string(),
-                            serde_json::json!(profile.description),
-                        );
-                    }
-                    if !profile.scope_read.is_empty() {
-                        obj.insert(
-                            "scope.read".to_string(),
-                            serde_json::json!(profile.scope_read.join(", ")),
-                        );
-                    }
-                    if !profile.scope_write.is_empty() {
-                        obj.insert(
-                            "scope.write".to_string(),
-                            serde_json::json!(profile.scope_write.join(", ")),
-                        );
-                    }
-                    if !profile.scope_owns.is_empty() {
-                        obj.insert(
-                            "scope.owns".to_string(),
-                            serde_json::json!(profile.scope_owns.join(", ")),
-                        );
-                    }
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("profile.show"))
+                        .insert("conclusion", serde_json::json!(profile.name))
+                        .insert("name", serde_json::json!(profile.name))
+                        .insert("model", serde_json::json!(profile.model))
+                        .insert_opt(
+                            "description",
+                            (!profile.description.is_empty())
+                                .then(|| serde_json::json!(profile.description)),
+                        )
+                        .insert_opt(
+                            "scope.read",
+                            (!profile.scope_read.is_empty())
+                                .then(|| serde_json::json!(profile.scope_read.join(", "))),
+                        )
+                        .insert_opt(
+                            "scope.write",
+                            (!profile.scope_write.is_empty())
+                                .then(|| serde_json::json!(profile.scope_write.join(", "))),
+                        )
+                        .insert_opt(
+                            "scope.owns",
+                            (!profile.scope_owns.is_empty())
+                                .then(|| serde_json::json!(profile.scope_owns.join(", "))),
+                        )
+                        .build();
+                    output::print_json(obj);
                 }
                 OutputMode::Plain => {
                     let content = std::fs::read_to_string(&path)?;
@@ -298,25 +292,23 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
                     let json_profiles: Vec<serde_json::Value> = profiles
                         .iter()
                         .map(|(fname, name, model)| {
-                            serde_json::json!({
-                                "path": fname,
-                                "name": name,
-                                "model": model,
-                            })
+                            output::JsonBuilder::new()
+                                .insert("path", serde_json::json!(fname))
+                                .insert("name", serde_json::json!(name))
+                                .insert("model", serde_json::json!(model))
+                                .build()
                         })
                         .collect();
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("profile.list"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{} profiles", profiles.len())),
-                    );
-                    obj.insert("profiles".to_string(), serde_json::json!(json_profiles));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("profile.list"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{} profiles", profiles.len())),
+                        )
+                        .insert("profiles", serde_json::json!(json_profiles))
+                        .build();
+                    output::print_json(obj);
                 }
                 _ => {
                     let mut env = output::Envelope::new(

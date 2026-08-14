@@ -158,27 +158,25 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
                         .iter()
                         .map(|c| {
                             // Try to read profile for enrichment
-                            let (name, desc) = enrich_profile(&c.profile_path);
-                            serde_json::json!({
-                                "label": c.label,
-                                "path": c.profile_path,
-                                "name": name,
-                                "description": desc,
-                            })
+                            let (name, desc) = enrich_profile(&path, &c.profile_path);
+                            output::JsonBuilder::new()
+                                .insert("label", serde_json::json!(c.label))
+                                .insert("path", serde_json::json!(c.profile_path))
+                                .insert("name", serde_json::json!(name))
+                                .insert("description", serde_json::json!(desc))
+                                .build()
                         })
                         .collect();
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("contacts.read"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{} contacts", contacts.len())),
-                    );
-                    obj.insert("contacts".to_string(), serde_json::json!(json_contacts));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("contacts.read"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{} contacts", contacts.len())),
+                        )
+                        .insert("contacts", serde_json::json!(json_contacts))
+                        .build();
+                    output::print_json(obj);
                 }
                 OutputMode::Plain => {
                     let content = std::fs::read_to_string(&path)?;
@@ -192,7 +190,7 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
                     let body_lines: Vec<String> = contacts
                         .iter()
                         .map(|c| {
-                            let (name, desc) = enrich_profile(&c.profile_path);
+                            let (name, desc) = enrich_profile(&path, &c.profile_path);
                             if name == "(unreadable)" {
                                 format!("{}: (unreadable)", c.profile_path)
                             } else if desc.is_empty() {
@@ -213,9 +211,13 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
 
 /// Try to read a profile file and return (name, description).
 /// Returns ("(unreadable)", "") if the file cannot be parsed.
-fn enrich_profile(profile_path: &str) -> (String, String) {
-    let path = std::path::Path::new(profile_path);
-    match paperwork_core::ops::profile::show_profile(path) {
+///
+/// NEW-4 (P-6): resolution matches the write side (`derive_label`, spec §7.3
+/// R11): the entry path is tried as given (CWD-relative) first, then relative
+/// to the contacts file's own directory.
+fn enrich_profile(contacts_path: &std::path::Path, profile_path: &str) -> (String, String) {
+    let path = paperwork_core::ops::contacts::resolve_contact_path(contacts_path, profile_path);
+    match paperwork_core::ops::profile::show_profile(&path) {
         Ok(p) => (p.name, p.description),
         Err(_) => ("(unreadable)".to_string(), String::new()),
     }

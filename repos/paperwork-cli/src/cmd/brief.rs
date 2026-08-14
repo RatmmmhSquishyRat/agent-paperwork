@@ -226,38 +226,40 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("brief.read"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{} entries", total)),
-                    );
-                    obj.insert("title".to_string(), serde_json::json!(manifest.name));
-                    obj.insert("owner".to_string(), serde_json::json!(manifest.author));
                     let entries_json: Vec<serde_json::Value> = entries
                         .iter()
                         .map(|e| {
-                            let mut entry_obj = serde_json::Map::new();
-                            entry_obj.insert("title".to_string(), serde_json::json!(e.title));
-                            entry_obj.insert("path".to_string(), serde_json::json!(e.path));
-                            entry_obj.insert("hash".to_string(), serde_json::json!(e.hash));
-                            if detailed {
-                                if let Some(ref re) = e.regex {
-                                    entry_obj.insert("regex".to_string(), serde_json::json!(re));
-                                }
-                                if let Some(ref note) = e.note {
-                                    entry_obj.insert("note".to_string(), serde_json::json!(note));
-                                }
-                            }
-                            serde_json::Value::Object(entry_obj)
+                            output::JsonBuilder::new()
+                                .insert("title", serde_json::json!(e.title))
+                                .insert("path", serde_json::json!(e.path))
+                                .insert("hash", serde_json::json!(e.hash))
+                                .insert_opt(
+                                    "regex",
+                                    detailed
+                                        .then(|| e.regex.as_ref().map(|re| serde_json::json!(re)))
+                                        .flatten(),
+                                )
+                                .insert_opt(
+                                    "note",
+                                    detailed
+                                        .then(|| e.note.as_ref().map(|n| serde_json::json!(n)))
+                                        .flatten(),
+                                )
+                                .build()
                         })
                         .collect();
-                    obj.insert("entries".to_string(), serde_json::json!(entries_json));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("brief.read"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{} entries", total)),
+                        )
+                        .insert("title", serde_json::json!(manifest.name))
+                        .insert("owner", serde_json::json!(manifest.author))
+                        .insert("entries", serde_json::json!(entries_json))
+                        .build();
+                    output::print_json(obj);
                 }
                 OutputMode::Plain => {
                     let content = std::fs::read_to_string(&path)?;
@@ -313,25 +315,26 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     let json_results: Vec<serde_json::Value> = results
                         .iter()
                         .map(|(entry, result)| {
-                            serde_json::json!({
-                                "title": entry.title,
-                                "path": entry.path,
-                                "status": format!("{:?}", result).to_lowercase(),
-                            })
+                            output::JsonBuilder::new()
+                                .insert("title", serde_json::json!(entry.title))
+                                .insert("path", serde_json::json!(entry.path))
+                                .insert(
+                                    "status",
+                                    serde_json::json!(format!("{:?}", result).to_lowercase()),
+                                )
+                                .build()
                         })
                         .collect();
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("brief.verify"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{}/{} fresh", fresh_count, total)),
-                    );
-                    obj.insert("results".to_string(), serde_json::json!(json_results));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("brief.verify"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{}/{} fresh", fresh_count, total)),
+                        )
+                        .insert("results", serde_json::json!(json_results))
+                        .build();
+                    output::print_json(obj);
                 }
                 _ => {
                     let mut env = output::Envelope::new(

@@ -19,6 +19,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Breaking for direct Rust consumers only (CLI output unchanged):** the dead `PaperworkError::Io(std::io::Error)` variant is removed from the public error enum. Every IO failure now surfaces as `PaperworkError::IoContext` with an explicit path, fix hint, and example — the bare variant had no reachable construction site left after the io-error envelope unification. Crate consumers matching `PaperworkError::Io` must migrate to the `IoContext` arm; `category()` still reports `"io"` for both historical shapes.
 
+### Changed — CLI internals (P-6 batch, output bytes unchanged)
+
+- All command-side `--json` payloads are now assembled through a single `JsonBuilder` construction path (was: ad-hoc `serde_json::Map` inserts in nine call sites). Key set and key order are byte-identical to before (frozen by the char_tests snapshots).
+- Path suffix resolution (`ensure_suffix`) is now lossless for non-Unicode path components: suffix append/replace operates on the native OS string instead of a `to_string_lossy()` roundtrip, which could replace invalid bytes with U+FFFD and silently redirect a write to a different file name (NEW-3).
+
+### Fixed — CLI (P-6 batch, NEW-4)
+
+- `contacts read` enrichment now resolves each entry's profile path the same way the write side does: tried as given (CWD-relative) first, then relative to the contacts file's own directory. Entries whose profile lives next to the contacts file (but not next to the CWD) are enriched with name/description instead of degrading to `(unreadable)`.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal
