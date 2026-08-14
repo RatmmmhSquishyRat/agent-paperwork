@@ -14,6 +14,18 @@
 //!
 //! Crash-window note: the in-lock truncate + rewrite can lose the whole file
 //! on power loss / process kill; accepted precedent (format-v2 spec §5.7).
+//!
+//! Lock-layer ruling (P-1 / NEW-13 closure, 2026-08-15): this helper is the
+//! single SSOT for locked read-modify-write. The wip-era `LockedFile` RAII
+//! guard (branch wip/v0.5-perfection-snapshot-2026-08-15) was evaluated as
+//! design input only and NOT merged: the early-return unlock paths it was
+//! built to eliminate are already collapsed inside this helper (every error
+//! path — closure errors included — unlocks before returning; no-op results
+//! skip the rewrite), and per-step fix wording is part of the byte-frozen
+//! io-envelope contract, which a single-context RAII mapper cannot carry.
+//! `thread_send` / `thread_edit` keep their inline lock sequences because
+//! they are append / rewrite shapes, not RMW, and their per-step wording
+//! differs from this helper's (byte-freeze, P-5 golden snapshots).
 
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -135,4 +147,87 @@ where
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fs2::FileExt;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Stronger form of the error-path unlock guarantee (P-1, absorbed from
+    /// the wip LockedFile RAII test suite): after the closure returns Err,
+    /// the lock must actually be released — proven by a fresh handle being
+    /// able to take it immediately (no Drop-based cleanup involved: the
+    /// helper's File stays open until the function returns, so a leaked
+    /// lock would make try_lock_exclusive fail on Windows).
+    #[test]
+    fn closure_error_path_releases_lock() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("t.post.md");
+        fs::write(&path, "original\n").expect("write");
+
+        let err = locked_read_modify_write(&path, |_content| {
+            Err(PaperworkError::Validation {
+                message: "synthetic closure failure".to_string(),
+                fix: String::new(),
+                example: String::new(),
+            })
+        })
+        .expect_err("closure error must propagate");
+        assert_eq!(err.category(), "validation");
+
+        // The file must be untouched AND the lock released.
+        assert_eq!(fs::read_to_string(&path).expect("read"), "original\n");
+        let probe = fs::File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open probe");
+        assert!(
+            probe.try_lock_exclusive().is_ok(),
+            "lock must be released after a closure error"
+        );
+        probe.unlock().expect("unlock probe");
+    }
+
+    /// No-op skip keeps bytes AND mtime stable (zero-write idempotency).
+    #[test]
+    fn unchanged_result_skips_rewrite() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("t.post.md");
+        fs::write(&path, "same\n").expect("write");
+        let before = fs::metadata(&path).expect("metadata").modified().expect("mtime");
+
+        locked_read_modify_write(&path, Ok).expect("no-op rmw");
+
+        assert_eq!(fs::read_to_string(&path).expect("read"), "same\n");
+        let after = fs::metadata(&path).expect("metadata").modified().expect("mtime");
+        assert_eq!(before, after, "no-op must not rewrite (mtime stable)");
+    }
+
+    /// Changed content is rewritten under the lock and visible on disk.
+    #[test]
+    fn changed_result_rewrites_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("t.post.md");
+        fs::write(&path, "old\n").expect("write");
+
+        locked_read_modify_write(&path, |content| Ok(format!("{}new\n", content)))
+            .expect("rmw");
+
+        assert_eq!(fs::read_to_string(&path).expect("read"), "old\nnew\n");
+    }
+
+    /// Missing target file fast-fails as an io envelope (no fallback create).
+    #[test]
+    fn missing_file_is_io_error() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("absent.post.md");
+
+        let err = locked_read_modify_write(&path, Ok).expect_err("must fail");
+        assert_eq!(err.category(), "io");
+        assert!(err.fix().contains("writable"));
+    }
 }
