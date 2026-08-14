@@ -237,7 +237,7 @@ git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
 cd agent-paperwork
 
 cargo build                                     # build
-cargo test                                      # 320 tests
+cargo test                                      # 326 tests
 cargo clippy --all-targets -- -D warnings       # lint
 ```
 
