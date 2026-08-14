@@ -16,7 +16,7 @@ use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
 use super::{
     compute_fence_length, extract_attribute, fence_close_matches, fence_info, fence_open_len,
-    normalize_line_endings, parse_timestamp, RFC3339_FMT,
+    first_outside_fence, normalize_line_endings, parse_timestamp, RFC3339_FMT,
 };
 
 /// Named-capture-group scanner (`(?<name>...)`), compiled once (M-review M5).
@@ -71,10 +71,38 @@ fn h2_indices(lines: &[&str]) -> Vec<usize> {
     indices
 }
 
+/// Fence-aware scan for legacy (v0.4) brief residue (SAM-1 guard).
+///
+/// A brief that already uses lowercase attribute keys but still carries the
+/// v0.4 `## Entries` wrapper heading or `### ` H3 entry headers would parse
+/// under v0.5 rules and be destroyed by the next read-modify-rewrite (the
+/// wrapper/H3 lines become entry titles or preamble prose). Only structural
+/// positions trigger: fence-outside lines only, so a `### ` example inside
+/// a note fence is quoted content and stays legal.
+fn contains_legacy_brief_residue(lines: &[&str]) -> bool {
+    let joined = lines.join("\n");
+    first_outside_fence(&joined, |_i, line| {
+        let trimmed = line.trim();
+        trimmed == "## Entries" || trimmed.starts_with("### ")
+    })
+    .is_some()
+}
+
 /// Parse a manifest (brief) from Markdown content (spec §6.2).
 pub fn parse_manifest(content: &str) -> Result<Manifest> {
     let content = normalize_line_endings(content);
     let lines: Vec<&str> = content.lines().collect();
+
+    // Legacy residue guard (SAM-1): a half-migrated v0.4 brief (lowercase
+    // keys but residual `## Entries` wrapper / `### ` entry headers) would
+    // parse silently and be corrupted by the next RMW — refuse at parse.
+    if contains_legacy_brief_residue(&lines) {
+        return Err(PaperworkError::Parse {
+            message: "brief contains legacy v0.4 residue ('## Entries' wrapper heading or '### ' entry headers)".to_string(),
+            fix: "migrate this brief to the v0.5 entry layout per the CHANGELOG migration guide: entries are '## <title>' sections directly after the preamble, without an '## Entries' wrapper".to_string(),
+            example: "# title\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## entry title\n\n- path: file.rs\n- hash: <sha256>".to_string(),
+        });
+    }
 
     let headers = h2_indices(&lines);
     let preamble_end = headers.first().copied().unwrap_or(lines.len());

@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added — write-side injection guardrails (P-2 batch)
+
+- All create ops (`profile create`, `brief create`, `contacts create`) now create files atomically (`create_new`): two racing creators can no longer both succeed — exactly one wins, every loser receives the `already-exists` envelope, and the winner's bytes always survive.
+- Single-line fields reject embedded line breaks with a `validation` envelope before anything touches disk: post preamble title, profile name/model, brief title/owner/entry path, contacts title/profile path. This closes structure-injection vectors (e.g. a title carrying `\n## injected (...)`).
+- Preamble prose (profile / brief description) now refuses attribute-shaped lines with known structural keys (`- model:` / `- owner:` / `- created:` / `- path:` / `- hash:` / `- regex:`): such a line would shadow the real attribute on the next parse. Legal multi-line prose is unaffected.
+- `contacts` title parsing is fence-aware: an H1 inside a code fence is quoted example content, never the file title.
+- Briefs carrying legacy v0.4 residue (an `## Entries` wrapper heading or `### ` entry headers outside fences) are refused at parse time with a `format` envelope and a migration pointer, instead of being silently corrupted by the next write op. A `### ` line inside a note fence stays legal.
+- `brief verify` distinguishes a missing entry target (stays `Stale` per the spec three-state contract) from a genuine read failure (permission denied etc.), which now surfaces as an `io` error envelope instead of collapsing into `Stale`.
+- New core API `create_profile_full`: one-shot creation of a complete profile (including scopes) in a single atomic write.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal

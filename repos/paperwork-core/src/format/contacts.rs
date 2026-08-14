@@ -7,20 +7,27 @@
 
 use crate::{ContactEntry, PaperworkError, Result};
 
-use super::{fence_close_matches, fence_open_len, normalize_line_endings};
+use super::{fence_close_matches, fence_open_len, for_each_outside_fence, normalize_line_endings};
 
 /// Extract the title from contacts content (the H1 heading).
+///
+/// Fence-aware (NEW-5): an H1 inside a code fence (quoted example content)
+/// is never mistaken for the title; the first fence-outside `# ` heading
+/// wins.
 pub fn parse_contacts_title(content: &str) -> Result<String> {
     let content = normalize_line_endings(content);
-    for line in content.lines() {
+    let mut title = None;
+    for_each_outside_fence(&content, |_i, line| {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix("# ") {
             if !trimmed.starts_with("## ") {
-                return Ok(stripped.trim().to_string());
+                title = Some(stripped.trim().to_string());
+                return false;
             }
         }
-    }
-    Err(PaperworkError::Parse {
+        true
+    });
+    title.ok_or_else(|| PaperworkError::Parse {
         message: "missing contacts title heading (# <title>)".to_string(),
         fix: "add a top-level heading with the contacts title".to_string(),
         example: "# my-team".to_string(),

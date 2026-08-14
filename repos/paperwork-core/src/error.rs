@@ -77,6 +77,27 @@ pub enum PaperworkError {
 }
 
 impl PaperworkError {
+    /// One-line [`PaperworkError::IoContext`] constructor shared by IO call
+    /// sites (T4 helper, pulled forward in P-2 for the NEW-2 atomic-create
+    /// and SAM-4 verify guards; the full call-site migration lands in P-4).
+    ///
+    /// The fix/example wording is deliberately REQUIRED at every call and
+    /// never defaulted: each site's wording is part of the output contract
+    /// and pinned by tests, and the sites disagree with each other.
+    pub(crate) fn io_ctx(
+        path: impl Into<PathBuf>,
+        source: std::io::Error,
+        fix: impl Into<String>,
+        example: impl Into<String>,
+    ) -> Self {
+        PaperworkError::IoContext {
+            path: path.into(),
+            source,
+            fix: fix.into(),
+            example: example.into(),
+        }
+    }
+
     /// Return the error category string for the error envelope.
     pub fn category(&self) -> &'static str {
         match self {

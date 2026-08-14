@@ -10,9 +10,10 @@
 //! note).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{PaperworkError, Result};
+use crate::format::check_single_line;
 use crate::format::contacts::{
     contains_bare_bullet, parse_contacts, parse_contacts_title, serialize_contacts,
 };
@@ -20,41 +21,27 @@ use crate::format::profile::parse_profile;
 use crate::ops::lock::locked_read_modify_write;
 use crate::ContactEntry;
 
+use super::create_new_file;
+
 /// Create a new empty contacts file at the given path.
 ///
 /// Creates parent directories if needed.
-/// Fails if the file already exists.
+/// Fails if the file already exists (atomic `create_new`, NEW-2).
+///
+/// Write-side injection guard (NEW-1): `title` must be single line.
 pub fn contacts_create(path: &Path, title: &str) -> Result<()> {
-    if path.exists() {
-        return Err(PaperworkError::AlreadyExists {
-            resource: "Contacts".to_string(),
-            name: path.display().to_string(),
-            fix: "use `paperwork contacts add` to add entries".to_string(),
-            example: format!(
-                "paperwork contacts add {} --profile agents/alice.profile.md",
-                path.display()
-            ),
-        });
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
-            path: parent.to_path_buf(),
-            source: e,
-            fix: "check that the parent directory is writable".to_string(),
-            example: String::new(),
-        })?;
-    }
+    check_single_line("title", title)?;
 
     let content = serialize_contacts(title, &[]);
-    fs::write(path, content).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the target path is writable".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+    create_new_file(path, &content, || PaperworkError::AlreadyExists {
+        resource: "Contacts".to_string(),
+        name: path.display().to_string(),
+        fix: "use `paperwork contacts add` to add entries".to_string(),
+        example: format!(
+            "paperwork contacts add {} --profile agents/alice.profile.md",
+            path.display()
+        ),
+    })
 }
 
 /// Add a profile path to a contacts file.
@@ -83,6 +70,10 @@ pub fn contacts_add(path: &Path, profile_path: &str) -> Result<()> {
             ),
         });
     }
+
+    // Write-side injection guard (NEW-1): a newline inside the destination
+    // would break the single-line link bullet structure.
+    check_single_line("profile path", profile_path)?;
 
     if !path.exists() {
         return Err(PaperworkError::NotFound {
@@ -271,21 +262,32 @@ pub fn contacts_read(path: &Path) -> Result<Vec<ContactEntry>> {
     parse_contacts(&content)
 }
 
+/// Resolve a contact entry's profile path (NEW-4, spec §7.3 R11).
+///
+/// Two-level resolution, shared by every consumer that follows a contacts
+/// link: the entry path is tried as given (CWD-relative) first, then
+/// relative to the contacts file's own directory. `derive_label` uses this
+/// internally.
+pub fn resolve_contact_path(contacts_path: &Path, entry_path: &str) -> PathBuf {
+    let as_given = Path::new(entry_path);
+    if as_given.exists() {
+        return as_given.to_path_buf();
+    }
+    match contacts_path.parent() {
+        Some(dir) => dir.join(entry_path),
+        None => as_given.to_path_buf(),
+    }
+}
+
 /// Derive the link label for a profile path (spec §7.3, R11).
 ///
 /// Reads the target profile's H1 as the label; on any failure falls back to
 /// the file-name stem: strip `.profile.md` first, then `.md`, else keep the
-/// original name. The profile path is resolved as given first, then relative
-/// to the contacts file's directory.
+/// original name. Resolution is delegated to [`resolve_contact_path`]
+/// (as-given first, then contacts-directory-relative).
 fn derive_label(contacts_path: &Path, profile_path: &str) -> String {
     let as_given = Path::new(profile_path);
-    let resolved = if as_given.exists() {
-        as_given.to_path_buf()
-    } else if let Some(dir) = contacts_path.parent() {
-        dir.join(profile_path)
-    } else {
-        as_given.to_path_buf()
-    };
+    let resolved = resolve_contact_path(contacts_path, profile_path);
 
     if let Ok(content) = fs::read_to_string(&resolved) {
         if let Ok(profile) = parse_profile(&content) {

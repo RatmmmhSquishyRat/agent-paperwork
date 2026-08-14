@@ -19,7 +19,9 @@ use crate::format::thread::{
     derive_message_refs, header_seq, parse_messages, parse_preamble, serialize_message,
     serialize_messages, serialize_preamble, validate_sender,
 };
-use crate::format::{fence_close_matches, fence_open_len, normalize_line_endings};
+use crate::format::{
+    check_single_line, fence_close_matches, fence_open_len, normalize_line_endings,
+};
 use crate::{Message, ThreadMeta, ThreadSummary};
 
 /// Maximum message size (64 KB hard cap, invariant I3).
@@ -72,6 +74,12 @@ pub fn thread_send(
 ) -> Result<u64> {
     // Write-side sender validation (spec §5.6) — before touching the file.
     validate_sender(from)?;
+
+    // Write-side injection guard (NEW-1): the preamble title is serialized
+    // as a single H1 line; an embedded newline would inject structure.
+    if let Some(meta) = preamble {
+        check_single_line("thread title", &meta.title)?;
+    }
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
