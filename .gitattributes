@@ -1,0 +1,8 @@
+# Pin working-tree line endings to LF for all text files.
+#
+# Rationale (P-5): the test suite contains byte-exact golden snapshots and
+# roundtrip corpora that assert on literal `\n` bytes. With core.autocrlf=true
+# on Windows, a fresh checkout would convert these sources to CRLF and break
+# the byte-level assertions. All tracked content is LF; this keeps it that way
+# regardless of per-machine autocrlf settings.
+* text=auto eol=lf
