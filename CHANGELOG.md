@@ -5,17 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-The v0.5 perfection round (debt-closure batch). All CLI output contracts stay byte-frozen: golden envelope snapshots, frozen error wordings, JSON key names and key order (see `repos/paperwork-cli/tests/char_tests.rs`). Everything below is internal consolidation plus explicitly disclosed behavior additions — **zero behavior change for legitimate v0.5 files**.
+The v0.5 perfection round (debt-closure batch). All CLI output contracts stay byte-frozen: golden envelope snapshots, frozen error wordings, JSON key names and key order (see `repos/paperwork-cli/tests/char_tests.rs`). Everything below is internal consolidation plus explicitly disclosed behavior additions — **zero behavior change for legitimate v0.5 files, except the one limitation explicitly disclosed under Fixed: the `--reply-to` implicit-mention sender lookup reuses the bounded tail-scan window, so a reply target beyond that window silently loses the implicit mention**. (Ultra Review F5 disclosure; the previous "zero behavior change" wording was overstated.)
 
 ### Changed (internal)
 
 DRY consolidation across core and CLI, behavior-locked end to end:
 
-- Shared fence scanner family in `format/mod.rs` (`for_each_outside_fence` / `first_outside_fence` / `collect_outside_fence`): 8 line-level fence state machines converged; the 2 byte-level scans keep their byte loops but share the fence predicates, pinned by differential corpora (CRLF / indented fence / tilde / broken fence / lone-`\r`)
+- Shared fence scanner family in `format/mod.rs` (`for_each_outside_fence` / `first_outside_fence` / `collect_outside_fence`): 7 line-level fence sites converged to the shared scanner; 4 sites share the fence predicates by documented exemption (the 2 byte-level scans keep their byte loops; the 2 content collectors keep their own loops) — pinned by differential corpora (CRLF / indented fence / tilde / broken fence / lone-`\r`). Ultra Review F6: the count previously read "8 converged"; the predicate-sharing sites are exemptions, not scanner consumers — the per-site ruling is recorded in the closure ledger.
 - Head-family regexes centralized in the format layer; the redundant `SEQ_RE` deleted in favor of the `header_seq` predicate
 - ~31 seven-line `IoContext` boilerplate blocks collapsed onto the `io_ctx` helper; the 5 read-modify-write lock sequences unified behind the `LockedFile` RAII guard (no manual early-exit unlock paths left)
 - `ops/thread.rs` split into `thread.rs` (send/edit orchestration) + `thread_read.rs` (read/summary) + `thread_scan.rs` (legacy guard / tail scans); the public re-export surface is unchanged
-- 9 command-side hand-rolled JSON payloads converged onto the `output.rs` `JsonBuilder` (`serde_json::Map` insertion order kept; key order byte-frozen)
+- 9 command-side hand-rolled JSON payloads converged onto the `output.rs` `JsonBuilder`. Key order is decided by `serde_json::Map` — backed by a `BTreeMap` (ALPHABETICAL order), because the `preserve_order` feature is NOT enabled — which is byte-identical to the pre-replacement output and pinned by the char_tests snapshots (Ultra Review F4: the previous "insertion order kept" wording described a mechanism that does not exist here; a unit test now pins alphabetical-not-insertion serialization)
 - Single-pass `normalize_line_endings` with one top-level normalization and Cow hand-down (the validate path no longer re-normalizes 3–4 times)
 - Streaming SHA-256 `hash_file` (64KB chunks; digest bit-identical to the one-shot form)
 - `thread_edit` incremental last-message rewrite (byte-identical to the full rewrite, pinned by a differential corpus)
@@ -32,6 +32,8 @@ Behavior additions (write-side guards and hardening; disclosed per the closure r
 - `brief verify` surfaces genuine IO failures (permission denied, interrupted reads) as real `io` errors instead of collapsing them into `Stale`; a MISSING target stays `Stale` — that is the frozen spec three-state contract, not error swallowing
 - `contacts read` enrichment uses the core two-level path resolver (entry path as given first, then relative to the contacts file's directory) shared with the write-side `derive_label` — no more drift between the two resolution paths
 - `parse_contacts_title` is fence-aware: a pseudo-title inside a fenced code block is no longer adopted
+- Write/read symmetry for the brief residue guard (Ultra Review F1): the write side now refuses exactly what the read-side guard refuses — a `## Entries` or `### ...` line OUTSIDE any code fence in brief description / entry-note prose (and profile description via the shared prose guard) is rejected as a reserved heading shape at Validation; occurrences INSIDE a fence remain legal quoted content. The parse-side residue message additionally names this self-produced cause
+- Rust API additions (Ultra Review F8 disclosure; CLI binary behavior unchanged): `format::for_each_outside_fence`, `format::unclosed_fence`, `format::dedup_preserve_order`, `format::strip_title_suffix`, `format::strip_label_suffix`, `format::check_single_line`, `format::first_line_representation_issue`, `format::prose_representation_issue`, `format::contains_dangerous_attribute_line`, `format::contains_reserved_heading_shape`, `ops::contacts::resolve_contact_path`, `ops::profile::create_profile_full`, `ops::thread::find_message_sender`; the `thread.rs` split re-exports `thread_meta` / `thread_read` / `thread_summary` from `thread_read.rs` (names and signatures unchanged)
 
 ### Removed
 
@@ -41,7 +43,8 @@ Behavior additions (write-side guards and hardening; disclosed per the closure r
 
 - `ensure_suffix` no longer routes paths through `to_string_lossy`: non-UTF-8 file names survive suffix enforcement untouched (native `OsStr` concatenation)
 - `profile create` with a scope section no longer opens and locks the target file twice — single write pass
-- The reply-to double read is gone: the implicit-mention sender lookup runs as a bounded tail scan under the already-held lock
+- The reply-to whole-file re-parse is gone: the implicit-mention sender lookup is a bounded reverse tail scan. Two lock-topology facts, restated accurately (Ultra Review F5): `find_message_sender` takes and releases its OWN lock, then `thread_send` takes the lock again for the write — two independent acquisitions, NOT one already-held lock; and the lookup reuses the spec §5.5 64KB + 256B tail-scan window, so on a legitimately large thread a reply target beyond the window silently gets no implicit `@sender` mention (the send itself still succeeds; disclosed per the closure rules instead of moving the lookup inside the send lock)
+- Degenerate suffix inputs no longer drift from spec (Ultra Review F2): default post title strips `.post.md` then `.md` (spec §5.7) and contacts label fallback strips `.profile.md` then `.md` (spec §7.3 R11) via two separate chains — the merged superset over-stripped `x.profile.md` as a post path (title `x` instead of `x.profile`) and `x.post.md` as a contacts entry (label `x` instead of `x.post`)
 
 ### Known downgrade re-check
 
