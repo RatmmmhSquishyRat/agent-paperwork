@@ -23,7 +23,11 @@ jobs:
 
       # Doc-link gate (T8): rustdoc must build with zero warnings — broken
       # intra-doc links regress silently during refactors otherwise.
+      # Ultra Review F3: RUSTDOCFLAGS -D warnings makes the gate actually
+      # fail on warnings (cargo doc alone does not propagate them).
       - name: Doc check
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --workspace
 
   test:

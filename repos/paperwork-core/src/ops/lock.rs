@@ -86,9 +86,11 @@ impl LockedFile {
 
 impl Drop for LockedFile {
     fn drop(&mut self) {
-        // Mirror the historical `file.unlock().ok()` stance: an unlock
-        // failure on teardown is never surfaced (the operation result is
-        // already decided; the OS releases the lock with the handle).
+        // Ultra Review F9 wording fix: on the success path the historical
+        // `unlock().map_err(...)` converged into this Drop swallowing the
+        // error; an unlock failure is effectively unreachable while the
+        // handle is valid (the operation result is already decided, and
+        // the OS releases the lock with the handle regardless).
         let _ = self.file.unlock();
     }
 }

@@ -69,8 +69,9 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
 /// so there is no intermediate scope-less file that a concurrent reader can
 /// observe and no double-open / double-lock window.
 ///
-/// CLI wiring pending: T6/T7 must switch `cmd/profile.rs` Create-with-scope
-/// over from `create_profile` + `edit_profile` to this op.
+/// Wired into the CLI since T6: `cmd/profile.rs` Create-with-scope routes
+/// here (Ultra Review F7: removed the stale "CLI wiring pending" note —
+/// the wiring landed in the T6 CLI JSON convergence batch).
 pub fn create_profile_full(path: &Path, profile: &Profile) -> Result<()> {
     check_single_line("name", &profile.name)?;
     check_single_line("model", &profile.model)?;

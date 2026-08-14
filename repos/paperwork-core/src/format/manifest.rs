@@ -51,9 +51,10 @@ pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
 /// Ultra Review F1 (write/read symmetry): on top of the first-line part,
 /// a fence-OUTSIDE reserved heading shape (`## Entries` or `### ...`)
 /// anywhere in the note trips the FILE-level residue guard
-/// ([`contains_legacy_brief_residue`]) on the next parse — the tool would
-/// write a brief it can never read back — so the write side refuses it
-/// here. Fence-internal occurrences are quoted content and stay legal.
+/// (`contains_legacy_brief_residue` in this module) on the next parse —
+/// the tool would write a brief it can never read back — so the write
+/// side refuses it here. Fence-internal occurrences are quoted content
+/// and stay legal.
 pub fn note_representation_issue(note: &str) -> Option<&'static str> {
     if let Some(reason) = super::first_line_representation_issue(note) {
         return Some(reason);

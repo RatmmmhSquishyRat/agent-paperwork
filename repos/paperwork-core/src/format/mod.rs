@@ -485,7 +485,8 @@ pub fn contains_dangerous_attribute_line(prose: &str) -> bool {
 /// `format/manifest.rs`) call this so the tool can never write a brief it
 /// cannot read back. Fence-internal occurrences are quoted content and
 /// stay legal; the fence semantics are byte-for-byte those of the shared
-/// scanner family ([`first_outside_fence`]), so write side and read side
+/// scanner family (`first_outside_fence` in this module), so write side
+/// and read side
 /// agree on every edge case (indent stance, tilde fences, unclosed fences,
 /// CRLF).
 pub fn contains_reserved_heading_shape(content: &str) -> bool {

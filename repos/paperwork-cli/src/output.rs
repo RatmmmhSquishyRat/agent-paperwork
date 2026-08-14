@@ -137,6 +137,12 @@ pub fn emit_err(ctx: &Context, category: &str, message: &str, fix: &str, example
 /// derive struct: the map's key-order semantics stay exactly as they are
 /// today, while a derive struct's field declaration order could diverge
 /// from the frozen key order.
+///
+/// Key-order fact (Ultra Review F4): `serde_json` is built WITHOUT the
+/// `preserve_order` feature, so `serde_json::Map` is backed by a
+/// `BTreeMap` — serialized keys come out in ALPHABETICAL order regardless
+/// of insertion order. That is byte-identical to the pre-builder output
+/// and pinned by the char_tests snapshots.
 pub struct JsonBuilder {
     map: serde_json::Map<String, serde_json::Value>,
 }
@@ -185,5 +191,26 @@ pub fn print_plain(text: &str) {
     print!("{}", text);
     if !text.ends_with('\n') {
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JsonBuilder;
+
+    // Ultra Review F4: pin the ACTUAL key-order mechanism — serde_json
+    // without `preserve_order` backs Map with a BTreeMap, so serialized
+    // keys are alphabetical regardless of insertion order.
+    #[test]
+    fn json_builder_keys_serialize_alphabetically_not_by_insertion() {
+        let value = JsonBuilder::new()
+            .insert("zebra", serde_json::json!(1))
+            .insert("status", serde_json::json!("ok"))
+            .insert("alpha", serde_json::json!(3))
+            .build();
+        assert_eq!(
+            serde_json::to_string(&value).expect("serialize"),
+            r#"{"alpha":3,"status":"ok","zebra":1}"#
+        );
     }
 }
