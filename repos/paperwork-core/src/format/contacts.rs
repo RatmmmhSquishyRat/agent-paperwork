@@ -7,20 +7,28 @@
 
 use crate::{ContactEntry, PaperworkError, Result};
 
-use super::{fence_close_matches, fence_open_len, normalize_line_endings};
+use super::{first_outside_fence, for_each_outside_fence, normalize_line_endings};
 
 /// Extract the title from contacts content (the H1 heading).
+///
+/// Fence-aware (NEW-5): an H1 inside a code fence (quoted example content)
+/// is never mistaken for the title; the first fence-outside `# ` heading
+/// wins. T4: converged onto the shared scanner family
+/// ([`for_each_outside_fence`] first-hit).
 pub fn parse_contacts_title(content: &str) -> Result<String> {
     let content = normalize_line_endings(content);
-    for line in content.lines() {
+    let mut title = None;
+    for_each_outside_fence(&content, |_i, line| {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix("# ") {
             if !trimmed.starts_with("## ") {
-                return Ok(stripped.trim().to_string());
+                title = Some(stripped.trim().to_string());
+                return false;
             }
         }
-    }
-    Err(PaperworkError::Parse {
+        true
+    });
+    title.ok_or_else(|| PaperworkError::Parse {
         message: "missing contacts title heading (# <title>)".to_string(),
         fix: "add a top-level heading with the contacts title".to_string(),
         example: "# my-team".to_string(),
@@ -54,27 +62,16 @@ pub fn parse_contacts(content: &str) -> Result<Vec<ContactEntry>> {
 /// bullet. v0.4 contacts files store bare paths this way; v0.5 parsing
 /// silently ignores them, so a read-modify-rewrite would drop the legacy
 /// entries — the write side uses this predicate as a refusal guard.
+///
+/// T4: converged onto the shared scanner family ([`first_outside_fence`]).
 pub fn contains_bare_bullet(content: &str) -> bool {
     let content = normalize_line_endings(content);
-    let mut open: Option<usize> = None;
-    for line in content.lines() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if let Some(rest) = line.trim().strip_prefix("- ") {
-            if parse_link_bullet(rest).is_none() {
-                return true;
-            }
-        }
-    }
-    false
+    first_outside_fence(&content, |_i, line| {
+        line.trim()
+            .strip_prefix("- ")
+            .is_some_and(|rest| parse_link_bullet(rest).is_none())
+    })
+    .is_some()
 }
 
 /// Parse `[label](destination)` (spec §7.2), returning `None` for
@@ -417,5 +414,80 @@ mod tests {
         assert!(contains_bare_bullet("# t\r\n\r\n- bare/path.md\r\n"));
         // malformed link bullet counts as bare (not parseable -> would drop)
         assert!(contains_bare_bullet("# t\n\n- [unclosed(a.md\n"));
+    }
+
+    // ========================================================================
+    // T4 differential corpus: pin the fence-aware scan semantics of
+    // parse_contacts_title / contains_bare_bullet BEFORE their migration
+    // onto the shared scanner family; the same corpus must pass unchanged
+    // afterwards.
+    // ========================================================================
+
+    #[test]
+    fn test_t4_parse_contacts_title_differential_corpus() {
+        // plain + trailing newline
+        assert_eq!(parse_contacts_title("# team\n").expect("title"), "team");
+        assert_eq!(parse_contacts_title("# team").expect("title"), "team");
+        // H1 inside a fence is quoted content, not the title
+        assert_eq!(
+            parse_contacts_title("```md\n# fake\n```\n# real").expect("title"),
+            "real"
+        );
+        // <= 3 space indented fence is recognized
+        assert_eq!(
+            parse_contacts_title("   ```\n# fake\n   ```\n# real").expect("title"),
+            "real"
+        );
+        // 4-space indent: no fence, the H1-shaped line stays visible
+        assert_eq!(
+            parse_contacts_title("    ```\n# real").expect("title"),
+            "real"
+        );
+        // tilde fences are not recognized
+        assert_eq!(
+            parse_contacts_title("~~~\n# real\n~~~").expect("title"),
+            "real"
+        );
+        // unclosed fence swallows the tail -> missing title
+        assert!(parse_contacts_title("```md\n# fake\n").is_err());
+        // nested backtick length: shorter run does not close the fence
+        assert!(parse_contacts_title("````\n# fake\n```\n").is_err());
+        assert_eq!(
+            parse_contacts_title("````\n# fake\n```\n````\n# real").expect("title"),
+            "real"
+        );
+        // CRLF input behaves like LF
+        assert_eq!(
+            parse_contacts_title("```md\r\n# fake\r\n```\r\n# real\r\n").expect("title"),
+            "real"
+        );
+        // H2 is not a title
+        assert!(parse_contacts_title("## not-a-title\n").is_err());
+        // empty content
+        assert!(parse_contacts_title("").is_err());
+        // first fence-outside H1 wins
+        assert_eq!(
+            parse_contacts_title("# one\n\n# two").expect("title"),
+            "one"
+        );
+    }
+
+    #[test]
+    fn test_t4_contains_bare_bullet_differential_corpus() {
+        // <= 3 space indented fence hides the bullet
+        assert!(!contains_bare_bullet("   ```\n- bare/path.md\n   ```"));
+        // 4-space indent: no fence, the bullet is visible
+        assert!(contains_bare_bullet("    ```\n- bare/path.md\n    ```"));
+        // tilde fences are not recognized
+        assert!(contains_bare_bullet("~~~\n- bare/path.md\n~~~"));
+        // unclosed fence swallows the tail
+        assert!(!contains_bare_bullet("```\n- bare/path.md"));
+        // nested backtick length: shorter run does not close the fence
+        assert!(!contains_bare_bullet("````\n- bare/path.md\n```\n"));
+        assert!(contains_bare_bullet("````\n- x\n```\n````\n- bare/path.md"));
+        // link bullets never trigger, even mixed with fences
+        assert!(!contains_bare_bullet("```\n- [a](b.md)\n```\n- [c](d.md)"));
+        // empty content
+        assert!(!contains_bare_bullet(""));
     }
 }

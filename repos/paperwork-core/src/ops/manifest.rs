@@ -10,47 +10,48 @@
 //! crash inside that window can leave the file truncated (accepted,
 //! identical to `thread_edit`, spec §5.7 note).
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
+use std::io::{Seek, Write};
 use std::path::Path;
 
 use chrono::Utc;
-use fs2::FileExt;
 use regex::Regex;
 
 use crate::error::{PaperworkError, Result};
+use crate::format::check_single_line;
 use crate::format::manifest::{
     extract_regex_groups, note_representation_issue, parse_manifest, serialize_manifest,
 };
+use crate::format::prose_representation_issue;
 use crate::hash;
 use crate::{Manifest, ManifestEntry, VerifyResult};
+
+use super::create_new_file;
+use super::lock::LockedFile;
 
 /// Create a new empty brief at the given path.
 ///
 /// Creates parent directories if needed.
-/// Fails if the file already exists.
+/// Fails if the file already exists (atomic `create_new`, NEW-2).
+///
+/// Write-side injection guards (NEW-1): `title` and `owner` must be single
+/// line; `description` must survive a bare-prose roundtrip.
 pub fn brief_create(
     path: &Path,
     title: &str,
     owner: Option<&str>,
     description: &str,
 ) -> Result<()> {
-    if path.exists() {
-        return Err(PaperworkError::AlreadyExists {
-            resource: "Brief".to_string(),
-            name: path.display().to_string(),
-            fix: "use `paperwork brief add` to add entries".to_string(),
-            example: format!("paperwork brief add {} --entry <file>", path.display()),
-        });
+    check_single_line("title", title)?;
+    if let Some(owner) = owner {
+        check_single_line("owner", owner)?;
     }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
-            path: parent.to_path_buf(),
-            source: e,
-            fix: "check that the parent directory is writable".to_string(),
-            example: String::new(),
-        })?;
+    if let Some(reason) = prose_representation_issue(description) {
+        return Err(PaperworkError::Validation {
+            message: format!("brief description is not representable: {}", reason),
+            fix: "start the description with a plain prose line and keep attribute-shaped '- key: value' lines out of the description".to_string(),
+            example: format!("paperwork brief create {} --title <title>", path.display()),
+        });
     }
 
     let manifest = Manifest {
@@ -62,14 +63,12 @@ pub fn brief_create(
     };
 
     let content = serialize_manifest(&manifest);
-    fs::write(path, content).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the target path is writable".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+    create_new_file(path, &content, || PaperworkError::AlreadyExists {
+        resource: "Brief".to_string(),
+        name: path.display().to_string(),
+        fix: "use `paperwork brief add` to add entries".to_string(),
+        example: format!("paperwork brief add {} --entry <file>", path.display()),
+    })
 }
 
 /// Add an entry to a brief.
@@ -99,7 +98,16 @@ pub fn brief_add_entry(
         });
     }
 
-    // Note representability guard (review M1) — reject before locking/writing.
+    // Write-side injection guards (NEW-1): the entry path becomes a `- path:`
+    // attribute line (single-line field), and the entry title is derived
+    // from its file name — a newline in either would corrupt the entry.
+    check_single_line("entry path", entry_path)?;
+
+    // Note representability guard (review M1, unified helper NEW-1) —
+    // reject before locking/writing. The envelope wording is unchanged.
+    // Notes sit after the entry attribute zone, so only the M1 first-line
+    // shapes are refused; later attribute-shaped lines inside a note stay
+    // legal (BDD:BRIEF-12, pinned by existing tests).
     if let Some(note_text) = note {
         if let Some(reason) = note_representation_issue(note_text) {
             return Err(PaperworkError::Validation {
@@ -110,34 +118,25 @@ pub fn brief_add_entry(
         }
     }
 
-    let mut file = OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
-    // Exclusive lock around the full read-modify-write cycle (review M7).
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    // Exclusive lock around the full read-modify-write cycle (review M7);
+    // the guard's Drop releases the lock on every exit path (T4).
+    let guard = LockedFile::acquire(file, |e| {
+        PaperworkError::io_ctx(
+            path,
+            e,
+            "another process may hold the lock; retry shortly",
+            "",
+        )
+    })?;
 
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+    let content =
+        guard.read_to_string(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     let mut manifest = parse_manifest(&content)?;
 
@@ -149,7 +148,6 @@ pub fn brief_add_entry(
 
     // Check for duplicate title
     if manifest.entries.iter().any(|e| e.title == title) {
-        file.unlock().ok();
         return Err(PaperworkError::AlreadyExists {
             resource: "Brief entry".to_string(),
             name: title,
@@ -187,33 +185,17 @@ pub fn brief_add_entry(
 
     let serialized = serialize_manifest(&manifest);
 
-    // Rewrite through the locked handle (truncate + write within the lock).
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(serialized.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    // Rewrite through the locked handle (truncate + write within the lock);
+    // per-step wording preserved via the `file()` escape hatch (T4).
+    let file = guard.file();
+    file.set_len(0)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
+    let mut handle = file;
+    handle
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
+    handle.write_all(serialized.as_bytes()).map_err(|e| {
+        PaperworkError::io_ctx(path, e, "check disk space and file permissions", "")
     })?;
 
     Ok(())
@@ -233,34 +215,25 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
         });
     }
 
-    let mut file = OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
-    // Exclusive lock around the full read-modify-write cycle (review M7).
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    // Exclusive lock around the full read-modify-write cycle (review M7);
+    // the guard's Drop releases the lock on every exit path (T4).
+    let guard = LockedFile::acquire(file, |e| {
+        PaperworkError::io_ctx(
+            path,
+            e,
+            "another process may hold the lock; retry shortly",
+            "",
+        )
+    })?;
 
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+    let content =
+        guard.read_to_string(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     let mut manifest = parse_manifest(&content)?;
 
@@ -268,7 +241,6 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     manifest.entries.retain(|e| e.title != title);
 
     if manifest.entries.len() == original_len {
-        file.unlock().ok();
         return Err(PaperworkError::NotFound {
             resource: "Brief entry".to_string(),
             name: title.to_string(),
@@ -279,33 +251,17 @@ pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
 
     let serialized = serialize_manifest(&manifest);
 
-    // Rewrite through the locked handle (truncate + write within the lock).
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(serialized.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    // Rewrite through the locked handle (truncate + write within the lock);
+    // per-step wording preserved via the `file()` escape hatch (T4).
+    let file = guard.file();
+    file.set_len(0)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
+    let mut handle = file;
+    handle
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
+    handle.write_all(serialized.as_bytes()).map_err(|e| {
+        PaperworkError::io_ctx(path, e, "check disk space and file permissions", "")
     })?;
 
     Ok(())
@@ -322,12 +278,8 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     parse_manifest(&content)
 }
@@ -358,12 +310,29 @@ pub fn brief_verify(path: &Path, base_dir: &Path) -> Result<Vec<(ManifestEntry, 
 /// on a `from_utf8_lossy` view and the hash on the raw bytes — non-UTF-8
 /// files no longer collapse to Stale, and the hash matches `hash_file`
 /// (raw-byte SHA-256) exactly.
+///
+/// Sam-S5 (ruling A, final): a MISSING target stays Stale — that is the
+/// frozen spec §6 three-state contract ("Stale: regex fails to match (or
+/// file missing)") and intentional design, not error swallowing. Any OTHER
+/// read failure (permission denied, read interruption, ...) is a genuine
+/// IO fault and surfaces as an IoContext envelope instead of collapsing
+/// into Stale.
 fn verify_entry(base_dir: &Path, entry: &ManifestEntry) -> Result<VerifyResult> {
     let abs_path = base_dir.join(&entry.path);
 
     let bytes = match fs::read(&abs_path) {
         Ok(bytes) => bytes,
-        Err(_) => return Ok(VerifyResult::Stale),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(VerifyResult::Stale);
+        }
+        Err(e) => {
+            return Err(PaperworkError::io_ctx(
+                abs_path.clone(),
+                e,
+                "the brief entry target could not be read; check file permissions and disk integrity, or fix the entry path",
+                format!("paperwork brief read <brief-path>  # then check the '- path:' value of entry '{}'", entry.title),
+            ));
+        }
     };
 
     // Check regex if present (lossy view: non-UTF-8 bytes become U+FFFD).

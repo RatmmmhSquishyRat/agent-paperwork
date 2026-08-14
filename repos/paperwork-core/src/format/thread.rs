@@ -18,8 +18,8 @@ use std::sync::LazyLock;
 use crate::{Message, PaperworkError, Result, ThreadMeta};
 
 use super::{
-    compute_fence_length, fence_close_matches, fence_open_len, normalize_line_endings,
-    parse_timestamp, RFC3339_FMT,
+    collect_outside_fence, compute_fence_length, dedup_preserve_order, fence_close_matches,
+    fence_open_len, first_outside_fence, normalize_line_endings, parse_timestamp, RFC3339_FMT,
 };
 
 /// Message header regex (spec §5.3, exact).
@@ -29,6 +29,37 @@ use super::{
 /// it to preamble/body). The sender token excludes whitespace and parentheses.
 pub static MESSAGE_HEADER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^##\s+#(\d+)\s+([^\s()]+)\s+\((.+)\)\s*$").expect("valid regex"));
+
+// ============================================================================
+// Header-regex family — centralized reference point (T3; T4 unified the
+// per-layer twins onto this module). The family has THREE variants today;
+// their whitespace stances differ ON PURPOSE and must not be unified blindly:
+//
+// 1. MESSAGE_HEADER_RE (above, authoritative parse grammar, spec §5.3):
+//    `\s+` between fields — whitespace-lenient per R9. The ops-side tail
+//    scan (spec §5.5) re-checks candidates with `header_seq` directly since
+//    T4 deleted its historical `SEQ_RE` prefilter (the prefilter was
+//    redundant: `header_seq` is the single authoritative gate, and the
+//    tail-scan candidate lines are few by construction).
+// 2. LEGACY_HEADER_RE_FMT (below, sole definition; ops/thread.rs imports
+//    it): `^###\s+#\d+` — v0.4 legacy-header heuristic; `\s+` kept lenient
+//    because it only ever gates a refusal (false positives refuse a write,
+//    they never corrupt).
+// 3. SUSPECTED_HEADER_RE (cli/cmd/validate.rs): `^##\s+#\d` — warning-only
+//    heuristic aligned with MESSAGE_HEADER_RE's `\s+` lenient stance (R9,
+//    N2). It lives in the CLI crate and cannot reference `pub(crate)`
+//    statics here, so it stays where it is.
+// ============================================================================
+
+/// Legacy v0.4 message-header heuristic (`### #N`, flush left) — the single
+/// definition of the pattern (T4: `ops/thread.rs` imports it; the ops-side
+/// twin was deleted).
+///
+/// Used by the unmigrated-thread write guard: a non-empty file with no v0.5
+/// headers (tail scan seq == 0) that still carries `### #N` lines is legacy
+/// data and refuses writes.
+pub(crate) static LEGACY_HEADER_RE_FMT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^###\s+#\d+").expect("valid regex"));
 
 /// Mention token scan (spec §5.4 derivation): `@` followed by a run of
 /// characters that are neither whitespace, `@`, nor parentheses.
@@ -63,16 +94,16 @@ pub fn derive_reply_to(body: &str) -> Option<u64> {
 /// order of appearance, deduplicate keeping first occurrence, drop
 /// reply-shaped `#<digits>` tokens, and exclude the sender's self-mentions.
 /// Bare `@` without a valid token derives nothing and never errors.
+///
+/// T4/NEW-10: dedup runs through the shared [`dedup_preserve_order`]
+/// (HashSet+Vec, O(n) instead of the historical O(n²) `Vec::contains`).
 pub fn derive_mentions(body: &str, sender: &str) -> Vec<String> {
-    let mut mentions: Vec<String> = Vec::new();
-    for caps in MENTION_TOKEN_RE.captures_iter(body) {
-        let token = caps[1].to_string();
-        if is_reply_shaped_token(&token) || token == sender || mentions.contains(&token) {
-            continue;
-        }
-        mentions.push(token);
-    }
-    mentions
+    dedup_preserve_order(
+        MENTION_TOKEN_RE
+            .captures_iter(body)
+            .map(|caps| caps[1].to_string())
+            .filter(|token| !is_reply_shaped_token(token) && token != sender),
+    )
 }
 
 /// Derive both body-text references (spec §5.4, invariant I10).
@@ -100,48 +131,22 @@ pub fn header_seq(line: &str) -> Option<u64> {
 }
 
 /// Locate fence-aware message header line indices (spec §3.3/§5.3).
+///
+/// T4: delegates to the shared scanner family ([`collect_outside_fence`]);
+/// the `&[&str]` signature is retained so the differential corpus and the
+/// `lines()`-based call sites stay unchanged (the join is fence-neutral:
+/// callers pass already-normalized lines).
 fn header_indices(lines: &[&str]) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut open: Option<usize> = None;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if header_seq(line).is_some() {
-            indices.push(i);
-        }
-    }
-    indices
+    let joined = lines.join("\n");
+    collect_outside_fence(&joined, |_i, line| header_seq(line).is_some())
 }
 
 /// Short-circuit variant of [`header_indices`]: the index of the FIRST
 /// fence-aware message header only (M-review M8). `parse_preamble` needs
 /// just the first boundary and must not walk the whole file.
 fn first_header_index(lines: &[&str]) -> Option<usize> {
-    let mut open: Option<usize> = None;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if header_seq(line).is_some() {
-            return Some(i);
-        }
-    }
-    None
+    let joined = lines.join("\n");
+    first_outside_fence(&joined, |_i, line| header_seq(line).is_some())
 }
 
 /// Parse the thread preamble (spec §5.2, owner ruling D1).
@@ -395,6 +400,117 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
 mod tests {
     use super::*;
     use chrono::{DateTime, TimeZone, Utc};
+
+    // ========================================================================
+    // T4 differential corpus: pin the header-boundary scan semantics
+    // (fence/indent/tilde/unclosed/nested-length/CRLF/empty) BEFORE the
+    // header_indices / first_header_index migration onto the shared
+    // scanner family; the same corpus must pass unchanged afterwards.
+    // ========================================================================
+
+    const T4_HEADER_A: &str = "## #1 alice (2026-01-15T10:30:00Z)";
+    const T4_HEADER_B: &str = "## #2 bob (2026-01-15T10:31:00Z)";
+
+    fn t4_indices_lf(content: &str) -> Vec<usize> {
+        let content = normalize_line_endings(content);
+        let lines: Vec<&str> = content.lines().collect();
+        header_indices(&lines)
+    }
+
+    fn t4_first_lf(content: &str) -> Option<usize> {
+        let content = normalize_line_endings(content);
+        let lines: Vec<&str> = content.lines().collect();
+        first_header_index(&lines)
+    }
+
+    #[test]
+    fn test_t4_header_indices_differential_corpus() {
+        // plain: two headers, no trailing newline
+        assert_eq!(
+            t4_indices_lf(&format!(
+                "# t\n\n{}\n\n```md\nx\n```\n\n{}",
+                T4_HEADER_A, T4_HEADER_B
+            )),
+            vec![2, 8]
+        );
+        // trailing newline yields the same indices
+        assert_eq!(t4_indices_lf(&format!("# t\n\n{}\n", T4_HEADER_A)), vec![2]);
+        // fence-inside headers are hidden; fence open/close lines too
+        assert_eq!(
+            t4_indices_lf(&format!("```md\n{}\n```\n{}", T4_HEADER_A, T4_HEADER_B)),
+            vec![3]
+        );
+        // <= 3 space indented fence is recognized
+        assert_eq!(
+            t4_indices_lf(&format!("   ```md\n{}\n   ```", T4_HEADER_A)),
+            vec![]
+        );
+        // 4-space indent: no fence, the header-shaped line stays visible
+        assert_eq!(
+            t4_indices_lf(&format!("    ```md\n{}\n    ```", T4_HEADER_A)),
+            vec![1]
+        );
+        // tilde fences are not recognized
+        assert_eq!(
+            t4_indices_lf(&format!("~~~\n{}\n~~~", T4_HEADER_A)),
+            vec![1]
+        );
+        // unclosed fence swallows the tail
+        assert_eq!(
+            t4_indices_lf(&format!("{}\n```md\n{}", T4_HEADER_A, T4_HEADER_B)),
+            vec![0]
+        );
+        // nested backtick length: shorter run does not close the fence
+        assert_eq!(
+            t4_indices_lf(&format!(
+                "````md\n{}\n```\nstill\n````\n{}",
+                T4_HEADER_A, T4_HEADER_B
+            )),
+            vec![5]
+        );
+        // CRLF input behaves like LF
+        let crlf = format!(
+            "# t\r\n\r\n{}\r\n\r\n```md\r\nx\r\n```\r\n\r\n{}",
+            T4_HEADER_A, T4_HEADER_B
+        );
+        assert_eq!(t4_indices_lf(&crlf), vec![2, 8]);
+        // degenerate inputs
+        assert_eq!(t4_indices_lf(""), vec![]);
+        assert_eq!(t4_indices_lf("# only a title\n"), vec![]);
+        // seq-0 / overflowing H2s are NOT headers (parse-side lenience)
+        assert_eq!(
+            t4_indices_lf("## #0 alice (2026-01-15T10:30:00Z)\n"),
+            vec![]
+        );
+        assert_eq!(
+            t4_indices_lf("## #99999999999999999999999999 alice (2026-01-15T10:30:00Z)\n"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn test_t4_first_header_index_differential_corpus() {
+        assert_eq!(t4_first_lf(&format!("# t\n\n{}", T4_HEADER_A)), Some(2));
+        assert_eq!(
+            t4_first_lf(&format!("```md\n{}\n```\n{}", T4_HEADER_A, T4_HEADER_B)),
+            Some(3)
+        );
+        assert_eq!(t4_first_lf(&format!("```md\n{}", T4_HEADER_A)), None); // unclosed
+        assert_eq!(t4_first_lf(""), None);
+        let crlf = format!("# t\r\n{}", T4_HEADER_A);
+        assert_eq!(t4_first_lf(&crlf), Some(1));
+    }
+
+    // T3: the centralized legacy-header twin must behave exactly like the
+    // ops-side original (identical pattern string, identical matches).
+    #[test]
+    fn test_legacy_header_re_fmt() {
+        assert!(LEGACY_HEADER_RE_FMT.is_match("### #1 alice (2026-01-01T00:00:00Z)"));
+        assert!(LEGACY_HEADER_RE_FMT.is_match("###   #42"));
+        assert!(!LEGACY_HEADER_RE_FMT.is_match("## #1 alice"));
+        assert!(!LEGACY_HEADER_RE_FMT.is_match(" ### #1")); // flush left only
+        assert!(!LEGACY_HEADER_RE_FMT.is_match("### no seq"));
+    }
 
     fn make_timestamp(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()

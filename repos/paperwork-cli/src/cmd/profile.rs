@@ -97,35 +97,25 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
             scope_owns,
         } => {
             let path = ensure_suffix(path, ".profile.md");
-            paperwork_core::ops::profile::create_profile(&path, &name, &model, &description)?;
 
-            // Apply scopes if provided
-            if !scope_read.is_empty() || !scope_write.is_empty() || !scope_owns.is_empty() {
-                paperwork_core::ops::profile::edit_profile(
-                    &path,
-                    None,
-                    None,
-                    if scope_read.is_empty() {
-                        None
-                    } else {
-                        Some(scope_read)
-                    },
-                    if scope_write.is_empty() {
-                        None
-                    } else {
-                        Some(scope_write)
-                    },
-                    if scope_owns.is_empty() {
-                        None
-                    } else {
-                        Some(scope_owns)
-                    },
-                )?;
-            }
+            // One-shot creation (Sam-S3): the full profile — scopes included
+            // — is written by a single atomic create_new write via core's
+            // `create_profile_full`; the former create_profile + edit_profile
+            // double write left a scope-less intermediate file observable to
+            // concurrent readers.
+            let profile = paperwork_core::Profile {
+                name,
+                model,
+                description,
+                scope_read,
+                scope_write,
+                scope_owns,
+            };
+            paperwork_core::ops::profile::create_profile_full(&path, &profile)?;
 
             let env = output::Envelope::new("profile.create", path.display().to_string())
                 .field("path", &path.display().to_string())
-                .field("name", &name);
+                .field("name", &profile.name);
             output::emit_ok(ctx, env);
             Ok(())
         }
@@ -136,40 +126,33 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("profile.show"));
-                    obj.insert("conclusion".to_string(), serde_json::json!(profile.name));
-                    obj.insert("name".to_string(), serde_json::json!(profile.name));
-                    obj.insert("model".to_string(), serde_json::json!(profile.model));
-                    if !profile.description.is_empty() {
-                        obj.insert(
-                            "description".to_string(),
-                            serde_json::json!(profile.description),
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("profile.show"))
+                        .insert("conclusion", serde_json::json!(profile.name))
+                        .insert("name", serde_json::json!(profile.name))
+                        .insert("model", serde_json::json!(profile.model))
+                        .insert_opt(
+                            "description",
+                            (!profile.description.is_empty())
+                                .then(|| serde_json::json!(profile.description)),
+                        )
+                        .insert_opt(
+                            "scope.read",
+                            (!profile.scope_read.is_empty())
+                                .then(|| serde_json::json!(profile.scope_read.join(", "))),
+                        )
+                        .insert_opt(
+                            "scope.write",
+                            (!profile.scope_write.is_empty())
+                                .then(|| serde_json::json!(profile.scope_write.join(", "))),
+                        )
+                        .insert_opt(
+                            "scope.owns",
+                            (!profile.scope_owns.is_empty())
+                                .then(|| serde_json::json!(profile.scope_owns.join(", "))),
                         );
-                    }
-                    if !profile.scope_read.is_empty() {
-                        obj.insert(
-                            "scope.read".to_string(),
-                            serde_json::json!(profile.scope_read.join(", ")),
-                        );
-                    }
-                    if !profile.scope_write.is_empty() {
-                        obj.insert(
-                            "scope.write".to_string(),
-                            serde_json::json!(profile.scope_write.join(", ")),
-                        );
-                    }
-                    if !profile.scope_owns.is_empty() {
-                        obj.insert(
-                            "scope.owns".to_string(),
-                            serde_json::json!(profile.scope_owns.join(", ")),
-                        );
-                    }
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    output::print_json(obj.build());
                 }
                 OutputMode::Plain => {
                     let content = std::fs::read_to_string(&path)?;
@@ -289,18 +272,15 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
                             })
                         })
                         .collect();
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("profile.list"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{} profiles", profiles.len())),
-                    );
-                    obj.insert("profiles".to_string(), serde_json::json!(json_profiles));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("profile.list"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{} profiles", profiles.len())),
+                        )
+                        .insert("profiles", serde_json::json!(json_profiles));
+                    output::print_json(obj.build());
                 }
                 _ => {
                     let mut env = output::Envelope::new(

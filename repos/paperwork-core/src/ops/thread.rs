@@ -10,17 +10,19 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use chrono::Utc;
-use fs2::FileExt;
-use regex::Regex;
-use std::sync::LazyLock;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::thread::{
     derive_message_refs, header_seq, parse_messages, parse_preamble, serialize_message,
-    serialize_messages, serialize_preamble, validate_sender,
+    serialize_messages, serialize_preamble, validate_sender, LEGACY_HEADER_RE_FMT,
 };
-use crate::format::{fence_close_matches, fence_open_len, normalize_line_endings};
+use crate::format::{
+    check_single_line, dedup_preserve_order, fence_close_matches, fence_open_len,
+    first_outside_fence, normalize_line_endings,
+};
 use crate::{Message, ThreadMeta, ThreadSummary};
+
+use super::lock::LockedFile;
 
 /// Maximum message size (64 KB hard cap, invariant I3).
 /// Applies to a single serialized message only — the preamble is exempt
@@ -36,16 +38,11 @@ const SNIPPET_COUNT: usize = 3;
 /// Character budget of a single summary snippet before ellipsis (review n10).
 const SNIPPET_CHAR_LIMIT: usize = 50;
 
-/// Tail-scan seq regex (spec §5.5). Applied per line while scanning;
-/// `[ \t]+` is the intra-line equivalent of the header's `\s+`.
-static SEQ_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##[ \t]+#(\d+)").expect("valid regex"));
-
-/// Legacy v0.4 message-header heuristic (`### #N`, flush left). Used by the
-/// unmigrated-thread write guard: a non-empty file with no v0.5 headers
-/// (tail scan seq == 0) that still carries `### #N` lines is legacy data.
-static LEGACY_HEADER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^###\s+#\d+").expect("valid regex"));
+// The header-regex family lives in `format/thread.rs` (T4 unification):
+// the legacy-header heuristic is the shared `LEGACY_HEADER_RE_FMT` static,
+// and the tail scan below re-checks candidates with the parse-side
+// `header_seq` predicate directly (the historical `SEQ_RE` prefilter was
+// redundant — `header_seq` is the single authoritative gate).
 
 /// Send a message to a thread. Auto-creates the file and parent dirs if absent.
 ///
@@ -73,13 +70,16 @@ pub fn thread_send(
     // Write-side sender validation (spec §5.6) — before touching the file.
     validate_sender(from)?;
 
+    // Write-side injection guard (NEW-1): the preamble title is serialized
+    // as a single H1 line; an embedded newline would inject structure.
+    if let Some(meta) = preamble {
+        check_single_line("thread title", &meta.title)?;
+    }
+
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
-            path: parent.to_path_buf(),
-            source: e,
-            fix: "check that the parent directory is writable".to_string(),
-            example: String::new(),
+        fs::create_dir_all(parent).map_err(|e| {
+            PaperworkError::io_ctx(parent, e, "check that the parent directory is writable", "")
         })?;
     }
 
@@ -89,45 +89,40 @@ pub fn thread_send(
         .create(true)
         .read(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check that the file path is accessible".to_string(),
-            example: String::new(),
+        .map_err(|e| {
+            PaperworkError::io_ctx(path, e, "check that the file path is accessible", "")
         })?;
 
-    // Acquire exclusive lock (blocks concurrent writers)
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    // Acquire exclusive lock (blocks concurrent writers); the guard's Drop
+    // releases the lock on every exit path (T4). The byte-level tail scan /
+    // last-byte probe below run through the `file()` escape hatch.
+    let guard = LockedFile::acquire(file, |e| {
+        PaperworkError::io_ctx(
+            path,
+            e,
+            "another process may hold the lock; retry shortly",
+            "",
+        )
+    })?;
 
     // First-write gate: the in-lock file size is the single source of truth
     // (spec §5.7; an exists() pre-check would be TOCTOU).
-    let file_empty = file
+    let file_empty = guard
+        .file()
         .metadata()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?
         .len()
         == 0;
 
     // Read last seq within lock
-    let last_seq = read_last_seq_locked(&file, path)?;
+    let last_seq = read_last_seq_locked(guard.file(), path)?;
 
     // Legacy-format write guard: v0.4 threads carry no v0.5 headers, so the
     // tail scan yields seq 0. Appending would silently produce a mixed-format
     // corrupt file (old `### #N` content + new `## #1` message) — refuse.
     // Legitimate preamble-only new files (no legacy traces) and empty files
     // (first-write branch) are unaffected.
-    if !file_empty && last_seq == 0 && contains_legacy_headers(&file, path)? {
-        file.unlock().ok();
+    if !file_empty && last_seq == 0 && contains_legacy_headers(guard.file(), path)? {
         return Err(PaperworkError::Parse {
             message: "thread file contains legacy v0.4 message headers but no v0.5 message headers".to_string(),
             fix: "this file is in the v0.4 legacy format; v0.5 is not forward compatible - migrate it by hand per the CHANGELOG migration guide before writing".to_string(),
@@ -160,7 +155,6 @@ pub fn thread_send(
 
     // Check size limit (single message only; preamble exempt, spec §5.7)
     if serialized.len() > MAX_MESSAGE_SIZE {
-        file.unlock().ok();
         return Err(PaperworkError::MessageTooLarge {
             size: serialized.len(),
             max: MAX_MESSAGE_SIZE,
@@ -183,19 +177,14 @@ pub fn thread_send(
         false
     } else {
         // Non-empty branch guarantees len > 0, so End(-1) is valid.
-        let mut file_ref = &file;
+        let mut file_ref = guard.file();
         let last = file_ref
             .seek(SeekFrom::End(-1))
             .and_then(|_| {
                 let mut last = [0u8; 1];
                 file_ref.read_exact(&mut last).map(|_| last)
             })
-            .map_err(|e| PaperworkError::IoContext {
-                path: path.to_path_buf(),
-                source: e,
-                fix: "check that the file is readable".to_string(),
-                example: String::new(),
-            })?;
+            .map_err(|e| PaperworkError::io_ctx(path, e, "check that the file is readable", ""))?;
         last[0] != b'\n'
     };
     let payload = if file_empty {
@@ -210,21 +199,9 @@ pub fn thread_send(
     };
 
     // Single write() call for atomicity (invariant I4)
-    let mut writer = &file;
-    writer
-        .write_all(payload.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    let mut writer = guard.file();
+    writer.write_all(payload.as_bytes()).map_err(|e| {
+        PaperworkError::io_ctx(path, e, "check disk space and file permissions", "")
     })?;
 
     Ok(new_seq)
@@ -238,12 +215,8 @@ pub fn thread_meta(path: &Path) -> Result<ThreadMeta> {
         return Ok(ThreadMeta::default());
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     Ok(parse_preamble(&content))
 }
@@ -265,12 +238,8 @@ pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Ve
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     let messages = parse_messages(&content)?;
 
@@ -299,12 +268,8 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     // Title from the preamble in the SAME pass (review M8): callers no
     // longer need a second full-file `thread_meta` walk.
@@ -317,13 +282,10 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
     let last_timestamp = messages.last().map(|m| m.timestamp);
 
     // Participants derived from the sender set, deduplicated in
-    // first-appearance order (spec §5.4, owner ruling D1).
-    let mut participants: Vec<String> = Vec::new();
-    for m in &messages {
-        if !participants.contains(&m.sender) {
-            participants.push(m.sender.clone());
-        }
-    }
+    // first-appearance order (spec §5.4, owner ruling D1). T4/NEW-10: the
+    // shared [`dedup_preserve_order`] (HashSet+Vec) runs in O(n) instead of
+    // the historical O(n²) `Vec::contains` loop.
+    let participants = dedup_preserve_order(messages.iter().map(|m| m.sender.clone()));
 
     // Snippets from the last SNIPPET_COUNT messages (chronological order)
     let snippets: Vec<String> = messages
@@ -395,46 +357,36 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         });
     }
 
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    // The guard's Drop releases the lock on every exit path (T4).
+    let guard = LockedFile::acquire(file, |e| {
+        PaperworkError::io_ctx(
+            path,
+            e,
+            "another process may hold the lock; retry shortly",
+            "",
+        )
+    })?;
 
-    // Read content through the locked file handle
+    // Read content through the locked file handle (the historical two-step
+    // wording is preserved via the `file()` escape hatch, T4).
+    let mut handle = guard.file();
+    handle
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
     let mut content = String::new();
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+    handle
+        .read_to_string(&mut content)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
 
     let mut messages = parse_messages(&content)?;
 
     if messages.is_empty() {
-        file.unlock().ok();
         return Err(PaperworkError::NotFound {
             resource: "Message".to_string(),
             name: format!("#{}", seq),
@@ -450,7 +402,6 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     let msg_index = match messages.iter().position(|m| m.seq == seq) {
         Some(idx) => idx,
         None => {
-            file.unlock().ok();
             return Err(PaperworkError::NotFound {
                 resource: "Message".to_string(),
                 name: format!("#{}", seq),
@@ -464,7 +415,6 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
 
     // Check ownership
     if msg.sender != sender {
-        file.unlock().ok();
         return Err(PaperworkError::NotAllowed {
             operation: "thread_edit".to_string(),
             reason: format!(
@@ -490,7 +440,6 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         .unwrap_or(0);
 
     if seq != sender_last_seq {
-        file.unlock().ok();
         return Err(PaperworkError::NotAllowed {
             operation: "thread_edit".to_string(),
             reason: format!(
@@ -510,7 +459,6 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     // Check if it's the final message in thread
     let last_seq = messages.last().map(|m| m.seq).unwrap_or(0);
     if seq != last_seq {
-        file.unlock().ok();
         return Err(PaperworkError::NotAllowed {
             operation: "thread_edit".to_string(),
             reason: format!(
@@ -534,7 +482,6 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     // stays unchanged on overflow.
     let edited_serialized = serialize_message(&messages[msg_index]);
     if edited_serialized.len() > MAX_MESSAGE_SIZE {
-        file.unlock().ok();
         return Err(PaperworkError::MessageTooLarge {
             size: edited_serialized.len(),
             max: MAX_MESSAGE_SIZE,
@@ -550,33 +497,17 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     let mut new_content: Vec<u8> = content.as_bytes()[..preamble_end].to_vec();
     new_content.extend_from_slice(serialize_messages(&messages).as_bytes());
 
-    // Rewrite entire file (truncate + write within the lock)
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(&new_content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    // Rewrite entire file (truncate + write within the lock); per-step
+    // wording preserved via the `file()` escape hatch (T4).
+    let file = guard.file();
+    file.set_len(0)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
+    let mut handle = file;
+    handle
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
+    handle.write_all(&new_content).map_err(|e| {
+        PaperworkError::io_ctx(path, e, "check disk space and file permissions", "")
     })?;
 
     Ok(())
@@ -591,6 +522,12 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
 /// with the normalized view used by `parse_messages`; a `split('\n')` scan
 /// would glue lone-`\r`-terminated lines to their successor and silently
 /// lose the whole preamble (review B1).
+///
+/// T4 byte-level exemption: this loop deliberately does NOT migrate onto
+/// the shared line scanners (`format/mod.rs`, the fence-policy authority —
+/// the loop reuses its `fence_open_len` / `fence_close_matches` predicates)
+/// because the scanners hand out line slices of normalized content, while
+/// this function must return RAW byte offsets where `\r\n` counts 2 bytes.
 fn first_message_header_offset(content: &str) -> Option<usize> {
     let bytes = content.as_bytes();
     let mut open: Option<usize> = None;
@@ -635,43 +572,19 @@ fn first_message_header_offset(content: &str) -> Option<usize> {
 /// Fence-aware (review mn-4): a `### #N` line inside a fenced code block of
 /// preamble prose is quoted content, not a legacy header trace, so it must
 /// not trigger the unmigrated-thread write refusal.
+///
+/// T4: converged onto the shared scanner family ([`first_outside_fence`]).
 fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> {
     let mut file_ref = file;
     file_ref
         .seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
     let mut content = String::new();
     file_ref
         .read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file integrity".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
     let content = normalize_line_endings(&content);
-    let mut open: Option<usize> = None;
-    for line in content.lines() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if LEGACY_HEADER_RE.is_match(line) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(first_outside_fence(&content, |_i, line| LEGACY_HEADER_RE_FMT.is_match(line)).is_some())
 }
 
 /// Read the last seq number from a thread file (within lock).
@@ -684,13 +597,18 @@ fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> {
 /// - fence open/close tracking within the buffer: candidate headers inside
 ///   an open fence are skipped (R6; the residual limitation of an unknown
 ///   fence parity before the buffer start is documented in spec §5.5).
+///
+/// T4 byte-level exemption: this loop deliberately does NOT migrate onto
+/// the shared line scanners (`format/mod.rs`, the fence-policy authority —
+/// the loop reuses its `fence_open_len` / `fence_close_matches` predicates)
+/// because it scans an UNNORMALIZED byte buffer (`String::from_utf8_lossy`
+/// over the raw tail, lone `\r` boundaries included) under the R7
+/// first-line-drop rule; normalizing first would shift every byte offset
+/// the R7 probe reasons about.
 fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
-    let metadata = file.metadata().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
-    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
 
     let file_size = metadata.len();
     if file_size == 0 {
@@ -703,22 +621,12 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
     let mut file_ref = file;
     file_ref
         .seek(SeekFrom::Start(read_start))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
 
     let mut buffer = vec![0u8; read_len];
     file_ref
         .read_exact(&mut buffer)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file integrity".to_string(),
-            example: String::new(),
-        })?;
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
 
     // Incomplete-first-line rule (R7): only when the buffer does not cover
     // the whole file.
@@ -727,20 +635,10 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
         let mut prev = [0u8; 1];
         file_ref
             .seek(SeekFrom::Start(read_start - 1))
-            .map_err(|e| PaperworkError::IoContext {
-                path: path.to_path_buf(),
-                source: e,
-                fix: "check file handle validity".to_string(),
-                example: String::new(),
-            })?;
+            .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
         file_ref
             .read_exact(&mut prev)
-            .map_err(|e| PaperworkError::IoContext {
-                path: path.to_path_buf(),
-                source: e,
-                fix: "check file integrity".to_string(),
-                example: String::new(),
-            })?;
+            .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
         if prev[0] != b'\n' {
             scan = match buffer.iter().position(|&b| b == b'\n') {
                 Some(pos) => &buffer[pos + 1..],
@@ -766,15 +664,61 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
             open = Some(n);
             continue;
         }
-        if SEQ_RE.is_match(line) {
-            // header_seq re-check shares the parse-side predicate (review
-            // n2): seq-0 pseudo-headers and overflowing seqs never reset
-            // last_seq, exactly like `header_indices` on the read path.
-            if let Some(seq) = header_seq(line) {
-                last_seq = seq;
-            }
+        // header_seq is the single authoritative gate (T4): the historical
+        // `SEQ_RE` prefilter was redundant — seq-0 pseudo-headers and
+        // overflowing seqs never reset last_seq, exactly like
+        // `header_indices` on the read path (review n2 / MJ-1).
+        if let Some(seq) = header_seq(line) {
+            last_seq = seq;
         }
     }
 
     Ok(last_seq)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // ========================================================================
+    // T4 differential corpus: pin the fence-aware legacy-header scan
+    // semantics BEFORE the migration onto the shared scanner family; the
+    // same corpus must pass unchanged afterwards.
+    // ========================================================================
+
+    fn t4_legacy(content: &str) -> bool {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("t.post.md");
+        let mut f = File::create(&path).expect("create");
+        f.write_all(content.as_bytes()).expect("write");
+        let f = OpenOptions::new().read(true).open(&path).expect("open");
+        contains_legacy_headers(&f, &path).expect("scan")
+    }
+
+    #[test]
+    fn test_t4_contains_legacy_headers_differential_corpus() {
+        // plain legacy header
+        assert!(t4_legacy("### #1 alice (2026-01-01T00:00:00Z)"));
+        // v0.5 content carries no legacy traces
+        assert!(!t4_legacy("# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n"));
+        // legacy header inside a fence is quoted content
+        assert!(!t4_legacy("```md\n### #1 alice\n```\n"));
+        // <= 3 space indented fence is recognized
+        assert!(!t4_legacy("   ```\n### #1 alice\n   ```"));
+        // 4-space indent: no fence, the legacy line stays visible
+        assert!(t4_legacy("    ```\n### #1 alice\n    ```"));
+        // tilde fences are not recognized
+        assert!(t4_legacy("~~~\n### #1 alice\n~~~"));
+        // unclosed fence swallows the tail
+        assert!(!t4_legacy("```\n### #1 alice"));
+        // nested backtick length: shorter run does not close the fence
+        assert!(!t4_legacy("````\n### #1 alice\n```\n"));
+        // CRLF input behaves like LF
+        assert!(t4_legacy("```md\r\n```\r\n### #1 alice\r\n"));
+        // empty file
+        assert!(!t4_legacy(""));
+        // indented legacy line is not flush-left (regex stance)
+        assert!(!t4_legacy(" ### #1 alice"));
+    }
 }

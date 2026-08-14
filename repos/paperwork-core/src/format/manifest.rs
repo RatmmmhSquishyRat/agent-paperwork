@@ -15,8 +15,9 @@ use std::sync::LazyLock;
 use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
 use super::{
-    compute_fence_length, extract_attribute, fence_close_matches, fence_info, fence_open_len,
-    normalize_line_endings, parse_timestamp, RFC3339_FMT,
+    collect_outside_fence, compute_fence_length, extract_attribute, fence_close_matches,
+    fence_info, fence_open_len, first_outside_fence, normalize_line_endings, parse_timestamp,
+    RFC3339_FMT,
 };
 
 /// Named-capture-group scanner (`(?<name>...)`), compiled once (M-review M5).
@@ -33,48 +34,63 @@ pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
 
 /// Representability check for a brief entry note (M-review M1).
 ///
-/// A note whose FIRST non-blank line is attribute-shaped (`- key: value`,
-/// matching the attribute regex) or opens a ```` ```regex ```` fence cannot
-/// survive a parse → serialize roundtrip: the attribute-zone rule (blank
-/// lines do not terminate it) would re-absorb that line as an attribute or
-/// as a regex carrier. Returns a human-readable reason if unrepresentable.
+/// Alias of [`super::first_line_representation_issue`]: a note whose first
+/// non-blank line is attribute-shaped (`- key: value`) or opens a
+/// ```` ```regex ```` fence cannot survive a parse → serialize roundtrip
+/// (the attribute-zone rule would re-absorb that line). Notes sit AFTER the
+/// entry attribute zone, so later attribute-shaped lines inside a note are
+/// verbatim content and stay legal (BDD:BRIEF-12; pinned by existing ops
+/// tests). The dangerous-structural-key scan applies to preamble prose only
+/// ([`super::prose_representation_issue`]).
 pub fn note_representation_issue(note: &str) -> Option<&'static str> {
-    let first = note.lines().find(|l| !l.trim().is_empty())?;
-    if extract_attribute(first).is_some() {
-        return Some("note starts with an attribute-shaped line '- key: value'");
-    }
-    if fence_info(first) == "regex" && fence_open_len(first).is_some() {
-        return Some("note starts with a ```regex fence opening line");
-    }
-    None
+    super::first_line_representation_issue(note)
 }
 
 /// Locate fence-aware H2 line indices (entry boundaries, spec §3.3/§6.2).
+///
+/// T4: delegates to the shared scanner family ([`collect_outside_fence`]);
+/// the `&[&str]` signature is retained so the differential corpus and the
+/// `lines()`-based call sites stay unchanged (the join is fence-neutral:
+/// callers pass already-normalized lines).
 fn h2_indices(lines: &[&str]) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut open: Option<usize> = None;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if line.trim().starts_with("## ") {
-            indices.push(i);
-        }
-    }
-    indices
+    let joined = lines.join("\n");
+    collect_outside_fence(&joined, |_i, line| line.trim().starts_with("## "))
+}
+
+/// Fence-aware scan for legacy (v0.4) brief residue (Sam-S1 guard).
+///
+/// A brief that already uses lowercase attribute keys but still carries the
+/// v0.4 `## Entries` wrapper heading or `### ` H3 entry headers would parse
+/// under v0.5 rules and be destroyed by the next read-modify-rewrite (the
+/// wrapper/H3 lines become entry titles or preamble prose). Only structural
+/// positions trigger: fence-outside lines only, so a `### ` example inside
+/// a note fence is quoted content and stays legal.
+///
+/// T4: delegates to the shared scanner family ([`first_outside_fence`]).
+fn contains_legacy_brief_residue(lines: &[&str]) -> bool {
+    let joined = lines.join("\n");
+    first_outside_fence(&joined, |_i, line| {
+        let trimmed = line.trim();
+        trimmed == "## Entries" || trimmed.starts_with("### ")
+    })
+    .is_some()
 }
 
 /// Parse a manifest (brief) from Markdown content (spec §6.2).
 pub fn parse_manifest(content: &str) -> Result<Manifest> {
     let content = normalize_line_endings(content);
     let lines: Vec<&str> = content.lines().collect();
+
+    // Legacy residue guard (Sam-S1): a half-migrated v0.4 brief (lowercase
+    // keys but residual `## Entries` wrapper / `### ` entry headers) would
+    // parse silently and be corrupted by the next RMW — refuse at parse.
+    if contains_legacy_brief_residue(&lines) {
+        return Err(PaperworkError::Parse {
+            message: "brief contains legacy v0.4 residue ('## Entries' wrapper heading or '### ' entry headers)".to_string(),
+            fix: "migrate this brief to the v0.5 entry layout per the CHANGELOG migration guide: entries are '## <title>' sections directly after the preamble, without an '## Entries' wrapper".to_string(),
+            example: "# title\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## entry title\n\n- path: file.rs\n- hash: <sha256>".to_string(),
+        });
+    }
 
     let headers = h2_indices(&lines);
     let preamble_end = headers.first().copied().unwrap_or(lines.len());
@@ -317,6 +333,54 @@ fn serialize_entry(entry: &ManifestEntry) -> String {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    // ========================================================================
+    // T4 differential corpus: pin the H2-boundary / legacy-residue scan
+    // semantics (fence/indent/tilde/unclosed/nested-length/CRLF/empty)
+    // BEFORE the migration onto the shared scanner family; the same corpus
+    // must pass unchanged afterwards.
+    // ========================================================================
+
+    fn t4_h2(content: &str) -> Vec<usize> {
+        let content = normalize_line_endings(content);
+        let lines: Vec<&str> = content.lines().collect();
+        h2_indices(&lines)
+    }
+
+    fn t4_residue(content: &str) -> bool {
+        let content = normalize_line_endings(content);
+        let lines: Vec<&str> = content.lines().collect();
+        contains_legacy_brief_residue(&lines)
+    }
+
+    #[test]
+    fn test_t4_h2_indices_differential_corpus() {
+        assert_eq!(t4_h2("## a\n\n## b"), vec![0, 2]);
+        assert_eq!(t4_h2("## a\n\n## b\n"), vec![0, 2]); // trailing newline
+        assert_eq!(t4_h2("```\n## fake\n```\n## real"), vec![3]);
+        assert_eq!(t4_h2("   ```\n## x\n   ```"), vec![]); // 3-space fence
+        assert_eq!(t4_h2("    ```\n## x\n    ```"), vec![1]); // 4-space: no fence
+        assert_eq!(t4_h2("~~~\n## x\n~~~"), vec![1]); // tildes not a fence
+        assert_eq!(t4_h2("## a\n```\n## b"), vec![0]); // unclosed swallows tail
+        assert_eq!(t4_h2("````\n## x\n```\n````\n## b"), vec![4]); // nested length
+        assert_eq!(t4_h2("# t\r\n\r\n## a\r\n"), vec![2]); // CRLF
+        assert_eq!(t4_h2(""), vec![]);
+        assert_eq!(t4_h2("  ## indented"), vec![0]); // trim stance
+    }
+
+    #[test]
+    fn test_t4_legacy_residue_differential_corpus() {
+        assert!(t4_residue("# t\n\n## Entries\n"));
+        assert!(t4_residue("# t\n\n### sub\n"));
+        assert!(!t4_residue("# t\n\n```\n### sub\n```\n")); // quoted content
+        assert!(!t4_residue("   ```\n### x\n   ```")); // 3-space fence
+        assert!(t4_residue("    ```\n### x\n    ```")); // 4-space: no fence
+        assert!(t4_residue("~~~\n### x\n~~~")); // tildes not a fence
+        assert!(!t4_residue("```\n### x")); // unclosed swallows
+        assert!(t4_residue("# t\r\n### sub\r\n")); // CRLF
+        assert!(!t4_residue(""));
+        assert!(!t4_residue("###no-space\n"));
+    }
 
     fn make_timestamp(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()

@@ -129,6 +129,57 @@ pub fn emit_err(ctx: &Context, category: &str, message: &str, fix: &str, example
     }
 }
 
+/// Chain-style JSON object builder over `serde_json::Map`.
+///
+/// Every command-side `--json` payload is assembled through this builder so
+/// the frozen output contract (char_tests byte snapshots) has exactly one
+/// construction path. It deliberately wraps `serde_json::Map` instead of a
+/// derive struct: the map's key-order semantics stay exactly as they are
+/// today, while a derive struct's field declaration order could diverge
+/// from the frozen key order.
+pub struct JsonBuilder {
+    map: serde_json::Map<String, serde_json::Value>,
+}
+
+impl JsonBuilder {
+    pub fn new() -> Self {
+        Self {
+            map: serde_json::Map::new(),
+        }
+    }
+
+    /// Insert a key unconditionally.
+    pub fn insert(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.map.insert(key.to_string(), value);
+        self
+    }
+
+    /// Insert only when present — an absent value keeps the key out of the
+    /// object entirely (the frozen "missing key, not null" skip semantics).
+    pub fn insert_opt(self, key: &str, value: Option<serde_json::Value>) -> Self {
+        match value {
+            Some(value) => self.insert(key, value),
+            None => self,
+        }
+    }
+
+    pub fn build(self) -> serde_json::Value {
+        serde_json::Value::Object(self.map)
+    }
+}
+
+impl Default for JsonBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Emit a JSON value as one compact line on stdout — the single print path
+/// for all command-side `--json` output.
+pub fn print_json(value: serde_json::Value) {
+    println!("{}", serde_json::to_string(&value).unwrap_or_default());
+}
+
 /// Print raw/plain text output (for --plain mode).
 pub fn print_plain(text: &str) {
     print!("{}", text);

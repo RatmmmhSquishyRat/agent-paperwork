@@ -255,24 +255,21 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("post.read"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(format!("{} messages", total)),
-                    );
+                    let mut obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("post.read"))
+                        .insert(
+                            "conclusion",
+                            serde_json::json!(format!("{} messages", total)),
+                        );
                     if total > limit {
-                        obj.insert(
-                            "showing".to_string(),
+                        obj = obj.insert(
+                            "showing",
                             serde_json::json!(format!("{}/{}", messages.len(), total)),
                         );
                     }
-                    obj.insert("messages".to_string(), serde_json::json!(messages));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = obj.insert("messages", serde_json::json!(messages));
+                    output::print_json(obj.build());
                 }
                 OutputMode::Plain => {
                     // Serialize only selected messages back to file format
@@ -328,35 +325,27 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             match ctx.mode {
                 OutputMode::Json => {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("status".to_string(), serde_json::json!("ok"));
-                    obj.insert("command".to_string(), serde_json::json!("post.summary"));
-                    obj.insert(
-                        "conclusion".to_string(),
-                        serde_json::json!(path.display().to_string()),
-                    );
-                    obj.insert("title".to_string(), serde_json::json!(title));
-                    obj.insert("participants".to_string(), serde_json::json!(participants));
-                    obj.insert(
-                        "messages".to_string(),
-                        serde_json::json!(summary.message_count),
-                    );
-                    if let Some(ref s) = summary.last_sender {
-                        obj.insert("last.sender".to_string(), serde_json::json!(s));
-                    }
-                    if let Some(t) = summary.last_timestamp {
-                        obj.insert(
-                            "last.time".to_string(),
-                            serde_json::json!(t
-                                .format(paperwork_core::format::RFC3339_FMT)
-                                .to_string()),
-                        );
-                    }
-                    obj.insert("last.snippet".to_string(), serde_json::json!(last_snippet));
-                    println!(
-                        "{}",
-                        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-                    );
+                    let obj = output::JsonBuilder::new()
+                        .insert("status", serde_json::json!("ok"))
+                        .insert("command", serde_json::json!("post.summary"))
+                        .insert("conclusion", serde_json::json!(path.display().to_string()))
+                        .insert("title", serde_json::json!(title))
+                        .insert("participants", serde_json::json!(participants))
+                        .insert("messages", serde_json::json!(summary.message_count))
+                        .insert_opt(
+                            "last.sender",
+                            summary.last_sender.as_ref().map(|s| serde_json::json!(s)),
+                        )
+                        .insert_opt(
+                            "last.time",
+                            summary.last_timestamp.map(|t| {
+                                serde_json::json!(t
+                                    .format(paperwork_core::format::RFC3339_FMT)
+                                    .to_string())
+                            }),
+                        )
+                        .insert("last.snippet", serde_json::json!(last_snippet));
+                    output::print_json(obj.build());
                 }
                 _ => {
                     let mut env = output::Envelope::new("post.summary", path.display().to_string())
