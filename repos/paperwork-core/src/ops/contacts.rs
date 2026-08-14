@@ -282,8 +282,9 @@ pub fn resolve_contact_path(contacts_path: &Path, entry_path: &str) -> PathBuf {
 /// Derive the link label for a profile path (spec §7.3, R11).
 ///
 /// Reads the target profile's H1 as the label; on any failure falls back to
-/// the file-name stem: strip `.profile.md` first, then `.md`, else keep the
-/// original name. Resolution is delegated to [`resolve_contact_path`]
+/// the file-name stem via the shared [`crate::format::strip_known_suffix`]
+/// (`.profile.md` first, then `.post.md`, then `.md`, else keep the
+/// original name). Resolution is delegated to [`resolve_contact_path`]
 /// (as-given first, then contacts-directory-relative).
 fn derive_label(contacts_path: &Path, profile_path: &str) -> String {
     let as_given = Path::new(profile_path);
@@ -295,16 +296,10 @@ fn derive_label(contacts_path: &Path, profile_path: &str) -> String {
         }
     }
 
-    // Fallback: file-name stem.
+    // Fallback: file-name stem (P-3: shared `strip_known_suffix`).
     let file_name = as_given
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| profile_path.to_string());
-    if let Some(stem) = file_name.strip_suffix(".profile.md") {
-        stem.to_string()
-    } else if let Some(stem) = file_name.strip_suffix(".md") {
-        stem.to_string()
-    } else {
-        file_name
-    }
+    crate::format::strip_known_suffix(&file_name).to_string()
 }

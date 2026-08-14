@@ -7,7 +7,7 @@
 
 use crate::{ContactEntry, PaperworkError, Result};
 
-use super::{fence_close_matches, fence_open_len, for_each_outside_fence, normalize_line_endings};
+use super::{first_outside_fence, for_each_outside_fence, normalize_line_endings};
 
 /// Extract the title from contacts content (the H1 heading).
 ///
@@ -63,25 +63,12 @@ pub fn parse_contacts(content: &str) -> Result<Vec<ContactEntry>> {
 /// entries — the write side uses this predicate as a refusal guard.
 pub fn contains_bare_bullet(content: &str) -> bool {
     let content = normalize_line_endings(content);
-    let mut open: Option<usize> = None;
-    for line in content.lines() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if let Some(rest) = line.trim().strip_prefix("- ") {
-            if parse_link_bullet(rest).is_none() {
-                return true;
-            }
-        }
-    }
-    false
+    first_outside_fence(&content, |_i, line| {
+        line.trim()
+            .strip_prefix("- ")
+            .is_some_and(|rest| parse_link_bullet(rest).is_none())
+    })
+    .is_some()
 }
 
 /// Parse `[label](destination)` (spec §7.2), returning `None` for

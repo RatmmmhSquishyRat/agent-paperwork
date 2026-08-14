@@ -584,20 +584,15 @@ fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Default preamble title (spec section 5.7): strip the `.post.md` suffix, else
-/// strip the `.md` suffix, else keep the file name as-is.
+/// Default preamble title (spec section 5.7): strip the managed-file
+/// suffixes via the shared core helper (P-3: `.profile.md` first, then
+/// `.post.md`, then `.md`, else keep the file name as-is).
 fn default_title(path: &Path) -> String {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
-    if let Some(stem) = name.strip_suffix(".post.md") {
-        stem.to_string()
-    } else if let Some(stem) = name.strip_suffix(".md") {
-        stem.to_string()
-    } else {
-        name
-    }
+    paperwork_core::format::strip_known_suffix(&name).to_string()
 }
 
 /// Trim each segment of a comma-separated list and drop empty segments.

@@ -21,11 +21,39 @@ use crate::error::{PaperworkError, Result};
 /// All parsers must call this before processing.
 ///
 /// Zero-copy when the content carries no `\r` at all (M-review n14).
+/// When `\r` is present the rewrite runs in a SINGLE pass with a single
+/// allocation (P-3 NEW-9): `\r\n` → `\n`, lone `\r` → `\n`, byte-for-byte
+/// identical to the historical two-step `replace("\r\n","\n")` +
+/// `replace('\r','\n')` semantics.
 pub fn normalize_line_endings(content: &str) -> Cow<'_, str> {
-    if !content.contains('\r') {
+    let bytes = content.as_bytes();
+    let Some(first_cr) = bytes.iter().position(|&b| b == b'\r') else {
         return Cow::Borrowed(content);
+    };
+
+    let mut out = Vec::with_capacity(bytes.len());
+    // Copy verbatim up to the first `\r`, then walk the rest once.
+    out.extend_from_slice(&bytes[..first_cr]);
+    let mut i = first_cr;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' {
+            out.push(b'\n');
+            // `\r\n` collapses as one terminator; a lone `\r` alone.
+            i += if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                2
+            } else {
+                1
+            };
+        } else {
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'\r' {
+                i += 1;
+            }
+            out.extend_from_slice(&bytes[start..i]);
+        }
     }
-    Cow::Owned(content.replace("\r\n", "\n").replace('\r', "\n"))
+    // Only ASCII line-ending bytes are rewritten, so UTF-8 validity holds.
+    Cow::Owned(String::from_utf8(out).expect("line-ending rewrite preserves UTF-8"))
 }
 
 /// Canonical write-side RFC 3339 timestamp format (spec §3.5) — the single
@@ -193,6 +221,15 @@ pub fn for_each_outside_fence(content: &str, mut f: impl FnMut(usize, &str) -> b
     walk_outside_fence(content, &mut f);
 }
 
+/// Fence still open at end of content, if any: `(0-based opening line
+/// number, backtick length)` of the swallowing fence.
+///
+/// `content` MUST already be normalized through [`normalize_line_endings`]
+/// (same calling convention as [`for_each_outside_fence`]).
+pub fn unclosed_fence(content: &str) -> Option<(usize, usize)> {
+    walk_outside_fence(content, &mut |_i, _line| true)
+}
+
 /// Short-circuit variant of [`for_each_outside_fence`]: the line number of
 /// the FIRST fence-outside line satisfying `pred`, or `None`.
 pub(crate) fn first_outside_fence(
@@ -212,9 +249,6 @@ pub(crate) fn first_outside_fence(
 
 /// Collecting variant of [`for_each_outside_fence`]: line numbers of ALL
 /// fence-outside lines satisfying `pred`, in order of appearance.
-// P-3 pull-forward: the fence-state-machine call-site migration consumes
-// this helper; pinned by the inline scanner corpus until then.
-#[allow(dead_code)]
 pub(crate) fn collect_outside_fence(
     content: &str,
     pred: impl Fn(usize, &str) -> bool,
@@ -239,29 +273,50 @@ pub fn validate_markdown(content: &str) -> Vec<String> {
     let content = normalize_line_endings(content);
     let mut issues = Vec::new();
 
-    let mut open_len: Option<(usize, usize)> = None; // (backtick len, 1-based line no)
-
-    for (i, line) in content.lines().enumerate() {
-        let line_no = i + 1;
-        if let Some((n, _start)) = open_len {
-            if fence_close_matches(line, n) {
-                open_len = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open_len = Some((n, line_no));
-        }
-    }
-
-    if let Some((n, start)) = open_len {
+    if let Some((start, n)) = unclosed_fence(&content) {
         issues.push(format!(
             "unclosed code fence ({} backticks) opened at line {}",
-            n, start
+            n,
+            start + 1
         ));
     }
 
     issues
+}
+
+// ============================================================================
+// Shared small helpers (DRY convergence)
+// ============================================================================
+
+/// Order-preserving deduplication (HashSet + Vec): keep the FIRST occurrence
+/// of each item, O(n) overall. Replaces historical O(n²) `Vec::contains`
+/// loops (`thread_summary` participants, `derive_mentions`).
+pub fn dedup_preserve_order<I, S>(items: I) -> Vec<S>
+where
+    I: IntoIterator<Item = S>,
+    S: Eq + std::hash::Hash + Clone,
+{
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for item in items {
+        if seen.insert(item.clone()) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+/// Strip the known managed-file suffixes from a file name: `.profile.md`
+/// first, then `.post.md`, then `.md`; anything else is kept as-is
+/// (spec §7.3 R11 label fallback). Single shared definition (P-3),
+/// consumed by `ops/contacts.rs::derive_label` and
+/// `cmd/post.rs::default_title`.
+pub fn strip_known_suffix(file_name: &str) -> &str {
+    file_name
+        .strip_suffix(".profile.md")
+        .or_else(|| file_name.strip_suffix(".post.md"))
+        .or_else(|| file_name.strip_suffix(".md"))
+        .unwrap_or(file_name)
 }
 
 // ============================================================================
@@ -366,6 +421,34 @@ mod tests {
         assert_eq!(normalize_line_endings("a\r\nb\r\nc"), "a\nb\nc");
         assert_eq!(normalize_line_endings("a\nb\nc"), "a\nb\nc");
         assert_eq!(normalize_line_endings("a\rb\rc"), "a\nb\nc");
+    }
+
+    // NEW-9 (P-3, ported from wip): single-pass rewrite must stay
+    // byte-for-byte equivalent to the historical two-step replace chain,
+    // in all four line-ending states.
+    #[test]
+    fn test_normalize_single_pass_equivalence() {
+        // mixed CRLF + LF + lone CR in one buffer
+        assert_eq!(normalize_line_endings("a\r\nb\nc\rd\r\n"), "a\nb\nc\nd\n");
+        // `\r\r\n` = lone CR + CRLF -> two terminators (parity with old impl)
+        assert_eq!(normalize_line_endings("x\r\r\ny"), "x\n\ny");
+        // `\r\n\r` = CRLF + lone CR -> two terminators
+        assert_eq!(normalize_line_endings("x\r\n\ry"), "x\n\ny");
+        // leading / trailing lone CR
+        assert_eq!(normalize_line_endings("\ra\r"), "\na\n");
+        // pure terminators
+        assert_eq!(normalize_line_endings("\r\n"), "\n");
+        assert_eq!(normalize_line_endings("\r"), "\n");
+    }
+
+    // NEW-9 (P-3, ported from wip): no-`\r` content stays borrowed (zero
+    // allocation).
+    #[test]
+    fn test_normalize_borrowed_state() {
+        let plain = "a\nb\nc";
+        assert!(matches!(normalize_line_endings(plain), Cow::Borrowed(_)));
+        assert!(matches!(normalize_line_endings(""), Cow::Borrowed(_)));
+        assert!(matches!(normalize_line_endings("a\r\nb"), Cow::Owned(_)));
     }
 
     #[test]
@@ -565,6 +648,50 @@ mod tests {
         // always-true predicate sees it; concrete predicates never match.
         assert_eq!(collect_outside_fence("", |_i, _l| true), vec![0]);
         assert!(collect_outside_fence("", |_i, l| !l.is_empty()).is_empty());
+    }
+
+    // P-3 (ported from wip): scanner cases the corpus above does not pin.
+    #[test]
+    fn test_outside_fence_scanner_extras() {
+        // full enumeration with 0-based line numbers; the trailing newline
+        // yields one final empty line (split convention)
+        let content = "a\n```md\nfenced\n## fake\n```\nb\n";
+        let mut seen = Vec::new();
+        for_each_outside_fence(content, |i, line| {
+            seen.push((i, line.to_string()));
+            true
+        });
+        assert_eq!(
+            seen,
+            vec![
+                (0, "a".to_string()),
+                (5, "b".to_string()),
+                (6, String::new())
+            ]
+        );
+
+        // CRLF input: callers normalize first (calling convention)
+        let raw = "a\r\n```md\r\nfenced\r\n```\r\nb\r\n";
+        let content = normalize_line_endings(raw);
+        assert_eq!(
+            collect_outside_fence(&content, |_i, l| l == "a" || l == "b"),
+            vec![0, 4]
+        );
+
+        // equal-length backtick-only line closes the fence
+        assert_eq!(
+            collect_outside_fence("````md\nhidden\n````\noutside", |_i, l| l == "outside"),
+            vec![3]
+        );
+        // closing line with an info string never closes
+        assert!(
+            first_outside_fence("```\nhidden\n```md\nstill\n```", |_i, l| l == "still").is_none()
+        );
+
+        // pure fence content: nothing outside
+        assert!(collect_outside_fence("```md\nbody\n```", |_i, _l| true).is_empty());
+        // unclosed fence only
+        assert!(collect_outside_fence("```", |_i, _l| true).is_empty());
     }
 
     #[test]

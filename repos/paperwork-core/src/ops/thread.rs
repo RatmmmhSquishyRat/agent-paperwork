@@ -11,16 +11,15 @@ use std::path::Path;
 
 use chrono::Utc;
 use fs2::FileExt;
-use regex::Regex;
-use std::sync::LazyLock;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::thread::{
     derive_message_refs, header_seq, parse_messages, parse_preamble, serialize_message,
-    serialize_messages, serialize_preamble, validate_sender,
+    serialize_messages, serialize_preamble, validate_sender, LEGACY_HEADER_RE_FMT,
 };
 use crate::format::{
-    check_single_line, fence_close_matches, fence_open_len, normalize_line_endings,
+    check_single_line, dedup_preserve_order, fence_close_matches, fence_open_len,
+    for_each_outside_fence, normalize_line_endings,
 };
 use crate::{Message, ThreadMeta, ThreadSummary};
 
@@ -38,16 +37,11 @@ const SNIPPET_COUNT: usize = 3;
 /// Character budget of a single summary snippet before ellipsis (review n10).
 const SNIPPET_CHAR_LIMIT: usize = 50;
 
-/// Tail-scan seq regex (spec §5.5). Applied per line while scanning;
-/// `[ \t]+` is the intra-line equivalent of the header's `\s+`.
-static SEQ_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##[ \t]+#(\d+)").expect("valid regex"));
-
-/// Legacy v0.4 message-header heuristic (`### #N`, flush left). Used by the
-/// unmigrated-thread write guard: a non-empty file with no v0.5 headers
-/// (tail scan seq == 0) that still carries `### #N` lines is legacy data.
-static LEGACY_HEADER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^###\s+#\d+").expect("valid regex"));
+// P-3: the historical `SEQ_RE` tail-scan prefilter and the ops-side
+// `LEGACY_HEADER_RE` twin were deleted here. `header_seq` (the parse-side
+// predicate, review MJ-1) is the single authoritative tail-scan gate — the
+// prefilter was redundant — and the legacy-header pattern now lives as the
+// single definition `format::thread::LEGACY_HEADER_RE_FMT` (imported above).
 
 /// Send a message to a thread. Auto-creates the file and parent dirs if absent.
 ///
@@ -326,12 +320,8 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
 
     // Participants derived from the sender set, deduplicated in
     // first-appearance order (spec §5.4, owner ruling D1).
-    let mut participants: Vec<String> = Vec::new();
-    for m in &messages {
-        if !participants.contains(&m.sender) {
-            participants.push(m.sender.clone());
-        }
-    }
+    // P-3: shared `dedup_preserve_order` (HashSet+Vec, O(n)).
+    let participants: Vec<String> = dedup_preserve_order(messages.iter().map(|m| m.sender.clone()));
 
     // Snippets from the last SNIPPET_COUNT messages (chronological order)
     let snippets: Vec<String> = messages
@@ -663,23 +653,18 @@ fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> {
             example: String::new(),
         })?;
     let content = normalize_line_endings(&content);
-    let mut open: Option<usize> = None;
-    for line in content.lines() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
+    // P-3: the fence walk delegates to the shared scanner family. The
+    // legacy pattern is the centralized `LEGACY_HEADER_RE_FMT` (format
+    // layer); the deleted ops-side twin carried the same pattern string.
+    let mut found = false;
+    for_each_outside_fence(&content, |_i, line| {
+        if LEGACY_HEADER_RE_FMT.is_match(line) {
+            found = true;
+            return false; // early stop
         }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if LEGACY_HEADER_RE.is_match(line) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+        true
+    });
+    Ok(found)
 }
 
 /// Read the last seq number from a thread file (within lock).
@@ -760,29 +745,21 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
     let content = String::from_utf8_lossy(scan);
 
     // Fence-aware scan within the buffer (R6): candidate headers inside an
-    // open fence are skipped.
+    // open fence are skipped. P-3: the fence walk delegates to the shared
+    // scanner family; `content` is normalized first (the scanner splits on
+    // `\n` only, so a raw `\r`-terminated line would keep its carriage
+    // return). The `SEQ_RE` prefilter is gone: `header_seq` is the single
+    // authoritative gate (review n2): seq-0 pseudo-headers and overflowing
+    // seqs never reset `last_seq`, exactly like `header_indices` on the
+    // read path.
+    let content = normalize_line_endings(&content);
     let mut last_seq = 0u64;
-    let mut open: Option<usize> = None;
-    for line in content.lines() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
+    for_each_outside_fence(&content, |_i, line| {
+        if let Some(seq) = header_seq(line) {
+            last_seq = seq;
         }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if SEQ_RE.is_match(line) {
-            // header_seq re-check shares the parse-side predicate (review
-            // n2): seq-0 pseudo-headers and overflowing seqs never reset
-            // last_seq, exactly like `header_indices` on the read path.
-            if let Some(seq) = header_seq(line) {
-                last_seq = seq;
-            }
-        }
-    }
+        true
+    });
 
     Ok(last_seq)
 }

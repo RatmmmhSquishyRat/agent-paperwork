@@ -15,8 +15,9 @@ use std::sync::LazyLock;
 use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
 use super::{
-    compute_fence_length, extract_attribute, fence_close_matches, fence_info, fence_open_len,
-    first_outside_fence, normalize_line_endings, parse_timestamp, RFC3339_FMT,
+    collect_outside_fence, compute_fence_length, extract_attribute, fence_close_matches,
+    fence_info, fence_open_len, first_outside_fence, normalize_line_endings, parse_timestamp,
+    RFC3339_FMT,
 };
 
 /// Named-capture-group scanner (`(?<name>...)`), compiled once (M-review M5).
@@ -50,25 +51,14 @@ pub fn note_representation_issue(note: &str) -> Option<&'static str> {
 }
 
 /// Locate fence-aware H2 line indices (entry boundaries, spec §3.3/§6.2).
+///
+/// Delegates to the shared scanner family ([`collect_outside_fence`]); the
+/// `&[&str]` signature is retained so the `lines()`-based call sites stay
+/// unchanged (the join is fence-neutral: callers pass already-normalized
+/// lines).
 fn h2_indices(lines: &[&str]) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut open: Option<usize> = None;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
-        if line.trim().starts_with("## ") {
-            indices.push(i);
-        }
-    }
-    indices
+    let joined = lines.join("\n");
+    collect_outside_fence(&joined, |_i, line| line.trim().starts_with("## "))
 }
 
 /// Fence-aware scan for legacy (v0.4) brief residue (SAM-1 guard).

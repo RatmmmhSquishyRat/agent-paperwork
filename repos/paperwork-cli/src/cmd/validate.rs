@@ -88,6 +88,12 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
         }
     })?;
 
+    // Normalize once and hand the Cow down (P-3): normalization is
+    // idempotent, so the core parsers' internal re-normalize is a no-op
+    // borrow; this removes the historical 3–4 repeated rewrites of the
+    // same content.
+    let content = paperwork_core::format::normalize_line_endings(&content);
+
     let mut env = output::Envelope::new("validate", path_str);
 
     match file_type {
@@ -174,25 +180,17 @@ fn fence_check(content: &str) -> Result<()> {
 /// match the message header grammar (and is not inside a fence) is reported
 /// as a warning with the expected-format fix. Warnings never change the
 /// ok/error conclusion.
+///
+/// P-3: the fence walk delegates to core's shared scanner
+/// (`format::for_each_outside_fence`, the sanctioned cross-layer surface);
+/// `content` arrives pre-normalized from [`run`] (idempotent either way).
 fn suspected_header_warnings(content: &str) -> Vec<String> {
+    use paperwork_core::format::for_each_outside_fence;
     use paperwork_core::format::thread::MESSAGE_HEADER_RE;
-    use paperwork_core::format::{fence_close_matches, fence_open_len, normalize_line_endings};
 
-    let content = normalize_line_endings(content);
     let mut warnings = Vec::new();
-    let mut open: Option<usize> = None;
 
-    for (i, line) in content.lines().enumerate() {
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-            continue;
-        }
-        if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-            continue;
-        }
+    for_each_outside_fence(content, |i, line| {
         let looks_like_header = SUSPECTED_HEADER_RE.is_match(line);
         if looks_like_header && !MESSAGE_HEADER_RE.is_match(line) {
             warnings.push(format!(
@@ -203,7 +201,8 @@ fn suspected_header_warnings(content: &str) -> Vec<String> {
             warnings.push("fix: expected format: ## #<seq> <sender> (<timestamp>)".to_string());
             warnings.push("example: ## #1 alice (2026-01-15T10:30:00Z)".to_string());
         }
-    }
+        true
+    });
 
     warnings
 }
