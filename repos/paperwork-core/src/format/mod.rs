@@ -329,13 +329,14 @@ where
 }
 
 /// Strip the known managed-file suffixes from a file name: `.profile.md`
-/// first, then `.md`; anything else is kept as-is (spec §7.3 R11 label
-/// fallback). Single shared definition (T4): consumed by
-/// `ops/contacts.rs::derive_label`; the CLI `default_title` wiring lands
-/// in T6.
+/// first, then `.post.md`, then `.md`; anything else is kept as-is
+/// (spec §7.3 R11 label fallback). Single shared definition (T4; T5 wired
+/// the CLI `default_title` onto it — Sam-m-γ): consumed by
+/// `ops/contacts.rs::derive_label` and `cmd/post.rs::default_title`.
 pub fn strip_known_suffix(file_name: &str) -> &str {
     file_name
         .strip_suffix(".profile.md")
+        .or_else(|| file_name.strip_suffix(".post.md"))
         .or_else(|| file_name.strip_suffix(".md"))
         .unwrap_or(file_name)
 }

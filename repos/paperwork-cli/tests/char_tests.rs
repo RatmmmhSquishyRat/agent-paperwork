@@ -266,6 +266,39 @@ fn char_post_send_mention_reply_token_injection() {
     );
 }
 
+// NEW-12: reply-to pointing at a missing seq keeps the historical envelope
+// — the send succeeds, the `@#N` token is injected, and NO implicit
+// mention appears (the bounded tail-scan lookup returns None exactly like
+// the old whole-file read returned an empty filter).
+#[test]
+fn char_post_send_reply_to_missing_seq_envelope_unchanged() {
+    let dir = TempDir::new().unwrap();
+    run(&dir, &["post", "send", "chat", "--from", "alice", "start"]);
+    let r = run(
+        &dir,
+        &[
+            "post",
+            "send",
+            "chat",
+            "--from",
+            "bob",
+            "--reply-to",
+            "5",
+            "ping",
+        ],
+    );
+    assert_eq!(r.code, 0);
+    gold(
+        &r.stdout,
+        "ok post.send #2 -> chat.post.md\nseq: 2\npath: chat.post.md\nsender: bob\n",
+    );
+    gold(&r.stderr, "");
+    gold(
+        &mask_ts(&read_file(&dir, "chat.post.md")),
+        "# chat\n\n## #1 alice (TS)\n\n```md\nstart\n```\n\n## #2 bob (TS)\n\n```md\n@#5\n\nping\n```\n\n",
+    );
+}
+
 // ===========================================================================
 // post read — four output modes + filters, byte-exact
 // ===========================================================================

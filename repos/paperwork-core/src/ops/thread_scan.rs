@@ -8,7 +8,9 @@
 //! - the fence-aware preamble/message-header offset probes
 //!   ([`first_message_header_offset`], [`last_message_header_offset`])
 //!   used by `thread_edit`'s preamble carry-over (spec §5.7, R5) and its
-//!   incremental last-message rewrite (NEW-8).
+//!   incremental last-message rewrite (NEW-8);
+//! - the locked sender lookup used by the CLI reply path
+//!   ([`find_message_sender_locked`], NEW-12).
 //!
 //! Concurrency: every scan runs inside the caller's `LockedFile` window
 //! (the send/edit locks); none of these functions acquires or releases a
@@ -22,7 +24,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::error::{PaperworkError, Result};
-use crate::format::thread::{header_seq, LEGACY_HEADER_RE_FMT};
+use crate::format::thread::{header_seq, LEGACY_HEADER_RE_FMT, MESSAGE_HEADER_RE};
 use crate::format::{
     fence_close_matches, fence_open_len, first_outside_fence, normalize_line_endings,
 };
@@ -156,32 +158,19 @@ pub(super) fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> 
     Ok(first_outside_fence(&content, |_i, line| LEGACY_HEADER_RE_FMT.is_match(line)).is_some())
 }
 
-/// Read the last seq number from a thread file (within lock).
-///
-/// Reverse-scans the tail for efficiency (O(1) regardless of file size),
-/// spec §5.5:
-/// - buffer = last 64KB + 256B;
-/// - incomplete first line dropped ONLY when `read_start > 0` and the byte
-///   preceding the buffer is not `\n` (R7);
-/// - fence open/close tracking within the buffer: candidate headers inside
-///   an open fence are skipped (R6; the residual limitation of an unknown
-///   fence parity before the buffer start is documented in spec §5.5).
-///
-/// T4 byte-level exemption: this loop deliberately does NOT migrate onto
-/// the shared line scanners (`format/mod.rs`, the fence-policy authority —
-/// the loop reuses its `fence_open_len` / `fence_close_matches` predicates)
-/// because it scans an UNNORMALIZED byte buffer (`String::from_utf8_lossy`
-/// over the raw tail, lone `\r` boundaries included) under the R7
-/// first-line-drop rule; normalizing first would shift every byte offset
-/// the R7 probe reasons about.
-pub(super) fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
+/// Read the spec §5.5 reverse tail-scan buffer through a locked handle:
+/// the last 64KB + 256B of the file, decoded lossily, with the
+/// incomplete-first-line drop rule (R7) applied when the buffer does not
+/// cover the whole file. Shared by [`read_last_seq_locked`] and
+/// [`find_message_sender_locked`] (NEW-12).
+pub(super) fn read_tail_scan_buffer(file: &File, path: &Path) -> Result<String> {
     let metadata = file
         .metadata()
         .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
 
     let file_size = metadata.len();
     if file_size == 0 {
-        return Ok(0);
+        return Ok(String::new());
     }
 
     let read_start = file_size.saturating_sub(REVERSE_SCAN_SIZE);
@@ -216,7 +205,32 @@ pub(super) fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
         }
     }
 
-    let content = String::from_utf8_lossy(scan);
+    Ok(String::from_utf8_lossy(scan).into_owned())
+}
+
+/// Read the last seq number from a thread file (within lock).
+///
+/// Reverse-scans the tail for efficiency (O(1) regardless of file size),
+/// spec §5.5:
+/// - buffer = last 64KB + 256B;
+/// - incomplete first line dropped ONLY when `read_start > 0` and the byte
+///   preceding the buffer is not `\n` (R7);
+/// - fence open/close tracking within the buffer: candidate headers inside
+///   an open fence are skipped (R6; the residual limitation of an unknown
+///   fence parity before the buffer start is documented in spec §5.5).
+///
+/// T4 byte-level exemption: this loop deliberately does NOT migrate onto
+/// the shared line scanners (`format/mod.rs`, the fence-policy authority —
+/// the loop reuses its `fence_open_len` / `fence_close_matches` predicates)
+/// because it scans an UNNORMALIZED byte buffer (`String::from_utf8_lossy`
+/// over the raw tail, lone `\r` boundaries included) under the R7
+/// first-line-drop rule; normalizing first would shift every byte offset
+/// the R7 probe reasons about.
+pub(super) fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
+    let content = read_tail_scan_buffer(file, path)?;
+    if content.is_empty() {
+        return Ok(0);
+    }
 
     // Fence-aware scan within the buffer (R6): candidate headers inside an
     // open fence are skipped.
@@ -243,6 +257,48 @@ pub(super) fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
     }
 
     Ok(last_seq)
+}
+
+/// Locate the sender of message `seq` within the spec §5.5 tail-scan
+/// buffer (NEW-12): the CLI reply path needs only the target message's
+/// sender for the implicit `@sender` mention, and this lookup replaces a
+/// whole-file `thread_read` with the same bounded reverse scan `thread_send`
+/// already performs.
+///
+/// Runs inside the caller's lock (like every scan in this module) and
+/// applies the R7 first-line-drop rule plus the R6 fence-aware scan via
+/// [`read_tail_scan_buffer`]. Returns `None` when no fence-aware header
+/// with that seq appears in the buffer (missing seq, or a target beyond the
+/// 64KB + 256B window — the residual limitation documented in spec §5.5).
+pub(super) fn find_message_sender_locked(
+    file: &File,
+    path: &Path,
+    seq: u64,
+) -> Result<Option<String>> {
+    let content = read_tail_scan_buffer(file, path)?;
+    let mut open: Option<usize> = None;
+    for line in content.lines() {
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+            continue;
+        }
+        if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+            continue;
+        }
+        // header_seq is the single authoritative gate (T4): seq-0
+        // pseudo-headers and overflowing seqs never match a lookup target
+        // (seq >= 1 per spec §5.3).
+        if header_seq(line) == Some(seq) {
+            let caps = MESSAGE_HEADER_RE
+                .captures(line)
+                .expect("header_seq matched MESSAGE_HEADER_RE");
+            return Ok(Some(caps[2].to_string()));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
