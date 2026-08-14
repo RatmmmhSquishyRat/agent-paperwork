@@ -1668,3 +1668,78 @@ fn find_message_sender_ignores_fake_headers_inside_body_fences() {
         Some("bob".to_string())
     );
 }
+
+// ============================================================================
+// Ultra Review F1: write/read symmetry of the brief residue guard — the
+// write side refuses exactly the reserved heading shapes the read side
+// refuses (nothing lands on disk), while fence-internal shapes stay legal
+// end to end.
+// ============================================================================
+
+#[test]
+fn brief_write_refuses_reserved_heading_shapes_read_side_rejects() {
+    let dir = tempdir().expect("tempdir");
+    let brief = dir.path().join("b.brief.md");
+    let target = dir.path().join("t.txt");
+    fs::write(&target, "content").expect("write target");
+
+    // description carrying a `### ` line: refused, file never created
+    let err = manifest::brief_create(&brief, "t", None, "Intro.\n### Background section")
+        .expect_err("reserved heading shape in description must be rejected");
+    assert_eq!(err.category(), "validation");
+    assert!(err.to_string().contains("reserved heading shape"));
+    assert!(!brief.exists());
+
+    // description carrying `## Entries`: refused, file never created
+    let err = manifest::brief_create(&brief, "t", None, "Intro.\n## Entries")
+        .expect_err("reserved heading shape in description must be rejected");
+    assert_eq!(err.category(), "validation");
+    assert!(err.to_string().contains("reserved heading shape"));
+    assert!(!brief.exists());
+
+    manifest::brief_create(&brief, "t", None, "Intro.").expect("create");
+    let before = fs::read(&brief).expect("read bytes");
+
+    // note carrying a fence-outside `### ` line: refused, bytes unchanged
+    let err = manifest::brief_add_entry(&brief, "t.txt", None, Some("Note.\n### Sub"))
+        .expect_err("reserved heading shape in note must be rejected");
+    assert_eq!(err.category(), "validation");
+    assert!(err.to_string().contains("reserved heading shape"));
+    assert_eq!(fs::read(&brief).expect("read bytes"), before);
+
+    // same for a fence-outside `## Entries` line
+    let err = manifest::brief_add_entry(&brief, "t.txt", None, Some("Note.\n## Entries"))
+        .expect_err("reserved heading shape in note must be rejected");
+    assert_eq!(err.category(), "validation");
+    assert_eq!(fs::read(&brief).expect("read bytes"), before);
+
+    // the read side still refuses the same shapes (symmetry pin)
+    let smuggled = format!(
+        "{}\n### smuggled\n",
+        String::from_utf8(before.clone()).expect("utf8")
+    );
+    let err = paperwork_core::format::manifest::parse_manifest(&smuggled)
+        .expect_err("read side refuses the same shape");
+    assert_eq!(err.category(), "format");
+    assert!(err.to_string().contains("legacy v0.4 residue"));
+}
+
+#[test]
+fn brief_note_fenced_reserved_heading_shape_roundtrips() {
+    let dir = tempdir().expect("tempdir");
+    let brief = dir.path().join("b.brief.md");
+    let target = dir.path().join("t.txt");
+    fs::write(&target, "content").expect("write target");
+
+    manifest::brief_create(&brief, "t", None, "Intro.").expect("create");
+
+    // the same shapes INSIDE a fence are quoted content: the write
+    // succeeds and the file reads back cleanly (write/read symmetry).
+    let note = "Example heading shapes:\n\n```\n### Sub\n## Entries\n```";
+    manifest::brief_add_entry(&brief, "t.txt", None, Some(note))
+        .expect("fenced reserved shapes are legal note content");
+
+    let m = manifest::brief_read(&brief).expect("read back");
+    assert_eq!(m.entries.len(), 1);
+    assert_eq!(m.entries[0].note.as_deref(), Some(note));
+}

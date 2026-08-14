@@ -39,16 +39,32 @@ pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
 
 /// Representability check for a brief entry note (M-review M1).
 ///
-/// Alias of [`super::first_line_representation_issue`]: a note whose first
-/// non-blank line is attribute-shaped (`- key: value`) or opens a
-/// ```` ```regex ```` fence cannot survive a parse → serialize roundtrip
-/// (the attribute-zone rule would re-absorb that line). Notes sit AFTER the
-/// entry attribute zone, so later attribute-shaped lines inside a note are
-/// verbatim content and stay legal (BDD:BRIEF-12; pinned by existing ops
-/// tests). The dangerous-structural-key scan applies to preamble prose only
-/// ([`super::prose_representation_issue`]).
+/// First-line part is [`super::first_line_representation_issue`]: a note
+/// whose first non-blank line is attribute-shaped (`- key: value`) or
+/// opens a ```` ```regex ```` fence cannot survive a parse → serialize
+/// roundtrip (the attribute-zone rule would re-absorb that line). Notes
+/// sit AFTER the entry attribute zone, so later attribute-shaped lines
+/// inside a note are verbatim content and stay legal (BDD:BRIEF-12;
+/// pinned by existing ops tests). The dangerous-structural-key scan
+/// applies to preamble prose only ([`super::prose_representation_issue`]).
+///
+/// Ultra Review F1 (write/read symmetry): on top of the first-line part,
+/// a fence-OUTSIDE reserved heading shape (`## Entries` or `### ...`)
+/// anywhere in the note trips the FILE-level residue guard
+/// ([`contains_legacy_brief_residue`]) on the next parse — the tool would
+/// write a brief it can never read back — so the write side refuses it
+/// here. Fence-internal occurrences are quoted content and stay legal.
 pub fn note_representation_issue(note: &str) -> Option<&'static str> {
-    super::first_line_representation_issue(note)
+    if let Some(reason) = super::first_line_representation_issue(note) {
+        return Some(reason);
+    }
+    if super::contains_reserved_heading_shape(note) {
+        return Some(
+            "note embeds a reserved heading shape line ('## Entries' or '### ...') \
+             outside any code fence",
+        );
+    }
+    None
 }
 
 /// Locate fence-aware H2 line indices (entry boundaries, spec §3.3/§6.2).
@@ -91,7 +107,7 @@ pub fn parse_manifest(content: &str) -> Result<Manifest> {
     // parse silently and be corrupted by the next RMW — refuse at parse.
     if contains_legacy_brief_residue(&lines) {
         return Err(PaperworkError::Parse {
-            message: "brief contains legacy v0.4 residue ('## Entries' wrapper heading or '### ' entry headers)".to_string(),
+            message: "brief contains legacy v0.4 residue ('## Entries' wrapper heading or '### ' entry headers), or a '### '/'## Entries' line outside any code fence in description/note prose".to_string(),
             fix: "migrate this brief to the v0.5 entry layout per the CHANGELOG migration guide: entries are '## <title>' sections directly after the preamble, without an '## Entries' wrapper".to_string(),
             example: "# title\n\n- owner: alice\n- created: 2026-01-15T10:00:00Z\n\n## entry title\n\n- path: file.rs\n- hash: <sha256>".to_string(),
         });
@@ -202,6 +218,11 @@ fn parse_entry_body(title: String, lines: &[&str]) -> ManifestEntry {
                     groups = extract_regex_groups(&pattern);
                     regex = Some(pattern);
                     regex_lines.clear();
+                } else {
+                    // A note fence's closing line is verbatim note
+                    // content too — dropping it would leave the fence
+                    // unclosed on re-read (write/read roundtrip fidelity).
+                    note_lines.push(line);
                 }
             } else if collecting_regex {
                 regex_lines.push(line);

@@ -397,9 +397,20 @@ pub fn first_line_representation_issue(prose: &str) -> Option<&'static str> {
 /// structure (e.g. a profile description carrying `- model: fake` preempts
 /// the real `- model:` line on the next parse).
 ///
-/// Brief entry NOTES use only the first-line check: a note sits AFTER the
-/// entry attribute zone, so later attribute-shaped lines inside a note are
-/// verbatim content and stay legal.
+/// Ultra Review F1 (write/read symmetry): on top of that it rejects a
+/// fence-outside RESERVED HEADING SHAPE line (`## Entries` or `### ...`)
+/// — the same shape the brief residue guard
+/// (`contains_legacy_brief_residue` in `format/manifest.rs`) refuses at
+/// parse time, so a write smuggling it into prose would produce a file the
+/// tool itself can never read back. Fence-internal occurrences are quoted
+/// content and stay legal.
+///
+/// Brief entry NOTES use the first-line check plus the reserved-heading
+/// check (`note_representation_issue` in `format/manifest.rs`): a note
+/// sits AFTER the entry attribute zone, so later attribute-shaped lines
+/// inside a note are verbatim content and stay legal — but a fence-outside
+/// reserved heading shape trips the FILE-level residue guard on the next
+/// parse, so the write side refuses it too.
 pub fn prose_representation_issue(prose: &str) -> Option<&'static str> {
     if let Some(reason) = first_line_representation_issue(prose) {
         return Some(reason);
@@ -408,6 +419,12 @@ pub fn prose_representation_issue(prose: &str) -> Option<&'static str> {
         return Some(
             "prose embeds an attribute-shaped line with a known structural key \
              ('- model:', '- owner:', '- created:', '- path:', '- hash:' or '- regex:')",
+        );
+    }
+    if contains_reserved_heading_shape(prose) {
+        return Some(
+            "prose embeds a reserved heading shape line ('## Entries' or '### ...') \
+             outside any code fence",
         );
     }
     None
@@ -435,6 +452,28 @@ pub fn contains_dangerous_attribute_line(prose: &str) -> bool {
         }
     }
     false
+}
+
+/// Fence-aware reserved-heading-shape detection (Ultra Review F1).
+///
+/// Returns true when any fence-OUTSIDE line has a trimmed form equal to
+/// `## Entries` or starting with `### ` — exactly the shapes the brief
+/// residue guard (`contains_legacy_brief_residue` in `format/manifest.rs`)
+/// refuses at parse time. The write-side guards
+/// ([`prose_representation_issue`] / `note_representation_issue` in
+/// `format/manifest.rs`) call this so the tool can never write a brief it
+/// cannot read back. Fence-internal occurrences are quoted content and
+/// stay legal; the fence semantics are byte-for-byte those of the shared
+/// scanner family ([`first_outside_fence`]), so write side and read side
+/// agree on every edge case (indent stance, tilde fences, unclosed fences,
+/// CRLF).
+pub fn contains_reserved_heading_shape(content: &str) -> bool {
+    let content = normalize_line_endings(content);
+    first_outside_fence(&content, |_i, line| {
+        let trimmed = line.trim();
+        trimmed == "## Entries" || trimmed.starts_with("### ")
+    })
+    .is_some()
 }
 
 #[cfg(test)]
@@ -665,6 +704,42 @@ mod tests {
         // a dangerous line inside a fence is refused too: the preamble
         // parsers are not fence-aware, so the fence does not shield it
         assert!(prose_representation_issue("Prose.\n```\n- model: quoted\n```\n").is_some());
+    }
+
+    // Ultra Review F1: fence-aware reserved heading shape detection —
+    // the write side must refuse exactly the shapes the read-side brief
+    // residue guard refuses, and nothing else.
+    #[test]
+    fn test_reserved_heading_shape_fence_aware() {
+        // fence-outside reserved shapes are detected (trim stance matches
+        // the read-side residue guard)
+        assert!(contains_reserved_heading_shape("Prose.\n## Entries"));
+        assert!(contains_reserved_heading_shape("Prose.\n### sub"));
+        assert!(contains_reserved_heading_shape("Prose.\n  ### indented"));
+        assert!(contains_reserved_heading_shape("## Entries\n"));
+        // fence-internal occurrences are quoted content
+        assert!(!contains_reserved_heading_shape(
+            "Prose.\n```\n### sub\n```\n"
+        ));
+        assert!(!contains_reserved_heading_shape("```\n## Entries\n```"));
+        // an unclosed fence swallows the tail
+        assert!(!contains_reserved_heading_shape("Prose.\n```\n### sub"));
+        // 4-space indent: no fence, the shape stays visible
+        assert!(contains_reserved_heading_shape("    ```\n### sub\n    ```"));
+        // tilde fences are not fences
+        assert!(contains_reserved_heading_shape("~~~\n### sub\n~~~"));
+        // CRLF input behaves like LF
+        assert!(contains_reserved_heading_shape("Prose.\r\n### sub\r\n"));
+        // degenerate / negative shapes
+        assert!(!contains_reserved_heading_shape(""));
+        assert!(!contains_reserved_heading_shape("###no-space"));
+        assert!(!contains_reserved_heading_shape("## EntriesX"));
+        assert!(!contains_reserved_heading_shape("#### deep"));
+
+        // prose-level integration: refuse outside, allow inside a fence
+        assert!(prose_representation_issue("Prose.\n### Background section").is_some());
+        assert!(prose_representation_issue("Prose.\n## Entries").is_some());
+        assert!(prose_representation_issue("Prose.\n```\n### inside\n```\n").is_none());
     }
 
     // ========================================================================
