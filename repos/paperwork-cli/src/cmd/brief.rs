@@ -1,4 +1,8 @@
 //! Brief commands: create, add, remove, read, verify.
+//!
+//! v0.6 grammar: PATH is the only positional argument; payloads are
+//! required flags -- `--title` (create), `--entry` (add),
+//! `--entry-title` (remove).
 
 use std::path::PathBuf;
 
@@ -14,9 +18,23 @@ pub struct BriefArgs {
     command: BriefCommand,
 }
 
+/// Command identifier for the output protocol (brief.<verb>).
+pub fn command_id(args: &BriefArgs) -> &'static str {
+    match &args.command {
+        BriefCommand::Create { .. } => "brief.create",
+        BriefCommand::Add { .. } => "brief.add",
+        BriefCommand::Remove { .. } => "brief.remove",
+        BriefCommand::Read { .. } => "brief.read",
+        BriefCommand::Verify { .. } => "brief.verify",
+    }
+}
+
 #[derive(Subcommand)]
 enum BriefCommand {
     /// Create a new brief
+    #[command(
+        after_help = "Examples:\n  paperwork brief create onboarding --title \"Codebase Onboarding\" --owner alice"
+    )]
     Create {
         /// Path for the new brief file
         path: PathBuf,
@@ -35,6 +53,9 @@ enum BriefCommand {
     },
 
     /// Add an entry to a brief
+    #[command(
+        after_help = "Examples:\n  paperwork brief add onboarding.brief.md --entry src/main.rs --regex \"fn main\" --note \"Entry point\""
+    )]
     Add {
         /// Path to the brief file
         path: PathBuf,
@@ -53,16 +74,22 @@ enum BriefCommand {
     },
 
     /// Remove an entry from a brief by title
+    #[command(
+        after_help = "Examples:\n  paperwork brief remove onboarding.brief.md --entry-title main.rs"
+    )]
     Remove {
         /// Path to the brief file
         path: PathBuf,
 
-        /// Title of the entry to remove
+        /// Title of the entry to remove (the entry's basename, as stored)
         #[arg(long = "entry-title")]
         entry_title: String,
     },
 
     /// Read a brief
+    #[command(
+        after_help = "Examples:\n  paperwork brief read onboarding.brief.md\n  paperwork brief read onboarding.brief.md --full\n  paperwork brief read onboarding.brief.md --entry-title main.rs"
+    )]
     Read {
         /// Path to the brief file
         path: PathBuf,
@@ -70,9 +97,14 @@ enum BriefCommand {
         /// Show full entry details (hashes, regex, etc.)
         #[arg(long)]
         full: bool,
+
+        /// Show details of a single entry by its stored title
+        #[arg(long = "entry-title")]
+        entry_title: Option<String>,
     },
 
     /// Verify all entries in a brief
+    #[command(after_help = "Examples:\n  paperwork brief verify onboarding.brief.md")]
     Verify {
         /// Path to the brief file
         path: PathBuf,
@@ -139,9 +171,58 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
             Ok(())
         }
 
-        BriefCommand::Read { path, full } => {
+        BriefCommand::Read {
+            path,
+            full,
+            entry_title,
+        } => {
             let path = ensure_suffix(path, ".brief.md");
             let manifest = paperwork_core::ops::manifest::brief_read(&path)?;
+
+            // Optional single-entry filter (progressive reading, third
+            // tier, spec cli-grammar-v0.6 §3.5): a hit is emitted with the
+            // --full field set regardless of --full; a miss is not-found.
+            // An empty/whitespace-only --entry-title is refused as
+            // validation (mirrors the post send empty-value precedent):
+            // an empty key is "no key", not a miss.
+            if let Some(wanted) = entry_title.as_deref() {
+                if wanted.trim().is_empty() {
+                    return Err(paperwork_core::PaperworkError::Validation {
+                        message: "entry title (--entry-title) is empty".to_string(),
+                        fix: "provide a non-empty --entry-title value".to_string(),
+                        example: format!(
+                            "paperwork brief read {} --entry-title main.rs",
+                            path.display()
+                        ),
+                    }
+                    .into());
+                }
+            }
+            let entries: Vec<&paperwork_core::ManifestEntry> = match entry_title.as_deref() {
+                Some(wanted) => {
+                    let hits: Vec<&paperwork_core::ManifestEntry> = manifest
+                        .entries
+                        .iter()
+                        .filter(|e| e.title == wanted)
+                        .collect();
+                    if hits.is_empty() {
+                        return Err(paperwork_core::PaperworkError::NotFound {
+                            resource: "Brief entry".to_string(),
+                            name: wanted.to_string(),
+                            fix: format!(
+                                "run `paperwork brief read {}` to list entries",
+                                path.display()
+                            ),
+                            example: format!("paperwork brief read {}", path.display()),
+                        }
+                        .into());
+                    }
+                    hits
+                }
+                None => manifest.entries.iter().collect(),
+            };
+            let detailed = full || entry_title.is_some();
+            let total = manifest.entries.len();
 
             match ctx.mode {
                 OutputMode::Json => {
@@ -150,19 +231,18 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     obj.insert("command".to_string(), serde_json::json!("brief.read"));
                     obj.insert(
                         "conclusion".to_string(),
-                        serde_json::json!(format!("{} entries", manifest.entries.len())),
+                        serde_json::json!(format!("{} entries", total)),
                     );
                     obj.insert("title".to_string(), serde_json::json!(manifest.name));
                     obj.insert("owner".to_string(), serde_json::json!(manifest.author));
-                    let entries_json: Vec<serde_json::Value> = manifest
-                        .entries
+                    let entries_json: Vec<serde_json::Value> = entries
                         .iter()
                         .map(|e| {
                             let mut entry_obj = serde_json::Map::new();
                             entry_obj.insert("title".to_string(), serde_json::json!(e.title));
                             entry_obj.insert("path".to_string(), serde_json::json!(e.path));
                             entry_obj.insert("hash".to_string(), serde_json::json!(e.hash));
-                            if full {
+                            if detailed {
                                 if let Some(ref re) = e.regex {
                                     entry_obj.insert("regex".to_string(), serde_json::json!(re));
                                 }
@@ -184,17 +264,13 @@ pub fn run(ctx: &Context, args: BriefArgs) -> Result<()> {
                     output::print_plain(&content);
                 }
                 OutputMode::Default => {
-                    let mut env = output::Envelope::new(
-                        "brief.read",
-                        format!("{} entries", manifest.entries.len()),
-                    )
-                    .field("title", &manifest.name)
-                    .field("owner", &manifest.author);
-                    let body_lines: Vec<String> = manifest
-                        .entries
+                    let mut env = output::Envelope::new("brief.read", format!("{} entries", total))
+                        .field("title", &manifest.name)
+                        .field("owner", &manifest.author);
+                    let body_lines: Vec<String> = entries
                         .iter()
                         .map(|e| {
-                            if full {
+                            if detailed {
                                 let mut line =
                                     format!("{}: {} (hash: {})", e.title, e.path, e.hash);
                                 if let Some(ref re) = e.regex {

@@ -7,14 +7,12 @@
 //! window can leave the file truncated (accepted, identical to
 //! `thread_edit`, spec §5.7 note).
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
 use std::path::Path;
-
-use fs2::FileExt;
 
 use crate::error::{PaperworkError, Result};
 use crate::format::profile::{parse_profile, serialize_profile};
+use crate::ops::lock::locked_read_modify_write;
 use crate::Profile;
 
 /// Create a new profile file at the given path.
@@ -27,10 +25,7 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
             resource: "Profile".to_string(),
             name: path.display().to_string(),
             fix: "use `paperwork profile edit` to modify an existing profile".to_string(),
-            example: format!(
-                "paperwork profile edit {} --model <new-model>",
-                path.display()
-            ),
+            example: format!("paperwork profile edit {} --model gpt-4o", path.display()),
         });
     }
 
@@ -70,8 +65,11 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork profile create <path>` first".to_string(),
-            example: format!("paperwork profile create {} --name <agent>", path.display()),
+            fix: format!(
+                "run `paperwork profile create {} --name alice` first",
+                path.display()
+            ),
+            example: format!("paperwork profile create {} --name alice", path.display()),
         });
     }
 
@@ -88,9 +86,8 @@ pub fn show_profile(path: &Path) -> Result<Profile> {
 /// Edit an existing profile's fields.
 ///
 /// Only updates the fields that are `Some`.
-///
-/// Runs under an fs2 exclusive lock for the whole read → modify → rewrite
-/// cycle (review M7).
+/// Runs under the locked read-modify-write template (spec cli-grammar-v0.6
+/// §3.9, review M7).
 pub fn edit_profile(
     path: &Path,
     model: Option<&str>,
@@ -103,88 +100,33 @@ pub fn edit_profile(
         return Err(PaperworkError::NotFound {
             resource: "Profile".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork profile create <path>` first".to_string(),
-            example: format!("paperwork profile create {} --name <agent>", path.display()),
+            fix: format!(
+                "run `paperwork profile create {} --name alice` first",
+                path.display()
+            ),
+            example: format!("paperwork profile create {} --name alice", path.display()),
         });
     }
 
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+    locked_read_modify_write(path, |content| {
+        let mut profile = parse_profile(&content)?;
 
-    // Exclusive lock around the full read-modify-write cycle (review M7).
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+        if let Some(m) = model {
+            profile.model = m.to_string();
+        }
+        if let Some(d) = description {
+            profile.description = d.to_string();
+        }
+        if let Some(sr) = scope_read {
+            profile.scope_read = sr;
+        }
+        if let Some(sw) = scope_write {
+            profile.scope_write = sw;
+        }
+        if let Some(so) = scope_owns {
+            profile.scope_owns = so;
+        }
 
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    let mut profile = parse_profile(&content)?;
-
-    if let Some(m) = model {
-        profile.model = m.to_string();
-    }
-    if let Some(d) = description {
-        profile.description = d.to_string();
-    }
-    if let Some(sr) = scope_read {
-        profile.scope_read = sr;
-    }
-    if let Some(sw) = scope_write {
-        profile.scope_write = sw;
-    }
-    if let Some(so) = scope_owns {
-        profile.scope_owns = so;
-    }
-
-    let serialized = serialize_profile(&profile);
-
-    // Rewrite through the locked handle (truncate + write within the lock).
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(serialized.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+        Ok(serialize_profile(&profile))
+    })
 }

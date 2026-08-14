@@ -70,11 +70,12 @@ jobs:
           $BIN profile list . | grep "^ok profile.list"
 
           # Post (first send creates the thread and writes the preamble)
-          $BIN post send standup --title "Test" --from alice "Hello world" | grep "^ok post.send"
-          $BIN post send standup --from bob --reply-to 1 --mention alice "Reply" | grep "^ok post.send"
+          $BIN post send standup --title "Test" --author alice --message "Hello world" | grep "^ok post.send"
+          $BIN post send standup --author bob --reply-to 1 --mention alice --message "Reply" | grep "^ok post.send"
           $BIN post read standup | grep "^ok post.read"
           $BIN post read standup --json | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok'"
           $BIN post summary standup | grep "^ok post.summary"
+          $BIN post edit standup --author bob --seq 2 --message "Edited reply" | grep "^ok post.edit"
 
           # D3: on-disk body fences carry the `md` info string (T-CI-01)
           if grep -q '```md' standup.post.md; then
@@ -84,7 +85,7 @@ jobs:
           fi
 
           # Stdin
-          echo "piped content" | $BIN post send standup --from alice --stdin | grep "^ok post.send"
+          echo "piped content" | $BIN post send standup --author alice --stdin | grep "^ok post.send"
 
           # Brief
           echo "fn main() {}" > main.rs
@@ -109,10 +110,21 @@ jobs:
           fi
 
           # Empty body rejection
-          if $BIN post send standup --from alice "" 2>&1 | grep -q "^error validation:"; then
+          if $BIN post send standup --author alice --message "" 2>&1 | grep -q "^error validation:"; then
             echo "PASS: empty body rejection"
           else
             echo "FAIL: empty body rejection"; exit 1
+          fi
+
+          # Old grammar (v0.5 positional) triggers the usage envelope, exit 2
+          set +e
+          ERR=$($BIN post send standup alice "hi" 2>&1)
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 2 ] && echo "$ERR" | grep -q "^error usage:"; then
+            echo "PASS: old grammar usage envelope"
+          else
+            echo "FAIL: old grammar usage envelope"; exit 1
           fi
 
           # Validate garbage rejection (zero messages -> Parse -> category format)
@@ -142,36 +154,47 @@ jobs:
           $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "pw-smoke-$(Get-Random)") -Force
           Push-Location $tmp
 
+          # Hardened assertion helper (review Ethan m-1): bare Select-String
+          # never fails the step on a miss; pipe every smoke output through
+          # Assert-Contains so a mismatch exits 1, symmetric with the unix
+          # `set -e` + grep branch.
+          function Assert-Contains([string]$Pattern, [string]$Label) {
+              begin { $found = $false }
+              process { if ($_ -match $Pattern) { $found = $true } }
+              end { if (-not $found) { Write-Error "FAIL: $Label"; exit 1 } }
+          }
+
           # Profile
-          & $BIN profile create alice --name alice --model gpt-4o | Select-String "^ok profile.create"
-          & $BIN profile show alice | Select-String "^ok profile.show"
+          & $BIN profile create alice --name alice --model gpt-4o | Assert-Contains "^ok profile.create" "profile create"
+          & $BIN profile show alice | Assert-Contains "^ok profile.show" "profile show"
 
           # Post (first send creates the thread and writes the preamble)
-          & $BIN post send standup --title "Test" --from alice "Hello world" | Select-String "^ok post.send"
-          & $BIN post send standup --from bob --reply-to 1 --mention alice "Reply" | Select-String "^ok post.send"
-          & $BIN post read standup | Select-String "^ok post.read"
-          & $BIN post summary standup | Select-String "^ok post.summary"
+          & $BIN post send standup --title "Test" --author alice --message "Hello world" | Assert-Contains "^ok post.send" "post send (create)"
+          & $BIN post send standup --author bob --reply-to 1 --mention alice --message "Reply" | Assert-Contains "^ok post.send" "post send (reply)"
+          & $BIN post read standup | Assert-Contains "^ok post.read" "post read"
+          & $BIN post summary standup | Assert-Contains "^ok post.summary" "post summary"
+          & $BIN post edit standup --author bob --seq 2 --message "Edited reply" | Assert-Contains "^ok post.edit" "post edit"
 
           # D3: on-disk body fences carry the `md` info string (T-CI-02)
           if (Select-String -Path "standup.post.md" -Pattern '```md' -SimpleMatch -Quiet) { Write-Output "PASS: fence info md" }
           else { Write-Error "FAIL: fence info md"; exit 1 }
 
           # Stdin
-          "piped content" | & $BIN post send standup --from alice --stdin | Select-String "^ok post.send"
+          "piped content" | & $BIN post send standup --author alice --stdin | Assert-Contains "^ok post.send" "post send (stdin)"
 
           # Brief
           Set-Content "main.rs" -Value "fn main() {}"
-          & $BIN brief create guide --title "Guide" --owner alice | Select-String "^ok brief.create"
-          & $BIN brief add guide --entry "main.rs" --regex "fn main" | Select-String "^ok brief.add"
-          & $BIN brief verify guide | Select-String "^ok brief.verify"
+          & $BIN brief create guide --title "Guide" --owner alice | Assert-Contains "^ok brief.create" "brief create"
+          & $BIN brief add guide --entry "main.rs" --regex "fn main" | Assert-Contains "^ok brief.add" "brief add"
+          & $BIN brief verify guide | Assert-Contains "^ok brief.verify" "brief verify"
 
           # Contacts
-          & $BIN contacts create team --title "Team" | Select-String "^ok contacts.create"
-          & $BIN contacts add team --profile ./alice.profile.md | Select-String "^ok contacts.add"
-          & $BIN contacts read team | Select-String "alice"
+          & $BIN contacts create team --title "Team" | Assert-Contains "^ok contacts.create" "contacts create"
+          & $BIN contacts add team --profile ./alice.profile.md | Assert-Contains "^ok contacts.add" "contacts add"
+          & $BIN contacts read team | Assert-Contains "alice" "contacts read"
 
           # Validate
-          & $BIN validate standup.post.md | Select-String "^ok validate"
+          & $BIN validate standup.post.md | Assert-Contains "^ok validate" "validate"
 
           # Error handling
           $err = & $BIN post read nonexistent 2>&1 | Out-String
@@ -179,9 +202,15 @@ jobs:
           else { Write-Error "FAIL: error envelope"; exit 1 }
 
           # Empty body rejection
-          $err = & $BIN post send standup --from alice "" 2>&1 | Out-String
+          $err = & $BIN post send standup --author alice --message "" 2>&1 | Out-String
           if ($err -match "^error validation:") { Write-Output "PASS: empty body" }
           else { Write-Error "FAIL: empty body"; exit 1 }
+
+          # Old grammar (v0.5 positional) triggers the usage envelope, exit 2
+          $err = & $BIN post send standup alice "hi" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -eq 2 -and $err -match "^error usage:") { Write-Output "PASS: old grammar usage envelope" }
+          else { Write-Error "FAIL: old grammar usage envelope"; exit 1 }
 
           # Validate garbage (zero messages -> Parse -> category format)
           Set-Content "bad.post.md" -Value "garbage"

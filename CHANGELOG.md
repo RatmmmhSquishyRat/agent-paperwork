@@ -201,6 +201,86 @@ Compile-level breaks for library consumers (IDE plugins, agent harnesses, other 
 - **`--to` closed out** (debt #3): `Message.to` existed in the format layer with no CLI entry point and serialized as `To: all` forever; the field is now deleted outright — directed messages no longer exist as a structured concept, and the `all` magic value is gone
 - **Non-ASCII separators purged** (debt #4): the `·` (U+00B7) message-header separator — which also drifted from the `.` shown in docs — and the `—` placeholder are removed; every structural character is ASCII
 
+### Also in the 0.5.0 line — CLI grammar redesign (superseded by v0.6, recorded as released fact)
+
+The published 0.5.0 shipped the old (pre-format-v2) file formats together with a
+positional-argument CLI grammar redesign. This subsection records that released
+grammar as-is. **It is already superseded by the v0.6 named-flag grammar redesign
+(in progress, not yet released): on the v0.6 working line every required value
+below is a named flag again, and `post create` no longer exists (thread creation
+is folded into the first `post send`). Do not migrate against this table on a
+v0.6 build — use the named-flag grammar shown by `paperwork <command> --help`.**
+
+Grammar as released in 0.5.0: `paperwork [global flags] <group> <verb> <PATH> [<NAME>] [<payload>] [--optional flags]` —
+PATH is always the first positional argument; content is always last.
+
+**Migration table (old flag -> new positional):**
+
+| Command | v0.4 | v0.5 |
+|---|---|---|
+| `profile create` | `profile create <PATH> --name <NAME>` | `profile create <PATH> <NAME>` |
+| `post create` | `post create <PATH> --title <TITLE>` | `post create <PATH> <TITLE>` |
+| `post send` | `post send <PATH> --from <NAME> <BODY>` | `post send <PATH> <NAME> <BODY>` |
+| `post edit` | `post edit <PATH> --seq <N> --from <NAME> <BODY>` | `post edit <PATH> <NAME> <SEQ> <BODY>` |
+| `brief create` | `brief create <PATH> --title <TITLE>` | `brief create <PATH> <TITLE>` |
+| `brief add` | `brief add <PATH> --entry <ENTRY>` | `brief add <PATH> <ENTRY>` |
+| `brief remove` | `brief remove <PATH> --entry-title <TITLE>` | `brief remove <PATH> <ENTRY-TITLE>` |
+| `contacts add` | `contacts add <PATH> --profile <PROFILE>` | `contacts add <PATH> <PROFILE-PATH>` |
+
+Unchanged: `post read --from/--to` (seq range), `contacts create --title`
+(optional flag with default), all other optional flags (`--model`, `--reply-to`,
+`--mention`, `--limit`, `--stdin`, `--regex`, `--note`, `--owner`, scopes).
+
+Path resolution is now three-stage: (1) the given path wins if it exists as a
+file; (2) otherwise the type-suffixed variant is used if it exists; (3) if
+neither exists, the suffixed path becomes the landing point — physical creation
+still happens only in write commands (send/create/add); read-only commands
+report not-found. Hitting an existing foreign (non-paperwork) file at stage 1
+now reports `error format:` instead of silently appending (v0.4 behavior).
+
+**Consumer-visible behavior changes beyond the argument layer (migration notes):**
+
+1. `post read` field `showing: n/total` is now always emitted (previously only
+   when the default limit was exceeded); `total` counts post-filter messages
+   before the limit.
+2. Usage errors (wrong invocation shape) still exit **2** — the exit code
+   follows clap's default and is unchanged from v0.4. What changed: stderr
+   now carries the structured `error usage:` envelope instead of clap's
+   free-form text / usage synopsis, and `--json` usage errors are new
+   (single-line JSON on stdout). Runtime errors keep exit 1.
+3. Error category vocabulary gains a seventh category `usage` (existing six —
+   `format`, `validation`, `io`, `not-found`, `already-exists`, `not-allowed` —
+   unchanged).
+4. Three additive output fields: `implicit-mention` (singular; `post send`
+   only) — new output field surfacing the reply auto-mention behavior that
+   already existed in v0.4 (replies auto-add the original sender to
+   mentions); `window` (`post read`, `#first-#last` of the displayed range,
+   absent for empty threads); and `command` inside `--json` error objects.
+5. `post create` on an existing thread no longer silently appends: v0.4
+   appended a new thread-creation message with exit 0; v0.5 reports
+   `already-exists` with exit 1. Send to the existing thread instead.
+
+**Also added in the 0.5.0 CLI redesign:**
+
+- `error usage:` envelope (exit 2) for all clap-level parse failures, carrying
+  `fix:` and a canonical copy-paste `example:`; `--help`/`-V` keep exit 0
+- `--json` usage errors: single-line JSON on stdout with
+  `category:"usage"`, `command`, `example`, `exit_code:2`
+- `command` field in `--json` runtime error objects (additive)
+- `implicit-mention` field: replies auto-add the original sender to mentions
+- `post read`: always-on `showing:` and `window:` fields
+- `validate --type post|profile|brief|contacts`: explicit parser selection,
+  overriding suffix inference
+- `post` hidden alias `po` (does not appear in `--help`)
+- Bodies starting with `-` supported via the `--` boundary
+- `SKILL.md`: agent-oriented grammar cheat sheet with per-tool examples and
+  error self-healing hints
+- English `after_help` examples on every subcommand (including `--` teaching)
+
+### Deprecated
+
+- None.
+
 ## [0.4.0] - 2026-08-01
 
 ### Changed (Breaking)

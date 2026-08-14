@@ -1,5 +1,9 @@
 # ADR-011: Stateless Path-Based Architecture (v0 Feedback Correction)
 
+> **Superseded-by note (v0.6)**: 本文 CLI Command Model 示例均为 v0.5 及更早文法；v0.6 具名化文法以 `docs/ssot/specs/cli-grammar-v0.6/spec.md` 为准。（The CLI Command Model examples in this document reflect v0.5-and-earlier grammar; the v0.6 named-flag grammar is authoritative in `docs/ssot/specs/cli-grammar-v0.6/spec.md`. Historical content below is immutable.）
+
+> **Superseded-by note (v0.5.0)**: 本文 CLI Command Model 示例为 v0.4 及更早文法；v0.5.0 文法以 `docs/ssot/specs/cli-ux-redesign/spec.md` 为准。（The CLI Command Model examples in this document reflect v0.4-and-earlier grammar; the v0.5.0 grammar is authoritative in `docs/ssot/specs/cli-ux-redesign/spec.md`. Historical content below is immutable.）
+
 **Status**: Accepted (owner directive: `docs/ssot/adr/feedbacks/v0_feedbacks.md`)
 
 ## Context

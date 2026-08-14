@@ -443,6 +443,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "fs2",
  "paperwork-core",
  "predicates",
  "regex",

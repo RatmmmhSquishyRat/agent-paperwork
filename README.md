@@ -24,7 +24,7 @@ cargo install paperwork-cli
 Then, from any directory:
 
 ```bash
-$ paperwork post send standup --title "Daily Standup" --from alice "Proposing Rust for the backend."
+$ paperwork post send standup --author alice --message "Proposing Rust for the backend."
 ok post.send #1 -> standup.post.md
 seq: 1
 path: standup.post.md
@@ -34,11 +34,12 @@ sender: alice
 That's it. `standup.post.md` is created on first send — the preamble (the H1 title) is written in the same lock as message #1 — and the reply is one line:
 
 ```bash
-$ paperwork post send standup --from bob --reply-to 1 "Agreed. Ship it."
+$ paperwork post send standup --author bob --reply-to 1 --message "Agreed. Ship it."
 ok post.send #2 -> standup.post.md
 seq: 2
 path: standup.post.md
 sender: bob
+implicit-mention: alice
 ```
 
 ---
@@ -94,9 +95,9 @@ paperwork profile list .
 ### `post` — append-only threads
 
 ```bash
-paperwork post send standup --title "Daily Standup" --from alice "Status update"
-paperwork post send standup --from bob --reply-to 1 --mention alice "On it"
-paperwork post send standup --from alice --stdin < report.md   # multi-line via pipe
+paperwork post send standup --author alice --title "Daily Standup" --message "Status update"
+paperwork post send standup --author bob --reply-to 1 --mention alice --message "On it"
+paperwork post send standup --author alice --stdin < report.md  # multi-line via pipe
 paperwork post read standup --mention alice                    # filter by @mention
 paperwork post read standup --reply-to 1                       # filter by reply
 paperwork post summary standup
@@ -108,9 +109,10 @@ paperwork post summary standup
 
 ```bash
 paperwork brief create onboarding --title "Onboarding" --owner alice
-paperwork brief add onboarding --entry "src/main.rs" --regex "fn main"
+paperwork brief add onboarding --entry src/main.rs --regex "fn main"
 paperwork brief verify onboarding                              # fresh | shifted | stale
 paperwork brief read onboarding --full
+paperwork brief read onboarding --entry-title main.rs          # details of a single entry
 ```
 
 ### `contacts` — registry of profiles
@@ -118,13 +120,18 @@ paperwork brief read onboarding --full
 ```bash
 paperwork contacts create team --title "Team"
 paperwork contacts add team --profile ./alice.profile.md
+paperwork contacts remove team --profile ./alice.profile.md
+paperwork contacts update team --profile ./alice.profile.md --new-profile ./carol.profile.md
 paperwork contacts read team                                   # shows name + description
 ```
+
+The key for `contacts remove`/`update` is the profile path exactly as stored in the contacts file, not the link label. `contacts update` re-binds an entry's destination path; it is not an `edit` (this group has no `edit` verb: `edit` changes a file's own content, `update` swaps the entry's target profile).
 
 ### `validate` — structural integrity check
 
 ```bash
 paperwork validate standup.post.md
+paperwork validate mystery.md --type post                      # explicit parser selection
 ```
 
 Parses by type suffix; for posts it additionally enforces consecutive seq numbers starting at 1 and closed code fences. Warnings (suspected malformed message headers) are reported without failing the check.
@@ -135,6 +142,8 @@ Parses by type suffix; for posts it additionally enforces consecutive seq number
 
 All output is pure ASCII — no color, no Unicode symbols. Parseable without JSON.
 
+**Grammar (v0.6):** `paperwork [global flags] <group> <verb> <PATH> --required-flag ... [--optional-flag ...]` — PATH is the only positional argument; every required payload is a named flag (`--author` / `--message` or `--stdin` for `post send`/`post edit`, plus `--seq` for `post edit`).
+
 **Success** (stdout, exit 0):
 
 ```
@@ -144,13 +153,23 @@ path: standup.post.md
 sender: bob
 ```
 
-**Failure** (stderr, exit 1) — always tells you how to fix it:
+**Runtime failure** (stderr, exit 1) — always tells you how to fix it:
 
 ```
 error not-found: Thread 'standup.post.md' not found
 fix: send a message first to create the thread
-example: paperwork post send standup.post.md --from <name> <body>
+example: paperwork post send standup --author alice --message "first message"
 ```
+
+**Usage failure** (stderr, exit 2) — wrong invocation (missing/unknown arguments), with a canonical copy-paste example:
+
+```
+error usage: the following required arguments were not provided: --author <AUTHOR>...
+fix: required values are named flags (--author/--message for post send/edit); see the canonical example below
+example: paperwork post send standup.post.md --author alice --message "Parser module is 80% done."
+```
+
+A body starting with `-` is passed directly via `--message`: `paperwork post send standup.post.md --author alice --message "-fix flag text"`.
 
 **Modes:**
 
@@ -237,7 +256,7 @@ git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
 cd agent-paperwork
 
 cargo build                                     # build
-cargo test                                      # 176 tests
+cargo test                                      # full workspace suite
 cargo clippy --all-targets -- -D warnings       # lint
 ```
 

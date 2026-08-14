@@ -10,12 +10,10 @@
 //! crash inside that window can leave the file truncated (accepted,
 //! identical to `thread_edit`, spec §5.7 note).
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
 use std::path::Path;
 
 use chrono::Utc;
-use fs2::FileExt;
 use regex::Regex;
 
 use crate::error::{PaperworkError, Result};
@@ -23,6 +21,7 @@ use crate::format::manifest::{
     extract_regex_groups, note_representation_issue, parse_manifest, serialize_manifest,
 };
 use crate::hash;
+use crate::ops::lock::locked_read_modify_write;
 use crate::{Manifest, ManifestEntry, VerifyResult};
 
 /// Create a new empty brief at the given path.
@@ -40,7 +39,7 @@ pub fn brief_create(
             resource: "Brief".to_string(),
             name: path.display().to_string(),
             fix: "use `paperwork brief add` to add entries".to_string(),
-            example: format!("paperwork brief add {} --entry <file>", path.display()),
+            example: format!("paperwork brief add {} --entry src/main.rs", path.display()),
         });
     }
 
@@ -82,8 +81,8 @@ pub fn brief_create(
 /// line is attribute-shaped (`- key: value`) or opens a ```` ```regex ````
 /// fence would be re-absorbed into the attribute zone on the next parse,
 /// silently corrupting the entry — such notes are refused with a
-/// Validation error before anything touches disk. The whole read → modify
-/// → rewrite cycle runs under an fs2 exclusive lock (review M7).
+/// Validation error before anything touches disk. Runs under the locked
+/// read-modify-write template (spec cli-grammar-v0.6 §3.9, review M7).
 pub fn brief_add_entry(
     path: &Path,
     entry_path: &str,
@@ -94,8 +93,14 @@ pub fn brief_add_entry(
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork brief create <path>` first".to_string(),
-            example: format!("paperwork brief create {} --title <title>", path.display()),
+            fix: format!(
+                "run `paperwork brief create {} --title \"My Brief\"` first",
+                path.display()
+            ),
+            example: format!(
+                "paperwork brief create {} --title \"My Brief\"",
+                path.display()
+            ),
         });
     }
 
@@ -110,57 +115,9 @@ pub fn brief_add_entry(
         }
     }
 
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    // Exclusive lock around the full read-modify-write cycle (review M7).
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
-
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    let mut manifest = parse_manifest(&content)?;
-
-    // Derive title from entry_path file name
-    let title = Path::new(entry_path)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| entry_path.to_string());
-
-    // Check for duplicate title
-    if manifest.entries.iter().any(|e| e.title == title) {
-        file.unlock().ok();
-        return Err(PaperworkError::AlreadyExists {
-            resource: "Brief entry".to_string(),
-            name: title,
-            fix: "use a different entry path or remove the existing entry first".to_string(),
-            example: format!(
-                "paperwork brief remove {} --entry-title <title>",
-                path.display()
-            ),
-        });
-    }
-
+    // Pre-compute the entry file hash OUTSIDE the lock (impact review
+    // Oscar m-1): the exclusive critical section must only read-modify-write
+    // the locked brief file itself, never external files.
     // Resolve entry file path: try as-is (CWD-relative) first, then relative to brief's parent
     let entry_as_given = Path::new(entry_path);
     let base_dir = path.parent().unwrap_or(Path::new("."));
@@ -172,143 +129,85 @@ pub fn brief_add_entry(
 
     let file_hash = hash::hash_file(&abs_entry_path)?;
 
-    let groups = regex.map(extract_regex_groups).unwrap_or_default();
+    locked_read_modify_write(path, |content| {
+        let mut manifest = parse_manifest(&content)?;
 
-    let entry = ManifestEntry {
-        title,
-        path: entry_path.to_string(),
-        hash: file_hash,
-        regex: regex.map(|s| s.to_string()),
-        groups,
-        note: note.map(|s| s.to_string()),
-    };
+        // Derive title from entry_path file name
+        let title = Path::new(entry_path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| entry_path.to_string());
 
-    manifest.entries.push(entry);
+        // Check for duplicate title
+        if manifest.entries.iter().any(|e| e.title == title) {
+            return Err(PaperworkError::AlreadyExists {
+                resource: "Brief entry".to_string(),
+                name: title,
+                fix: "use a different entry path or remove the existing entry first".to_string(),
+                example: format!(
+                    "paperwork brief remove {} --entry-title main.rs",
+                    path.display()
+                ),
+            });
+        }
 
-    let serialized = serialize_manifest(&manifest);
+        let groups = regex.map(extract_regex_groups).unwrap_or_default();
 
-    // Rewrite through the locked handle (truncate + write within the lock).
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(serialized.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
+        let entry = ManifestEntry {
+            title,
+            path: entry_path.to_string(),
+            hash: file_hash,
+            regex: regex.map(|s| s.to_string()),
+            groups,
+            note: note.map(|s| s.to_string()),
+        };
 
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
-    })?;
+        manifest.entries.push(entry);
 
-    Ok(())
+        Ok(serialize_manifest(&manifest))
+    })
 }
 
 /// Remove an entry from a brief by title.
 ///
-/// Runs under an fs2 exclusive lock for the whole read → modify → rewrite
-/// cycle (review M7).
+/// Runs under the locked read-modify-write template (spec cli-grammar-v0.6
+/// §3.9, review M7).
 pub fn brief_remove_entry(path: &Path, title: &str) -> Result<()> {
     if !path.exists() {
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork brief create <path>` first".to_string(),
-            example: format!("paperwork brief create {} --title <title>", path.display()),
+            fix: format!(
+                "run `paperwork brief create {} --title \"My Brief\"` first",
+                path.display()
+            ),
+            example: format!(
+                "paperwork brief create {} --title \"My Brief\"",
+                path.display()
+            ),
         });
     }
 
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+    locked_read_modify_write(path, |content| {
+        let mut manifest = parse_manifest(&content)?;
 
-    // Exclusive lock around the full read-modify-write cycle (review M7).
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+        let original_len = manifest.entries.len();
+        manifest.entries.retain(|e| e.title != title);
 
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+        if manifest.entries.len() == original_len {
+            return Err(PaperworkError::NotFound {
+                resource: "Brief entry".to_string(),
+                name: title.to_string(),
+                fix: format!(
+                    "run `paperwork brief read {}` to see available entries",
+                    path.display()
+                ),
+                example: format!("paperwork brief read {}", path.display()),
+            });
+        }
 
-    let mut manifest = parse_manifest(&content)?;
-
-    let original_len = manifest.entries.len();
-    manifest.entries.retain(|e| e.title != title);
-
-    if manifest.entries.len() == original_len {
-        file.unlock().ok();
-        return Err(PaperworkError::NotFound {
-            resource: "Brief entry".to_string(),
-            name: title.to_string(),
-            fix: "run `paperwork brief read <path>` to see available entries".to_string(),
-            example: format!("paperwork brief read {}", path.display()),
-        });
-    }
-
-    let serialized = serialize_manifest(&manifest);
-
-    // Rewrite through the locked handle (truncate + write within the lock).
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(serialized.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
-
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
-    })?;
-
-    Ok(())
+        Ok(serialize_manifest(&manifest))
+    })
 }
 
 /// Read a brief (reuses the Manifest type internally).
@@ -317,8 +216,14 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
         return Err(PaperworkError::NotFound {
             resource: "Brief".to_string(),
             name: path.display().to_string(),
-            fix: "run `paperwork brief create <path>` first".to_string(),
-            example: format!("paperwork brief create {} --title <title>", path.display()),
+            fix: format!(
+                "run `paperwork brief create {} --title \"My Brief\"` first",
+                path.display()
+            ),
+            example: format!(
+                "paperwork brief create {} --title \"My Brief\"",
+                path.display()
+            ),
         });
     }
 

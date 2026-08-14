@@ -302,7 +302,7 @@ pub fn validate_sender(sender: &str) -> Result<()> {
                 sender
             ),
             fix: "sender must be a single token without spaces or parentheses".to_string(),
-            example: "paperwork post send standup --from alice \"Hello\"".to_string(),
+            example: "paperwork post send standup --author alice --message \"Hello\"".to_string(),
         })
     }
 }
@@ -362,7 +362,7 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
         return Err(PaperworkError::Validation {
             message: format!("first message has seq {}, expected 1", messages[0].seq),
             fix: "thread messages must start at seq 1".to_string(),
-            example: String::new(),
+            example: "paperwork validate standup.post.md --type post".to_string(),
         });
     }
 
@@ -383,7 +383,7 @@ pub fn validate_seq_monotonicity(messages: &[Message]) -> Result<()> {
                     prev.seq, curr.seq, expected_note
                 ),
                 fix: "message sequence numbers must be consecutive with no gaps".to_string(),
-                example: String::new(),
+                example: "paperwork validate standup.post.md --type post".to_string(),
             });
         }
     }

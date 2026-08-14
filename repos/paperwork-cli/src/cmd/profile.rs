@@ -1,4 +1,7 @@
 //! Profile commands: create, show, edit, list.
+//!
+//! v0.6 grammar: PATH is the only positional argument; the agent name is
+//! the required `--name` flag on create.
 
 use std::path::PathBuf;
 
@@ -14,9 +17,22 @@ pub struct ProfileArgs {
     command: ProfileCommand,
 }
 
+/// Command identifier for the output protocol (profile.<verb>).
+pub fn command_id(args: &ProfileArgs) -> &'static str {
+    match &args.command {
+        ProfileCommand::Create { .. } => "profile.create",
+        ProfileCommand::Show { .. } => "profile.show",
+        ProfileCommand::Edit { .. } => "profile.edit",
+        ProfileCommand::List { .. } => "profile.list",
+    }
+}
+
 #[derive(Subcommand)]
 enum ProfileCommand {
     /// Create a new agent profile
+    #[command(
+        after_help = "Examples:\n  paperwork profile create agents/alice --name alice --model gpt-4o --description \"Parser implementer\"\n  paperwork profile create agents/alice --name alice --scope-read \"src/**\" --scope-write \"src/parser/**\""
+    )]
     Create {
         /// Path for the new profile file
         path: PathBuf,
