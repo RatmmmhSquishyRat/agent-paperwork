@@ -10,7 +10,7 @@ use std::thread as std_thread;
 use tempfile::tempdir;
 
 use paperwork_core::ops::{contacts, manifest, profile, thread};
-use paperwork_core::{PaperworkError, ThreadMeta, VerifyResult};
+use paperwork_core::{Message, PaperworkError, ThreadMeta, VerifyResult};
 
 /// Reverse-scan buffer size (spec §5.5: 64KB + 256B).
 const SCAN: u64 = 64 * 1024 + 256;
@@ -573,6 +573,248 @@ fn thread_edit_preserves_preamble_fence_close_lone_cr() {
     let messages = thread::thread_read(&path, None, None).expect("read");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].body, "newbody");
+}
+
+// ============================================================================
+// NEW-8 differential corpus: the incremental last-message rewrite must be
+// byte-identical to the historical full rewrite on every corpus shape the
+// format admits. The reference function below is a verbatim copy of the
+// PRE-NEW-8 output shape (verbatim preamble + full re-serialization with
+// the final body replaced) and stays in this file as the oracle.
+// ============================================================================
+
+/// PRE-NEW-8 `thread_edit` output shape (oracle, retained on purpose).
+fn legacy_edit_reference(preamble_raw: &str, messages: &[Message], new_body: &str) -> String {
+    let mut edited = messages.to_vec();
+    edited.last_mut().expect("corpus has messages").body = new_body.to_string();
+    format!(
+        "{}{}",
+        preamble_raw,
+        paperwork_core::format::thread::serialize_messages(&edited)
+    )
+}
+
+/// Run `thread_edit` against `corpus` and assert the on-disk result is
+/// byte-identical to the historical full-rewrite oracle. `preamble_raw` is
+/// the verbatim preamble byte range of the corpus (everything before the
+/// first fence-aware message header).
+fn new8_differential_case(name: &str, corpus: &str, preamble_raw: &str, new_body: &str) {
+    assert!(
+        corpus.starts_with(preamble_raw),
+        "corpus '{}' must start with its preamble",
+        name
+    );
+    let messages = paperwork_core::format::thread::parse_messages(corpus).expect("corpus parses");
+    let last = messages.last().expect("corpus has messages");
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join(format!("{}.post.md", name));
+    fs::write(&path, corpus).expect("write corpus");
+
+    let expected = legacy_edit_reference(preamble_raw, &messages, new_body);
+
+    thread::thread_edit(&path, last.seq, &last.sender, new_body).expect("edit");
+
+    let actual = fs::read_to_string(&path).expect("read back");
+    assert_eq!(
+        actual, expected,
+        "NEW-8 byte divergence on corpus '{}'",
+        name
+    );
+}
+
+/// Fixed-timestamp message builder for the NEW-8 corpus.
+fn new8_msg(seq: u64, sender: &str, ts: &str, body: &str) -> Message {
+    let (reply_to, mentions) = paperwork_core::format::thread::derive_message_refs(body, sender);
+    Message {
+        seq,
+        sender: sender.to_string(),
+        timestamp: chrono::DateTime::parse_from_rfc3339(ts)
+            .expect("fixed ts")
+            .with_timezone(&chrono::Utc),
+        reply_to,
+        mentions,
+        body: body.to_string(),
+    }
+}
+
+#[test]
+fn thread_edit_new8_canonical_multi_message() {
+    // Canonical (CRLF-normalized) three-message thread: the incremental
+    // path keeps preamble + earlier messages on disk untouched.
+    let preamble = "# Daily Standup\n\n";
+    let msgs = vec![
+        new8_msg(
+            1,
+            "alice",
+            "2026-01-15T10:30:00Z",
+            "Parser module is 80% done.",
+        ),
+        new8_msg(
+            2,
+            "bob",
+            "2026-01-15T10:31:00Z",
+            "@alice @#1 tests merged, all green.",
+        ),
+        new8_msg(3, "alice", "2026-01-15T10:32:00Z", "closing out the thread"),
+    ];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case(
+        "canonical-multi",
+        &corpus,
+        preamble,
+        "final wrap-up notes\nsecond line",
+    );
+}
+
+#[test]
+fn thread_edit_new8_preamble_pseudo_headers() {
+    // Preamble carrying seq-0 / overflowing pseudo headers, a non-matching
+    // H2 section, prose, and a fence quoting a header-shaped line.
+    let preamble = "# t\n\n## #0 alice (2026-01-15T10:30:00Z)\n\nprose after the seq-0 pseudo header\n\n## #99999999999999999999999999 mallory (2026-01-15T10:30:00Z)\n\nprose after the overflow pseudo header\n\n## Notes\n\nnote text\n\n```md\n## #77 quoted fake header\n```\n\n";
+    let msgs = vec![
+        new8_msg(1, "alice", "2026-01-15T10:30:00Z", "first"),
+        new8_msg(2, "bob", "2026-01-15T10:31:00Z", "second"),
+    ];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case("pseudo-preamble", &corpus, preamble, "edited second");
+}
+
+#[test]
+fn thread_edit_new8_fake_headers_inside_body_fences() {
+    // Earlier bodies quote header-shaped lines inside their fences; the
+    // last-header probe must not mistake them for message boundaries.
+    let preamble = "# t\n\n";
+    let msgs = vec![
+        new8_msg(
+            1,
+            "alice",
+            "2026-01-15T10:30:00Z",
+            "look at this fake header:\n## #99 mallory (2026-01-01T00:00:00Z)\nend of quote",
+        ),
+        new8_msg(
+            2,
+            "bob",
+            "2026-01-15T10:31:00Z",
+            "another quoted one:\n## #100 eve (2026-01-02T00:00:00Z)",
+        ),
+    ];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case(
+        "fake-headers-in-fences",
+        &corpus,
+        preamble,
+        "edited body still quoting\n## #101 trevor (2026-01-03T00:00:00Z)",
+    );
+}
+
+#[test]
+fn thread_edit_new8_dynamic_fence_multiline_last() {
+    // The final message carries backtick runs; the NEW body grows the fence
+    // further and spans multiple lines.
+    let preamble = "# t\n\n";
+    let msgs = vec![
+        new8_msg(1, "alice", "2026-01-15T10:30:00Z", "plain first"),
+        new8_msg(
+            2,
+            "bob",
+            "2026-01-15T10:31:00Z",
+            "code with ``` triple backticks and ```` four",
+        ),
+    ];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case(
+        "dynamic-fence",
+        &corpus,
+        preamble,
+        "line one with ``` run\nline two with ````` five\nline three",
+    );
+}
+
+#[test]
+fn thread_edit_new8_single_message_empty_body() {
+    // Single message with an empty body edited to non-empty (and the mirror
+    // direction below): the empty-prefix incremental shape stays exact.
+    let preamble = "# t\n\n";
+    let msgs = vec![new8_msg(1, "alice", "2026-01-15T10:30:00Z", "")];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case("empty-body", &corpus, preamble, "now there is a body");
+
+    let msgs = vec![new8_msg(1, "alice", "2026-01-15T10:30:00Z", "original")];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case("to-empty-body", &corpus, preamble, "");
+}
+
+#[test]
+fn thread_edit_new8_lone_cr_preamble_boundary() {
+    // Preamble terminated by a lone `\r` right before the first header
+    // (review B1 input class): the raw preamble bytes survive verbatim.
+    let preamble = "# Title\r";
+    let msgs = vec![new8_msg(1, "alice", "2026-01-15T10:30:00Z", "old")];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs)
+    );
+    new8_differential_case("lone-cr", &corpus, preamble, "newbody");
+}
+
+#[test]
+fn thread_edit_new8_crlf_file_fallback() {
+    // A fully CRLF hand-edited file: the historical behavior re-serializes
+    // the messages to canonical LF while carrying the raw CRLF preamble
+    // over verbatim. The incremental path cannot keep the CRLF prefix on
+    // disk, so the fallback must reproduce exactly these bytes.
+    let preamble = "# t\r\n\r\n";
+    let msgs = vec![
+        new8_msg(1, "alice", "2026-01-15T10:30:00Z", "first"),
+        new8_msg(2, "bob", "2026-01-15T10:31:00Z", "second"),
+    ];
+    let corpus = format!(
+        "{}{}",
+        preamble,
+        paperwork_core::format::thread::serialize_messages(&msgs).replace('\n', "\r\n")
+    );
+    new8_differential_case("crlf-fallback", &corpus, preamble, "edited second");
+}
+
+#[test]
+fn thread_edit_new8_lenient_header_fallback() {
+    // A whitespace-lenient (non-canonical) header in an EARLIER message:
+    // the on-disk prefix no longer equals its canonical re-serialization,
+    // so the fallback rewrites the message zone byte-identically to the
+    // historical full rewrite.
+    let corpus = "# t\n\n##  #1   alice   (2026-01-15T10:30:00Z)  \n\n```md\nfirst\n```\n\n## #2 bob (2026-01-15T10:31:00Z)\n\n```md\nsecond\n```\n";
+    new8_differential_case(
+        "lenient-header-fallback",
+        corpus,
+        "# t\n\n",
+        "edited second",
+    );
 }
 
 // M2 regression: sending into an unmigrated v0.4 thread is refused and the

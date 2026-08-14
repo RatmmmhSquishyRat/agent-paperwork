@@ -5,9 +5,10 @@
 //! - the legacy v0.4 write guard ([`contains_legacy_headers`]);
 //! - the reverse tail scan for the last seq ([`read_last_seq_locked`],
 //!   spec §5.5);
-//! - the fence-aware preamble offset probe
-//!   ([`first_message_header_offset`]) used by `thread_edit`'s preamble
-//!   carry-over (spec §5.7, R5).
+//! - the fence-aware preamble/message-header offset probes
+//!   ([`first_message_header_offset`], [`last_message_header_offset`])
+//!   used by `thread_edit`'s preamble carry-over (spec §5.7, R5) and its
+//!   incremental last-message rewrite (NEW-8).
 //!
 //! Concurrency: every scan runs inside the caller's `LockedFile` window
 //! (the send/edit locks); none of these functions acquires or releases a
@@ -86,6 +87,52 @@ pub(super) fn first_message_header_offset(content: &str) -> Option<usize> {
         };
     }
     None
+}
+
+/// Byte offset of the LAST fence-aware message header line in raw content.
+///
+/// The mirror scan of [`first_message_header_offset`] (identical boundary
+/// iteration and fence/header predicates, spec §3.1 / invariant I11):
+/// `thread_edit`'s incremental rewrite (NEW-8) truncates the file at this
+/// offset and appends the re-serialized final message instead of
+/// re-serializing the whole thread.
+pub(super) fn last_message_header_offset(content: &str) -> Option<usize> {
+    let bytes = content.as_bytes();
+    let mut open: Option<usize> = None;
+    let mut last: Option<usize> = None;
+    let mut start = 0usize;
+    loop {
+        // Find the next line boundary: `\n`, `\r\n` or lone `\r`.
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b'\n' && bytes[end] != b'\r' {
+            end += 1;
+        }
+        // `\n`/`\r` are ASCII: the byte range is a valid char boundary.
+        let line = &content[start..end];
+        if let Some(n) = open {
+            if fence_close_matches(line, n) {
+                open = None;
+            }
+        } else if let Some(n) = fence_open_len(line) {
+            open = Some(n);
+        } else if header_seq(line).is_some() {
+            // Same predicate as the parse side (`header_indices`, review
+            // MJ-1): seq-0 and overflowing-seq H2s are preamble content,
+            // so they are never recorded as a message-header offset.
+            last = Some(start);
+        }
+        // Advance past the line terminator (`\r\n` counts 2 bytes,
+        // lone `\r` / `\n` count 1).
+        if end >= bytes.len() {
+            break;
+        }
+        start = if bytes[end] == b'\r' && end + 1 < bytes.len() && bytes[end + 1] == b'\n' {
+            end + 2
+        } else {
+            end + 1
+        };
+    }
+    last
 }
 
 /// Whether the file content (read through the locked handle) contains legacy
@@ -243,5 +290,71 @@ mod tests {
         assert!(!t4_legacy(""));
         // indented legacy line is not flush-left (regex stance)
         assert!(!t4_legacy(" ### #1 alice"));
+    }
+
+    // ========================================================================
+    // Header-offset probes: first/last mirror scans agree on every corpus
+    // shape the fence policy admits (T5 split + NEW-8).
+    // ========================================================================
+
+    const HDR_A: &str = "## #1 alice (2026-01-15T10:30:00Z)";
+    const HDR_B: &str = "## #2 bob (2026-01-15T10:31:00Z)";
+
+    #[test]
+    fn test_header_offset_probes_mirror_corpus() {
+        // plain two-header file: first/last point at the respective lines
+        let content = format!(
+            "# t\n\n{}\n\n```md\nx\n```\n\n{}\n\n```md\ny\n```\n",
+            HDR_A, HDR_B
+        );
+        let first = first_message_header_offset(&content).expect("first");
+        let last = last_message_header_offset(&content).expect("last");
+        assert_eq!(&content[first..first + HDR_A.len()], HDR_A);
+        assert_eq!(&content[last..last + HDR_B.len()], HDR_B);
+
+        // single header: both probes agree
+        let content = format!("# t\n\n{}\n", HDR_A);
+        assert_eq!(
+            first_message_header_offset(&content),
+            last_message_header_offset(&content)
+        );
+
+        // header-shaped line inside a body fence is NOT a header offset
+        let content = format!(
+            "# t\n\n{}\n\n```md\n## #99 mallory (2026-01-01T00:00:00Z)\n```\n",
+            HDR_A
+        );
+        let first = first_message_header_offset(&content).expect("first");
+        let last = last_message_header_offset(&content).expect("last");
+        assert_eq!(first, last);
+        assert_eq!(&content[first..first + HDR_A.len()], HDR_A);
+
+        // seq-0 / overflowing H2s are preamble: never recorded
+        let content = format!("# t\n\n## #0 alice (2026-01-15T10:30:00Z)\n\n{}\n", HDR_A);
+        let first = first_message_header_offset(&content).expect("first");
+        let last = last_message_header_offset(&content).expect("last");
+        assert_eq!(&content[first..first + HDR_A.len()], HDR_A);
+        assert_eq!(first, last);
+
+        // CRLF content: offsets count `\r\n` as 2 bytes (RAW view)
+        let content = format!("# t\r\n\r\n{}\r\n\r\n{}\r\n", HDR_A, HDR_B);
+        let last = last_message_header_offset(&content).expect("last");
+        assert_eq!(&content[last..last + HDR_B.len()], HDR_B);
+
+        // lone `\r` boundary before the first header (review B1 shape)
+        let content = format!("# Title\r{}\n", HDR_A);
+        let first = first_message_header_offset(&content).expect("first");
+        assert_eq!(&content[first..first + HDR_A.len()], HDR_A);
+
+        // no headers at all
+        assert_eq!(first_message_header_offset("# only a title\n"), None);
+        assert_eq!(last_message_header_offset("# only a title\n"), None);
+        assert_eq!(first_message_header_offset(""), None);
+        assert_eq!(last_message_header_offset(""), None);
+
+        // unclosed preamble fence swallows the tail: no header offsets
+        let content = format!("```md\n{}\n{}\n", HDR_A, HDR_B);
+        assert_eq!(first_message_header_offset(&content), None);
+        assert_eq!(last_message_header_offset(&content), None);
     }
 }
