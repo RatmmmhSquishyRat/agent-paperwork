@@ -1,6 +1,6 @@
 //! Thread write operations: send and edit — all path-explicit (T5 split:
-//! the read side lives in [`super::thread_read`], the byte-level scans in
-//! [`super::thread_scan`]; the historical re-export surface below keeps
+//! the read side lives in `super::thread_read`, the byte-level scans in
+//! `super::thread_scan`; the historical re-export surface below keeps
 //! every `ops::thread::*` path unchanged).
 //!
 //! Used for Post threads (append-only group conversations).
@@ -10,7 +10,7 @@
 //! Concurrency semantics: file locking (fs2) applies for send and edit; the
 //! exclusive lock excludes concurrent writers for the whole read-modify-write
 //! window, and the `LockedFile` guard's `Drop` releases it on every exit
-//! path (T4). The lock-free readers in [`super::thread_read`] tolerate the
+//! path (T4). The lock-free readers in `super::thread_read` tolerate the
 //! writer-exclusion stance because a torn read merely fails parsing like any
 //! malformed file.
 //!
@@ -446,7 +446,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
 /// Bounded reverse tail scan (spec §5.5) instead of a whole-file parse:
 /// the caller only needs one header's sender field, so the same 64KB +
 /// 256B window the send path already scans is reused. Runs under an
-/// exclusive lock ([`LockedFile`]; the guard's `Drop` releases it on every
+/// exclusive lock (`LockedFile`; the guard's `Drop` releases it on every
 /// exit path, T4).
 ///
 /// Returns `Ok(None)` when the file carries no fence-aware header with

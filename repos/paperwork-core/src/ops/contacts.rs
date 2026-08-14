@@ -149,8 +149,8 @@ pub fn contacts_read(path: &Path) -> Result<Vec<ContactEntry>> {
 /// Two-level resolution, shared by every consumer that follows a contacts
 /// link: the entry path is tried as given (CWD-relative) first, then
 /// relative to the contacts file's own directory. `derive_label` uses this
-/// internally; the CLI enrichment path must use the same helper (T6 wiring
-/// pending in `cmd/contacts.rs::enrich_profile`).
+/// internally; the CLI enrichment path uses the same helper (T6 wired in
+/// `cmd/contacts.rs::enrich_profile`).
 pub fn resolve_contact_path(contacts_path: &Path, entry_path: &str) -> PathBuf {
     let as_given = Path::new(entry_path);
     if as_given.exists() {

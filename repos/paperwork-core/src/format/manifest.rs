@@ -7,6 +7,11 @@
 //! - `- regex:` inline for simple patterns, ```regex fence for complex ones;
 //! - note = bare prose (no blockquote);
 //! - groups derived from named captures, never persisted.
+//!
+//! Terminology mapping (Lucas m10-① closure): the public `Manifest` /
+//! `ManifestEntry` types model the CLI `brief` command's resource. The
+//! rename to `Brief` was ruled out as a Rust API break with terminology-only
+//! benefit; this doc mapping is the closure (v0.5 debt closure ledger).
 
 use chrono::{DateTime, Utc};
 use regex::Regex;

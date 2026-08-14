@@ -418,7 +418,7 @@ pub fn prose_representation_issue(prose: &str) -> Option<&'static str> {
 const DANGEROUS_ATTRIBUTE_KEYS: &[&str] = &["model", "owner", "created", "path", "hash", "regex"];
 
 /// Whether any line of the prose is attribute-shaped with one of the
-/// [`DANGEROUS_ATTRIBUTE_KEYS`].
+/// `DANGEROUS_ATTRIBUTE_KEYS`.
 ///
 /// Deliberately NOT fence-aware: the preamble parsers (profile /
 /// brief) run [`extract_attribute`] on every preamble line without fence

@@ -63,7 +63,7 @@ pub fn parse_contacts(content: &str) -> Result<Vec<ContactEntry>> {
 /// silently ignores them, so a read-modify-rewrite would drop the legacy
 /// entries — the write side uses this predicate as a refusal guard.
 ///
-/// T4: converged onto the shared scanner family ([`first_outside_fence`]).
+/// T4: converged onto the shared scanner family (`first_outside_fence`).
 pub fn contains_bare_bullet(content: &str) -> bool {
     let content = normalize_line_endings(content);
     first_outside_fence(&content, |_i, line| {
