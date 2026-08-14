@@ -52,40 +52,43 @@ where
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check that the target path is writable".to_string(),
-            example: String::new(),
+        .map_err(|e| {
+            PaperworkError::io_ctx(
+                path.to_path_buf(),
+                e,
+                "check that the target path is writable",
+                String::new(),
+            )
         })?;
 
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    file.lock_exclusive().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "another process may hold the lock; retry shortly",
+            String::new(),
+        )
+    })?;
 
     // Read content through the locked file handle (os error 33 guard).
     let mut content = String::new();
     if let Err(e) = file.seek(SeekFrom::Start(0)) {
         file.unlock().ok();
-        return Err(PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        });
+        return Err(PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        ));
     }
     if let Err(e) = file.read_to_string(&mut content) {
         file.unlock().ok();
-        return Err(PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        });
+        return Err(PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        ));
     }
 
     // Keep a snapshot for the no-change comparison (content is moved into
@@ -101,11 +104,13 @@ where
 
     // No-op: content unchanged -> skip truncate + rewrite (zero write).
     if new_content == original {
-        file.unlock().map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
+        file.unlock().map_err(|e| {
+            PaperworkError::io_ctx(
+                path.to_path_buf(),
+                e,
+                "check file handle validity",
+                String::new(),
+            )
         })?;
         return Ok(());
     }
@@ -113,37 +118,39 @@ where
     // Rewrite entire file (truncate + write within the lock).
     if let Err(e) = file.set_len(0) {
         file.unlock().ok();
-        return Err(PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check that the target path is writable".to_string(),
-            example: String::new(),
-        });
+        return Err(PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check that the target path is writable",
+            String::new(),
+        ));
     }
     if let Err(e) = file.seek(SeekFrom::Start(0)) {
         file.unlock().ok();
-        return Err(PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        });
+        return Err(PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        ));
     }
     if let Err(e) = file.write_all(new_content.as_bytes()) {
         file.unlock().ok();
-        return Err(PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check that the target path is writable".to_string(),
-            example: String::new(),
-        });
+        return Err(PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check that the target path is writable",
+            String::new(),
+        ));
     }
 
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    file.unlock().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
     })?;
 
     Ok(())

@@ -35,10 +35,6 @@ pub enum PaperworkError {
         example: String,
     },
 
-    /// Plain IO error (propagated from std).
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// Resource not found with actionable hint.
     #[error("{resource} '{name}' not found")]
     NotFound {
@@ -77,9 +73,10 @@ pub enum PaperworkError {
 }
 
 impl PaperworkError {
-    /// One-line [`PaperworkError::IoContext`] constructor shared by IO call
-    /// sites (T4 helper, pulled forward in P-2 for the NEW-2 atomic-create
-    /// and SAM-4 verify guards; the full call-site migration lands in P-4).
+    /// One-line [`PaperworkError::IoContext`] constructor shared by every IO
+    /// call site (T4 helper, pulled forward in P-2 for the NEW-2 atomic-create
+    /// and SAM-4 verify guards; P-4 completed the full call-site migration and
+    /// removed the dead `PaperworkError::Io` variant — SAM-5).
     ///
     /// The fix/example wording is deliberately REQUIRED at every call and
     /// never defaulted: each site's wording is part of the output contract
@@ -103,7 +100,7 @@ impl PaperworkError {
         match self {
             Self::Parse { .. } => "format",
             Self::Validation { .. } => "validation",
-            Self::IoContext { .. } | Self::Io(_) => "io",
+            Self::IoContext { .. } => "io",
             Self::NotFound { .. } => "not-found",
             Self::AlreadyExists { .. } => "already-exists",
             Self::NotAllowed { .. } => "not-allowed",
@@ -117,7 +114,6 @@ impl PaperworkError {
             Self::Parse { fix, .. } => fix.clone(),
             Self::Validation { fix, .. } => fix.clone(),
             Self::IoContext { fix, .. } => fix.clone(),
-            Self::Io(e) => format!("check file permissions and disk space ({})", e),
             Self::NotFound { fix, .. } => fix.clone(),
             Self::AlreadyExists { fix, .. } => fix.clone(),
             Self::NotAllowed { fix, .. } => fix.clone(),
@@ -131,7 +127,6 @@ impl PaperworkError {
             Self::Parse { example, .. } => example.clone(),
             Self::Validation { example, .. } => example.clone(),
             Self::IoContext { example, .. } => example.clone(),
-            Self::Io(_) => String::new(),
             Self::NotFound { example, .. } => example.clone(),
             Self::AlreadyExists { example, .. } => example.clone(),
             Self::NotAllowed { example, .. } => example.clone(),
@@ -142,3 +137,44 @@ impl PaperworkError {
 
 /// Result type alias for paperwork operations.
 pub type Result<T> = std::result::Result<T, PaperworkError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // P-4 (ported from wip): the io_ctx helper must build a byte-identical
+    // IoContext envelope (path display, fix/example wording carried through
+    // untouched) — the diff-parity guard for the call-site migration.
+    #[test]
+    fn test_io_ctx_envelope() {
+        let err = PaperworkError::io_ctx(
+            std::path::Path::new("agents/alice.profile.md"),
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied"),
+            "check file permissions",
+            "",
+        );
+        assert_eq!(err.category(), "io");
+        assert_eq!(
+            err.to_string(),
+            "IO error at 'agents/alice.profile.md': access denied"
+        );
+        assert_eq!(err.fix(), "check file permissions");
+        assert_eq!(err.example(), "");
+        match &err {
+            PaperworkError::IoContext { path, .. } => {
+                assert_eq!(path, std::path::Path::new("agents/alice.profile.md"));
+            }
+            other => panic!("expected IoContext, got {:?}", other),
+        }
+
+        // PathBuf inputs and non-empty examples pass through as well
+        let err = PaperworkError::io_ctx(
+            PathBuf::from("standup.post.md"),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+            "check that the file exists and is readable",
+            "paperwork validate standup.post.md",
+        );
+        assert_eq!(err.fix(), "check that the file exists and is readable");
+        assert_eq!(err.example(), "paperwork validate standup.post.md");
+    }
+}

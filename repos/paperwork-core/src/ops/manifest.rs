@@ -229,11 +229,13 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
+    let content = fs::read_to_string(path).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        )
     })?;
 
     parse_manifest(&content)

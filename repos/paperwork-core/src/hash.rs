@@ -20,11 +20,13 @@ pub fn hash_bytes(data: &[u8]) -> String {
 /// Compute SHA-256 hash of a file's contents.
 /// Returns lowercase hex string.
 pub fn hash_file(path: &Path) -> Result<String> {
-    let data = fs::read(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check that the file exists and is readable".to_string(),
-        example: "paperwork brief add onboarding.brief.md --entry src/main.rs".to_string(),
+    let data = fs::read(path).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check that the file exists and is readable",
+            "paperwork brief add onboarding.brief.md --entry src/main.rs",
+        )
     })?;
     Ok(hash_bytes(&data))
 }

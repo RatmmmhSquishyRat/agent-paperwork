@@ -15,6 +15,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `brief verify` distinguishes a missing entry target (stays `Stale` per the spec three-state contract) from a genuine read failure (permission denied etc.), which now surfaces as an `io` error envelope instead of collapsing into `Stale`.
 - New core API `create_profile_full`: one-shot creation of a complete profile (including scopes) in a single atomic write.
 
+### Removed — Rust API (P-4 batch, SAM-5)
+
+- **Breaking for direct Rust consumers only (CLI output unchanged):** the dead `PaperworkError::Io(std::io::Error)` variant is removed from the public error enum. Every IO failure now surfaces as `PaperworkError::IoContext` with an explicit path, fix hint, and example — the bare variant had no reachable construction site left after the io-error envelope unification. Crate consumers matching `PaperworkError::Io` must migrate to the `IoContext` arm; `category()` still reports `"io"` for both historical shapes.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal

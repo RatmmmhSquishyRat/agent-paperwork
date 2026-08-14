@@ -77,11 +77,13 @@ pub fn thread_send(
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| PaperworkError::IoContext {
-            path: parent.to_path_buf(),
-            source: e,
-            fix: "check that the parent directory is writable".to_string(),
-            example: String::new(),
+        fs::create_dir_all(parent).map_err(|e| {
+            PaperworkError::io_ctx(
+                parent.to_path_buf(),
+                e,
+                "check that the parent directory is writable",
+                String::new(),
+            )
         })?;
     }
 
@@ -91,31 +93,36 @@ pub fn thread_send(
         .create(true)
         .read(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check that the file path is accessible".to_string(),
-            example: String::new(),
+        .map_err(|e| {
+            PaperworkError::io_ctx(
+                path.to_path_buf(),
+                e,
+                "check that the file path is accessible",
+                String::new(),
+            )
         })?;
 
     // Acquire exclusive lock (blocks concurrent writers)
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    file.lock_exclusive().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "another process may hold the lock; retry shortly",
+            String::new(),
+        )
+    })?;
 
     // First-write gate: the in-lock file size is the single source of truth
     // (spec §5.7; an exists() pre-check would be TOCTOU).
     let file_empty = file
         .metadata()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
+        .map_err(|e| {
+            PaperworkError::io_ctx(
+                path.to_path_buf(),
+                e,
+                "check file handle validity",
+                String::new(),
+            )
         })?
         .len()
         == 0;
@@ -192,11 +199,13 @@ pub fn thread_send(
                 let mut last = [0u8; 1];
                 file_ref.read_exact(&mut last).map(|_| last)
             })
-            .map_err(|e| PaperworkError::IoContext {
-                path: path.to_path_buf(),
-                source: e,
-                fix: "check that the file is readable".to_string(),
-                example: String::new(),
+            .map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check that the file is readable",
+                    String::new(),
+                )
             })?;
         last[0] != b'\n'
     };
@@ -213,20 +222,22 @@ pub fn thread_send(
 
     // Single write() call for atomicity (invariant I4)
     let mut writer = &file;
-    writer
-        .write_all(payload.as_bytes())
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
+    writer.write_all(payload.as_bytes()).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check disk space and file permissions",
+            String::new(),
+        )
+    })?;
 
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    file.unlock().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
     })?;
 
     Ok(new_seq)
@@ -240,11 +251,13 @@ pub fn thread_meta(path: &Path) -> Result<ThreadMeta> {
         return Ok(ThreadMeta::default());
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
+    let content = fs::read_to_string(path).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        )
     })?;
 
     Ok(parse_preamble(&content))
@@ -267,11 +280,13 @@ pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Ve
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
+    let content = fs::read_to_string(path).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        )
     })?;
 
     let messages = parse_messages(&content)?;
@@ -301,11 +316,13 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
         });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
+    let content = fs::read_to_string(path).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        )
     })?;
 
     // Title from the preamble in the SAME pass (review M8): callers no
@@ -397,37 +414,42 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
+        .map_err(|e| {
+            PaperworkError::io_ctx(
+                path.to_path_buf(),
+                e,
+                "check file permissions",
+                String::new(),
+            )
         })?;
 
-    file.lock_exclusive()
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "another process may hold the lock; retry shortly".to_string(),
-            example: String::new(),
-        })?;
+    file.lock_exclusive().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "another process may hold the lock; retry shortly",
+            String::new(),
+        )
+    })?;
 
     // Read content through the locked file handle
     let mut content = String::new();
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file permissions".to_string(),
-            example: String::new(),
-        })?;
+    file.seek(SeekFrom::Start(0)).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
+    })?;
+    file.read_to_string(&mut content).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        )
+    })?;
 
     let mut messages = parse_messages(&content)?;
 
@@ -549,32 +571,38 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     new_content.extend_from_slice(serialize_messages(&messages).as_bytes());
 
     // Rewrite entire file (truncate + write within the lock)
-    file.set_len(0).map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file permissions".to_string(),
-        example: String::new(),
+    file.set_len(0).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file permissions",
+            String::new(),
+        )
     })?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
-    file.write_all(&new_content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check disk space and file permissions".to_string(),
-            example: String::new(),
-        })?;
+    file.seek(SeekFrom::Start(0)).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
+    })?;
+    file.write_all(&new_content).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check disk space and file permissions",
+            String::new(),
+        )
+    })?;
 
-    file.unlock().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    file.unlock().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
     })?;
 
     Ok(())
@@ -635,23 +663,18 @@ fn first_message_header_offset(content: &str) -> Option<usize> {
 /// not trigger the unmigrated-thread write refusal.
 fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> {
     let mut file_ref = file;
-    file_ref
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
+    file_ref.seek(SeekFrom::Start(0)).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
+    })?;
     let mut content = String::new();
-    file_ref
-        .read_to_string(&mut content)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file integrity".to_string(),
-            example: String::new(),
-        })?;
+    file_ref.read_to_string(&mut content).map_err(|e| {
+        PaperworkError::io_ctx(path.to_path_buf(), e, "check file integrity", String::new())
+    })?;
     let content = normalize_line_endings(&content);
     // P-3: the fence walk delegates to the shared scanner family. The
     // legacy pattern is the centralized `LEGACY_HEADER_RE_FMT` (format
@@ -678,11 +701,13 @@ fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> {
 ///   an open fence are skipped (R6; the residual limitation of an unknown
 ///   fence parity before the buffer start is documented in spec §5.5).
 fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
-    let metadata = file.metadata().map_err(|e| PaperworkError::IoContext {
-        path: path.to_path_buf(),
-        source: e,
-        fix: "check file handle validity".to_string(),
-        example: String::new(),
+    let metadata = file.metadata().map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
     })?;
 
     let file_size = metadata.len();
@@ -694,24 +719,19 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
     let read_len = (file_size - read_start) as usize;
 
     let mut file_ref = file;
-    file_ref
-        .seek(SeekFrom::Start(read_start))
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file handle validity".to_string(),
-            example: String::new(),
-        })?;
+    file_ref.seek(SeekFrom::Start(read_start)).map_err(|e| {
+        PaperworkError::io_ctx(
+            path.to_path_buf(),
+            e,
+            "check file handle validity",
+            String::new(),
+        )
+    })?;
 
     let mut buffer = vec![0u8; read_len];
-    file_ref
-        .read_exact(&mut buffer)
-        .map_err(|e| PaperworkError::IoContext {
-            path: path.to_path_buf(),
-            source: e,
-            fix: "check file integrity".to_string(),
-            example: String::new(),
-        })?;
+    file_ref.read_exact(&mut buffer).map_err(|e| {
+        PaperworkError::io_ctx(path.to_path_buf(), e, "check file integrity", String::new())
+    })?;
 
     // Incomplete-first-line rule (R7): only when the buffer does not cover
     // the whole file.
@@ -720,20 +740,17 @@ fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
         let mut prev = [0u8; 1];
         file_ref
             .seek(SeekFrom::Start(read_start - 1))
-            .map_err(|e| PaperworkError::IoContext {
-                path: path.to_path_buf(),
-                source: e,
-                fix: "check file handle validity".to_string(),
-                example: String::new(),
+            .map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check file handle validity",
+                    String::new(),
+                )
             })?;
-        file_ref
-            .read_exact(&mut prev)
-            .map_err(|e| PaperworkError::IoContext {
-                path: path.to_path_buf(),
-                source: e,
-                fix: "check file integrity".to_string(),
-                example: String::new(),
-            })?;
+        file_ref.read_exact(&mut prev).map_err(|e| {
+            PaperworkError::io_ctx(path.to_path_buf(), e, "check file integrity", String::new())
+        })?;
         if prev[0] != b'\n' {
             scan = match buffer.iter().position(|&b| b == b'\n') {
                 Some(pos) => &buffer[pos + 1..],
