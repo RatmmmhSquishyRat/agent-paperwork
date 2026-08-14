@@ -198,12 +198,18 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("t.post.md");
         fs::write(&path, "same\n").expect("write");
-        let before = fs::metadata(&path).expect("metadata").modified().expect("mtime");
+        let before = fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
 
         locked_read_modify_write(&path, Ok).expect("no-op rmw");
 
         assert_eq!(fs::read_to_string(&path).expect("read"), "same\n");
-        let after = fs::metadata(&path).expect("metadata").modified().expect("mtime");
+        let after = fs::metadata(&path)
+            .expect("metadata")
+            .modified()
+            .expect("mtime");
         assert_eq!(before, after, "no-op must not rewrite (mtime stable)");
     }
 
@@ -214,8 +220,7 @@ mod tests {
         let path = dir.path().join("t.post.md");
         fs::write(&path, "old\n").expect("write");
 
-        locked_read_modify_write(&path, |content| Ok(format!("{}new\n", content)))
-            .expect("rmw");
+        locked_read_modify_write(&path, |content| Ok(format!("{}new\n", content))).expect("rmw");
 
         assert_eq!(fs::read_to_string(&path).expect("read"), "old\nnew\n");
     }
