@@ -8,6 +8,11 @@ pub(crate) mod lock;
 pub mod manifest;
 pub mod profile;
 pub mod thread;
+// T5 split of the historical monolithic `ops/thread.rs`: the read side and
+// the byte-level scans live in their own modules; `ops::thread` re-exports
+// the historical surface, so the public API is unchanged.
+pub(crate) mod thread_read;
+pub(crate) mod thread_scan;
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
