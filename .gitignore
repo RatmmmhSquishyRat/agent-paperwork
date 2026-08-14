@@ -4,6 +4,7 @@
 # Test artifacts
 _*/
 test-*/
+_char_record.txt
 
 # IDE
 .idea/
