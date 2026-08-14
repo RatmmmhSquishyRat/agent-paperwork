@@ -63,6 +63,14 @@ impl LockedFile {
     /// Truncate and rewrite the file in place, under the lock
     /// (`set_len(0)` + `seek(0)` + `write_all` — the exact shape of the
     /// historical `thread_edit` rewrite). `ctx` maps every IO failure.
+    ///
+    /// T4 exemption: no production site can wire this helper — every RMW
+    /// site's three IO steps carry DISTINCT verbatim fix wordings, while
+    /// `rewrite` maps all steps through a single `ctx`; the mandated
+    /// escape hatch is [ile()](Self::file). Kept (with its baseline
+    /// unit test) as the capability reference for the truncate+seek+write
+    /// shape; removing it would delete a pinned baseline assertion.
+    #[allow(dead_code)] // T4 exemption: single-ctx vs per-step wording
     pub(crate) fn rewrite(
         &self,
         new_content: &str,
