@@ -156,7 +156,7 @@
 
 ### 5.3 测试基线口径刷新
 
-- §一 6.验证与 §九 终局门禁中「本轮基线 419」为任务 #30 时点口径；任务 #45 F2 后现行基线为 **451**（分布：core doc 7 + core unit 33 + ops_tests 154 + format_tests 16 + hash_tests 4 + error 类 103 + 其余 core 12 + cli unit 33 + cli doc 18 + cli_integration 71 + 0，以 `cargo test --workspace --locked` 实测为准）。
+- §一 6.验证与 §九 终局门禁中「本轮基线 419」为任务 #30 时点口径；任务 #45 F2 后现行基线为 **451**（分布：cli doc 7 + cli char_tests 33 + cli_integration 154 + ivy_gap 16 + t6_cli 4 + core unit 103 + core char_tests 12 + guard_tests 33 + ops_contacts_crud 18 + ops_tests 71 + 0，以 `cargo test --workspace --locked` 实测为准）。
 
 （第五节完。追加：任务 #45 执行 agent，2026-08-15。未改动第一至四节。）
 
