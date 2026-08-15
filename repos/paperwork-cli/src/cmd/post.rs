@@ -687,7 +687,37 @@ fn resolve_body(
         (Some(body), false) => Ok(body),
         (None, true) => {
             let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf)?;
+            std::io::stdin().read_to_string(&mut buf).map_err(|e| {
+                // D6: an InvalidData failure means the stdin byte stream is
+                // not valid UTF-8 — point the fix at the encoding instead of
+                // the generic file-path/permissions fallback (audit S-06).
+                let encoding = e.kind() == std::io::ErrorKind::InvalidData;
+                let example = match owner {
+                    BodyOwner::Send => format!(
+                        "paperwork post send {} --author alice --message \"Hello\"",
+                        path
+                    ),
+                    BodyOwner::Edit => format!(
+                        "paperwork post edit {} --author alice --seq 2 --message \"corrected body\"",
+                        path
+                    ),
+                };
+                if encoding {
+                    paperwork_core::PaperworkError::Validation {
+                        message: "stdin is not valid UTF-8".to_string(),
+                        fix: "check that the piped content is valid UTF-8 text; re-encode it (e.g. to UTF-8) or pass the body with --message".to_string(),
+                        example,
+                    }
+                } else {
+                    paperwork_core::PaperworkError::IoContext {
+                        path: std::path::PathBuf::from("<stdin>"),
+                        source: e,
+                        fix: "check that stdin is readable, or pass the body with --message"
+                            .to_string(),
+                        example,
+                    }
+                }
+            })?;
             Ok(buf)
         }
         // Unreachable via clap (conflicts_with / required_unless_present),

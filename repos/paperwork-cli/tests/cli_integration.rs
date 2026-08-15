@@ -259,6 +259,48 @@ fn post_send_and_edit_refuse_unclosed_fence_thread() {
 }
 
 #[test]
+fn post_send_stdin_non_utf8_fix_points_at_encoding() {
+    // D6 (audit S-06): a non-UTF-8 stdin byte stream must surface a
+    // validation envelope whose fix points at the encoding — not the
+    // generic io "file path and permissions" fallback.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("d6.post.md");
+
+    cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "a",
+            "--stdin",
+        ])
+        .write_stdin(vec![0x48u8, 0x69, 0xC0, 0x21, 0x0A])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("stdin is not valid UTF-8"))
+        .stderr(predicate::str::contains("valid UTF-8"));
+
+    // zero write
+    assert!(!path.exists());
+
+    // Positive: valid UTF-8 stdin still works.
+    cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "a",
+            "--stdin",
+        ])
+        .write_stdin("hello from stdin\n")
+        .assert()
+        .success();
+}
+
+#[test]
 fn profile_edit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("edit.md");
