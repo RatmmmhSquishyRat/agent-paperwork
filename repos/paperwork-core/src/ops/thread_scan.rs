@@ -12,7 +12,7 @@
 //! - the locked sender lookup used by the CLI reply path
 //!   ([`find_message_sender_locked`], NEW-12).
 //!
-//! Concurrency: every scan runs inside the caller's `LockedFile` window
+//! Concurrency: every scan runs inside the caller's lock window
 //! (the send/edit locks); none of these functions acquires or releases a
 //! lock on behalf of a foreign guard.
 //!
@@ -221,7 +221,10 @@ pub(super) fn read_tail_scan_buffer(file: &File, path: &Path) -> Result<String> 
         .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
 
     // Incomplete-first-line rule (R7): only when the buffer does not cover
-    // the whole file.
+    // the whole file. A preceding `\r` also counts as a line boundary (L-2):
+    // hand-maintained CRLF / lone-CR files can place the buffer start
+    // immediately after the `\r` of a terminator, and dropping the first
+    // (complete) line in that case would lose a whole line from the scan.
     let mut scan: &[u8] = &buffer;
     if read_start > 0 {
         let mut prev = [0u8; 1];
@@ -231,7 +234,7 @@ pub(super) fn read_tail_scan_buffer(file: &File, path: &Path) -> Result<String> 
         file_ref
             .read_exact(&mut prev)
             .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
-        if prev[0] != b'\n' {
+        if prev[0] != b'\n' && prev[0] != b'\r' {
             scan = match buffer.iter().position(|&b| b == b'\n') {
                 Some(pos) => &buffer[pos + 1..],
                 None => &buffer[buffer.len()..],
@@ -248,7 +251,9 @@ pub(super) fn read_tail_scan_buffer(file: &File, path: &Path) -> Result<String> 
 /// spec §5.5:
 /// - buffer = last 64KB + 256B;
 /// - incomplete first line dropped ONLY when `read_start > 0` and the byte
-///   preceding the buffer is not `\n` (R7);
+///   preceding the buffer is neither `\n` nor `\r` (R7, relaxed by L-2 so a
+///   buffer starting right after a CRLF/CR terminator keeps its first
+///   complete line);
 /// - fence open/close tracking within the buffer: candidate headers inside
 ///   an open fence are skipped (R6; the residual limitation of an unknown
 ///   fence parity before the buffer start is documented in spec §5.5).
@@ -446,5 +451,75 @@ mod tests {
         let content = format!("```md\n{}\n{}\n", HDR_A, HDR_B);
         assert_eq!(first_message_header_offset(&content), None);
         assert_eq!(last_message_header_offset(&content), None);
+    }
+
+    // ========================================================================
+    // L-2: the R7 incomplete-first-line rule treats a preceding `\r` as a
+    // line boundary too, so a buffer starting right after the `\r` of a
+    // CRLF / lone-CR terminator keeps its first (complete) line.
+    // ========================================================================
+
+    /// Build a file whose tail-scan buffer starts exactly at
+    /// `pad_len + prev_len` (prev bytes = the terminator under test) with
+    /// the buffer itself exactly REVERSE_SCAN_SIZE long.
+    fn r7_crlf_fixture(prev: &[u8], buffer: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        assert_eq!(buffer.len(), REVERSE_SCAN_SIZE as usize);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("t.post.md");
+        let mut content = vec![b'x'; 1000];
+        content.extend_from_slice(prev);
+        content.extend_from_slice(buffer);
+        let mut f = File::create(&path).expect("create");
+        f.write_all(&content).expect("write");
+        (dir, path)
+    }
+
+    #[test]
+    fn test_tail_scan_r7_keeps_first_line_after_lone_cr() {
+        // The buffer starts with a COMPLETE header line right after a
+        // lone-`\r` terminator; the old R7 rule dropped it (last_seq 0).
+        let header = format!("{}\n", HDR_A);
+        let filler_len = REVERSE_SCAN_SIZE as usize - header.len() - 1;
+        let mut buffer = header.into_bytes();
+        buffer.resize(buffer.len() + filler_len, b'y');
+        buffer.push(b'\n');
+
+        let (_dir, path) = r7_crlf_fixture(b"\r", &buffer);
+        let f = OpenOptions::new().read(true).open(&path).expect("open");
+        assert_eq!(read_last_seq_locked(&f, &path).expect("scan"), 1);
+    }
+
+    #[test]
+    fn test_tail_scan_r7_keeps_lines_after_crlf_split() {
+        // The buffer starts between the `\r` and `\n` of a CRLF terminator;
+        // keeping the buffer only adds a leading empty line, never loses
+        // anything.
+        let header = format!("{}\n", HDR_B);
+        let filler_len = REVERSE_SCAN_SIZE as usize - 1 - header.len() - 1;
+        let mut buffer = vec![b'\n'];
+        buffer.extend_from_slice(header.as_bytes());
+        buffer.resize(buffer.len() + filler_len, b'y');
+        buffer.push(b'\n');
+
+        let (_dir, path) = r7_crlf_fixture(b"\r", &buffer);
+        let f = OpenOptions::new().read(true).open(&path).expect("open");
+        assert_eq!(read_last_seq_locked(&f, &path).expect("scan"), 2);
+    }
+
+    #[test]
+    fn test_tail_scan_r7_still_drops_partial_first_line() {
+        // Regression control: a genuine mid-line buffer start (prev byte is
+        // ordinary content) still drops the partial first line, so a split
+        // header half-line can never match.
+        let header = format!("{}\n", HDR_A);
+        let cut = 10; // split the header mid-line
+        let filler_len = REVERSE_SCAN_SIZE as usize - (header.len() - cut) - 1;
+        let mut buffer = header.as_bytes()[cut..].to_vec();
+        buffer.resize(buffer.len() + filler_len, b'y');
+        buffer.push(b'\n');
+
+        let (_dir, path) = r7_crlf_fixture(b"z", &buffer);
+        let f = OpenOptions::new().read(true).open(&path).expect("open");
+        assert_eq!(read_last_seq_locked(&f, &path).expect("scan"), 0);
     }
 }
