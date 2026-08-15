@@ -1,11 +1,26 @@
-//! Thread operations: send, read, summary, meta, edit — all path-explicit.
+//! Thread write operations: send and edit — all path-explicit (T5 split:
+//! the read side lives in [`super::thread_read`], the byte-level scans in
+//! [`super::thread_scan`]; the historical re-export surface below keeps
+//! every `ops::thread::*` path unchanged).
 //!
 //! Used for Post threads (append-only group conversations).
 //! `thread_send` auto-creates the file (and parent dirs) if it doesn't exist
 //! and writes the preamble on first write (spec §5.7, invariant I9).
-//! File locking (fs2) applies for send and edit.
+//!
+//! Concurrency semantics: file locking (fs2) applies for send and edit; the
+//! exclusive lock excludes concurrent writers for the whole read-modify-write
+//! window, and every exit path releases it explicitly (P-1: the master
+//! `locked_read_modify_write` stance, manual lock/unlock, stays the SSOT).
+//! The lock-free readers in [`super::thread_read`] tolerate the
+//! writer-exclusion stance because a torn read merely fails parsing like any
+//! malformed file.
+//!
+//! Crash window (spec §5.7): `thread_edit`'s in-lock truncate + rewrite can
+//! lose the whole file on power loss / process kill; accepted (the fs2 lock
+//! excludes concurrent writers). `thread_send` only ever appends, so a crash
+//! mid-write loses at most the new message.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -13,35 +28,34 @@ use chrono::Utc;
 use fs2::FileExt;
 
 use crate::error::{PaperworkError, Result};
+use crate::format::check_single_line;
 use crate::format::thread::{
-    derive_message_refs, header_seq, parse_messages, parse_preamble, serialize_message,
-    serialize_messages, serialize_preamble, validate_sender, LEGACY_HEADER_RE_FMT,
+    derive_message_refs, parse_messages, serialize_message, serialize_messages, serialize_preamble,
+    validate_sender,
 };
-use crate::format::{
-    check_single_line, dedup_preserve_order, fence_close_matches, fence_open_len,
-    for_each_outside_fence, normalize_line_endings,
+use crate::{Message, ThreadMeta};
+
+use super::thread_scan::{
+    contains_legacy_headers, first_message_header_offset, read_last_seq_locked,
 };
-use crate::{Message, ThreadMeta, ThreadSummary};
+
+// Historical re-export surface (T5 split): every `ops::thread::*` path the
+// CLI and the test suites use keeps resolving through this module, so the
+// lib.rs public API is byte-for-byte unchanged.
+pub use super::thread_read::{thread_meta, thread_read, thread_summary};
 
 /// Maximum message size (64 KB hard cap, invariant I3).
 /// Applies to a single serialized message only — the preamble is exempt
 /// (spec §5.7).
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 
-/// Size of reverse-scan buffer for finding last seq (64KB + 256B, spec §5.5).
-const REVERSE_SCAN_SIZE: u64 = (64 * 1024 + 256) as u64;
-
-/// Number of trailing messages quoted in `thread_summary` snippets (review n10).
-const SNIPPET_COUNT: usize = 3;
-
-/// Character budget of a single summary snippet before ellipsis (review n10).
-const SNIPPET_CHAR_LIMIT: usize = 50;
-
-// P-3: the historical `SEQ_RE` tail-scan prefilter and the ops-side
+// P-3/T5: the historical `SEQ_RE` tail-scan prefilter and the ops-side
 // `LEGACY_HEADER_RE` twin were deleted here. `header_seq` (the parse-side
 // predicate, review MJ-1) is the single authoritative tail-scan gate — the
 // prefilter was redundant — and the legacy-header pattern now lives as the
-// single definition `format::thread::LEGACY_HEADER_RE_FMT` (imported above).
+// single definition `format::thread::LEGACY_HEADER_RE_FMT`. The
+// `REVERSE_SCAN_SIZE` / `SNIPPET_*` constants moved to `thread_scan` /
+// `thread_read` together with their consumers (T5 split).
 
 /// Send a message to a thread. Auto-creates the file and parent dirs if absent.
 ///
@@ -241,145 +255,6 @@ pub fn thread_send(
     })?;
 
     Ok(new_seq)
-}
-
-/// Read the thread preamble metadata (spec §5.2).
-///
-/// A missing file yields the default meta (no error).
-pub fn thread_meta(path: &Path) -> Result<ThreadMeta> {
-    if !path.exists() {
-        return Ok(ThreadMeta::default());
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file permissions",
-            String::new(),
-        )
-    })?;
-
-    Ok(parse_preamble(&content))
-}
-
-/// Read messages from a thread within an optional seq range (inclusive).
-///
-/// - `from = None` → start from beginning
-/// - `to = None` → read to end
-pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Vec<Message>> {
-    if !path.exists() {
-        return Err(PaperworkError::NotFound {
-            resource: "Thread".to_string(),
-            name: path.display().to_string(),
-            fix: "send a message first to create the thread".to_string(),
-            example: format!(
-                "paperwork post send {} --author alice --message \"Hello\"",
-                path.display()
-            ),
-        });
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file permissions",
-            String::new(),
-        )
-    })?;
-
-    let messages = parse_messages(&content)?;
-
-    let from_seq = from.unwrap_or(1);
-    let to_seq = to.unwrap_or(u64::MAX);
-
-    let filtered: Vec<Message> = messages
-        .into_iter()
-        .filter(|m| m.seq >= from_seq && m.seq <= to_seq)
-        .collect();
-
-    Ok(filtered)
-}
-
-/// Get a summary of a thread.
-pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
-    if !path.exists() {
-        return Ok(ThreadSummary {
-            thread_path: path.display().to_string(),
-            title: String::new(),
-            message_count: 0,
-            participants: Vec::new(),
-            last_sender: None,
-            last_timestamp: None,
-            snippets: Vec::new(),
-        });
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file permissions",
-            String::new(),
-        )
-    })?;
-
-    // Title from the preamble in the SAME pass (review M8): callers no
-    // longer need a second full-file `thread_meta` walk.
-    let title = parse_preamble(&content).title;
-
-    let messages = parse_messages(&content)?;
-
-    let message_count = messages.len() as u64;
-    let last_sender = messages.last().map(|m| m.sender.clone());
-    let last_timestamp = messages.last().map(|m| m.timestamp);
-
-    // Participants derived from the sender set, deduplicated in
-    // first-appearance order (spec §5.4, owner ruling D1).
-    // P-3: shared `dedup_preserve_order` (HashSet+Vec, O(n)).
-    let participants: Vec<String> = dedup_preserve_order(messages.iter().map(|m| m.sender.clone()));
-
-    // Snippets from the last SNIPPET_COUNT messages (chronological order)
-    let snippets: Vec<String> = messages
-        .iter()
-        .rev()
-        .take(SNIPPET_COUNT)
-        .map(|m| snippet_of(&m.body))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-
-    Ok(ThreadSummary {
-        thread_path: path.display().to_string(),
-        title,
-        message_count,
-        participants,
-        last_sender,
-        last_timestamp,
-        snippets,
-    })
-}
-
-/// One summary snippet: first `SNIPPET_CHAR_LIMIT` chars of the body,
-/// `...` appended when truncated. Single `char_indices` pass decides both
-/// the cut point and the truncation flag (review n10).
-fn snippet_of(body: &str) -> String {
-    let mut end = body.len();
-    let mut truncated = false;
-    for (i, (byte_idx, _ch)) in body.char_indices().enumerate() {
-        if i == SNIPPET_CHAR_LIMIT {
-            end = byte_idx;
-            truncated = true;
-            break;
-        }
-    }
-    let mut snippet = body[..end].to_string();
-    if truncated {
-        snippet.push_str("...");
-    }
-    snippet
 }
 
 /// Edit a message body in a thread (self-edit).
@@ -606,177 +481,4 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     })?;
 
     Ok(())
-}
-
-/// Byte offset of the first fence-aware message header line in raw content.
-///
-/// Iterates line boundaries exactly like `normalize_line_endings` does
-/// (`\n`, `\r\n` and lone `\r` — spec §3.1 / invariant I11), accumulating
-/// RAW byte offsets while applying the fence/header predicates to the
-/// terminator-stripped line. This keeps the byte-offset view consistent
-/// with the normalized view used by `parse_messages`; a `split('\n')` scan
-/// would glue lone-`\r`-terminated lines to their successor and silently
-/// lose the whole preamble (review B1).
-fn first_message_header_offset(content: &str) -> Option<usize> {
-    let bytes = content.as_bytes();
-    let mut open: Option<usize> = None;
-    let mut start = 0usize;
-    loop {
-        // Find the next line boundary: `\n`, `\r\n` or lone `\r`.
-        let mut end = start;
-        while end < bytes.len() && bytes[end] != b'\n' && bytes[end] != b'\r' {
-            end += 1;
-        }
-        // `\n`/`\r` are ASCII: the byte range is a valid char boundary.
-        let line = &content[start..end];
-        if let Some(n) = open {
-            if fence_close_matches(line, n) {
-                open = None;
-            }
-        } else if let Some(n) = fence_open_len(line) {
-            open = Some(n);
-        } else if header_seq(line).is_some() {
-            // Same predicate as the parse side (`header_indices`, review
-            // MJ-1): seq-0 and overflowing-seq H2s are preamble content,
-            // so they never terminate the preamble carry-over range.
-            return Some(start);
-        }
-        // Advance past the line terminator (`\r\n` counts 2 bytes,
-        // lone `\r` / `\n` count 1).
-        if end >= bytes.len() {
-            break;
-        }
-        start = if bytes[end] == b'\r' && end + 1 < bytes.len() && bytes[end + 1] == b'\n' {
-            end + 2
-        } else {
-            end + 1
-        };
-    }
-    None
-}
-
-/// Whether the file content (read through the locked handle) contains legacy
-/// v0.4 message headers (`### #N` lines).
-///
-/// Fence-aware (review mn-4): a `### #N` line inside a fenced code block of
-/// preamble prose is quoted content, not a legacy header trace, so it must
-/// not trigger the unmigrated-thread write refusal.
-fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> {
-    let mut file_ref = file;
-    file_ref.seek(SeekFrom::Start(0)).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file handle validity",
-            String::new(),
-        )
-    })?;
-    let mut content = String::new();
-    file_ref.read_to_string(&mut content).map_err(|e| {
-        PaperworkError::io_ctx(path.to_path_buf(), e, "check file integrity", String::new())
-    })?;
-    let content = normalize_line_endings(&content);
-    // P-3: the fence walk delegates to the shared scanner family. The
-    // legacy pattern is the centralized `LEGACY_HEADER_RE_FMT` (format
-    // layer); the deleted ops-side twin carried the same pattern string.
-    let mut found = false;
-    for_each_outside_fence(&content, |_i, line| {
-        if LEGACY_HEADER_RE_FMT.is_match(line) {
-            found = true;
-            return false; // early stop
-        }
-        true
-    });
-    Ok(found)
-}
-
-/// Read the last seq number from a thread file (within lock).
-///
-/// Reverse-scans the tail for efficiency (O(1) regardless of file size),
-/// spec §5.5:
-/// - buffer = last 64KB + 256B;
-/// - incomplete first line dropped ONLY when `read_start > 0` and the byte
-///   preceding the buffer is not `\n` (R7);
-/// - fence open/close tracking within the buffer: candidate headers inside
-///   an open fence are skipped (R6; the residual limitation of an unknown
-///   fence parity before the buffer start is documented in spec §5.5).
-fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
-    let metadata = file.metadata().map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file handle validity",
-            String::new(),
-        )
-    })?;
-
-    let file_size = metadata.len();
-    if file_size == 0 {
-        return Ok(0);
-    }
-
-    let read_start = file_size.saturating_sub(REVERSE_SCAN_SIZE);
-    let read_len = (file_size - read_start) as usize;
-
-    let mut file_ref = file;
-    file_ref.seek(SeekFrom::Start(read_start)).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file handle validity",
-            String::new(),
-        )
-    })?;
-
-    let mut buffer = vec![0u8; read_len];
-    file_ref.read_exact(&mut buffer).map_err(|e| {
-        PaperworkError::io_ctx(path.to_path_buf(), e, "check file integrity", String::new())
-    })?;
-
-    // Incomplete-first-line rule (R7): only when the buffer does not cover
-    // the whole file.
-    let mut scan: &[u8] = &buffer;
-    if read_start > 0 {
-        let mut prev = [0u8; 1];
-        file_ref
-            .seek(SeekFrom::Start(read_start - 1))
-            .map_err(|e| {
-                PaperworkError::io_ctx(
-                    path.to_path_buf(),
-                    e,
-                    "check file handle validity",
-                    String::new(),
-                )
-            })?;
-        file_ref.read_exact(&mut prev).map_err(|e| {
-            PaperworkError::io_ctx(path.to_path_buf(), e, "check file integrity", String::new())
-        })?;
-        if prev[0] != b'\n' {
-            scan = match buffer.iter().position(|&b| b == b'\n') {
-                Some(pos) => &buffer[pos + 1..],
-                None => &buffer[buffer.len()..],
-            };
-        }
-    }
-
-    let content = String::from_utf8_lossy(scan);
-
-    // Fence-aware scan within the buffer (R6): candidate headers inside an
-    // open fence are skipped. P-3: the fence walk delegates to the shared
-    // scanner family; `content` is normalized first (the scanner splits on
-    // `\n` only, so a raw `\r`-terminated line would keep its carriage
-    // return). The `SEQ_RE` prefilter is gone: `header_seq` is the single
-    // authoritative gate (review n2): seq-0 pseudo-headers and overflowing
-    // seqs never reset `last_seq`, exactly like `header_indices` on the
-    // read path.
-    let content = normalize_line_endings(&content);
-    let mut last_seq = 0u64;
-    for_each_outside_fence(&content, |_i, line| {
-        if let Some(seq) = header_seq(line) {
-            last_seq = seq;
-        }
-        true
-    });
-
-    Ok(last_seq)
 }
