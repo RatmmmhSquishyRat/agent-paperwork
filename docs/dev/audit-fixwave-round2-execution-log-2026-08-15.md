@@ -96,3 +96,37 @@ B-8 语义裁定注记（不改行为，仅钉住）：
 | F4 | 本提交 | 四报告 + 本日志入库 |
 
 （执行日志完。任务 #45 执行 agent，2026-08-15。）
+
+---
+
+## 七、修复轮二登记（2026-08-15 追加，任务 #46 复验阻塞闭环，append-only，未改动第一至六节）
+
+### 阻塞事实
+
+- 任务 #46 复验不放行，唯一阻塞项：F1 批在 `repos/paperwork-core/src/error.rs` 新增的公有常量 `FILE_NOT_UTF8_FIX` 文档注释中，intra-doc link `[`PaperworkError::io_ctx_file_read`]` 指向 `pub(crate)` 私项。
+- 后果：docs gate（`RUSTDOCFLAGS="-D warnings" cargo doc`）报「public documentation links to private item」硬错误；线上 CI run 31883911085 test×3 全红。
+
+### 根因
+
+- 修复波终局门禁清单缺 docs gate：本日志第五节门禁仅含 test + clippy + fmt 三项，未含 `RUSTDOCFLAGS="-D warnings" cargo doc`；而 CI 的 docs 面是独立 gate，本地三项全绿拦不住 rustdoc 硬错误。
+
+### 修复内容（提交 86776db）
+
+- error.rs `FILE_NOT_UTF8_FIX` 文档注释改写：去掉对私项的 intra-doc link，改为纯文本表述（`io_ctx_file_read`，crate-internal），文案语义不变，常量本身与行为零变更。
+- 全仓扫查：公有项文档中无其他指向私项的 intra-doc link；thread_scan.rs 模块头 `//!` 中 5 处 `[`...`]` 链接指向 `pub(super)` 项，属私有模块内部文档，rustdoc 实测零告警，无需处置。
+
+### 四门禁实测（修复后全绿）
+
+| 门禁 | 命令 | 结果 |
+|---|---|---|
+| docs gate | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` | exit 0，零警告 |
+| test | `cargo test --workspace --locked` | **451 全绿**，0 failed |
+| clippy | `cargo clippy --workspace --all-targets --locked -- -D warnings` | 零警告 exit 0 |
+| fmt | `cargo fmt --all --check` | 通过 exit 0 |
+
+### 防复发规则（固化，规则号 FR-2）
+
+- **FR-2（修复波终局门禁四件套）**：凡修复波/紧急修复轮的终局门禁必须同时包含四项：`cargo test --workspace --locked` + `cargo clippy --workspace --all-targets --locked -- -D warnings` + `cargo fmt --all --check` + `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace`；四项全绿方可放行推送。缺任一项视为门禁不成立。
+- 教训登记：修复波终局门禁遗漏 docs gate 导致本地全绿但线上 CI 红，复验轮拦截后紧急修复；后续批次引用本节 FR-2 即可。
+
+（修复轮二登记完。追加：任务 #46 阻塞闭环执行 agent，2026-08-15。修复提交 86776db，本节随 docs 登记提交入库。）
