@@ -8,9 +8,10 @@ use thiserror::Error;
 
 /// Fix hint for file-content read channels whose underlying io failure is a
 /// UTF-8 decode failure (`InvalidData`: binary or UTF-16 content). Shared
-/// verbatim by the core [`PaperworkError::io_ctx_file_read`] constructor and
-/// the CLI-side file-read sites (R2-01, file-channel analogue of the
-/// stdin-channel D6 ruling). Pure ASCII (envelope structure contract, LED-16).
+/// verbatim by the core file-read error constructor (`io_ctx_file_read`,
+/// crate-internal) and the CLI-side file-read sites (R2-01, file-channel
+/// analogue of the stdin-channel D6 ruling). Pure ASCII (envelope structure
+/// contract, LED-16).
 pub const FILE_NOT_UTF8_FIX: &str = "the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)";
 
 /// Unified error type for all paperwork operations.
