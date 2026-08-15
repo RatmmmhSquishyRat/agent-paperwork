@@ -215,7 +215,7 @@
 
 - **Given** 线程共 4 条消息，发送者均非 carol
 - **When** 执行 `paperwork post read standup.post.md --mention carol`
-- **Then** exit 0；`showing: 0/4`（total 为过滤前全量口径，冻结语义）；`window` 字段不显示（空 window 冻结行为，与 v0.5 bdd S-READ-06 一致）；body 为空。
+- **Then** exit 0；`showing: 0/0`（total 为过滤后口径，与 S-READ-07 同口径；冻结基线实测即为 0/0，初稿误写 0/4，按实现收口，fix-ledger A-01）；`window` 字段不显示（空 window 冻结行为，与 v0.5 bdd S-READ-06 一致）；body 为空。
 
 ### S-READ-07 过滤+limit 的 total 口径（rework 补录 Nora ISSUE-m3，对等 v0.5 bdd S-READ-07）
 
@@ -420,7 +420,7 @@
 
 - **Given** `garbage.post.md` 内容非法
 - **When** 执行 `paperwork validate garbage.post.md`
-- **Then** exit 1；`error format:`；example 为 v0.6 形态 `paperwork post send myfile.post.md --author alice --message "hello"`。
+- **Then** exit 1；`error format:`；example 为 v0.6 形态 `paperwork post send myfile --author alice --message "hello"`（与 validate.rs 实际输出逐字一致：example 用无后缀的 `myfile`，初稿误带 `.post.md`，按实现收口，fix-ledger A-02）。
 
 ## 8. 横切场景：路径解析（冻结回归）
 

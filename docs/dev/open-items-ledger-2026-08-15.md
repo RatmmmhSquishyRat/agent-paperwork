@@ -276,3 +276,23 @@
 - 交叉验证（审计实测，PROBE 面）：po 别名、implicit-mention 字段、showing/window 恒显、validate --type、ensure_suffix 三级解析均已在 master 在场；「待合并」依赖条件已消失。
 - backlog（docs/researches/ux-open-items-backlog-2026-08-08.md）本体无「待合并」字样（grep 实证），其 B-01/B-02「供发布轮裁决」状态不受合入影响，裁定原样有效，无需追加。
 - 纪律：本追加不改写第一至七节任何字句；全部裁定内容本身仍成立，仅时态/状态口径刷新（与 S-12 交叉验证结论一致）。
+
+---
+
+## 九、任务 #27 修复波追加（2026-08-15，append-only，未改动第一至八节）
+
+追加依据：深审 A/B 报告（docs/dev/audit-robustness-2026-08-15.md）修复波执行结果；凡修复波判定为「登记不改」者在此落登记点，修复/钉住明细见 docs/dev/fix-ledger-2026-08-15.md。
+
+### LED-15 S-01：crates.io 已发布 0.5.0 与仓库版本语义错配
+- 来源：深审 C 报告 docs/dev/audit-ssot-agentux-2026-08-15.md S-01（crates.io 上 paperwork 0.5.0 对应的是 v0.5 位置参数文法旧形态；仓库 master 已是 v0.6 具名文法 + contacts CRUD，Cargo.toml 仍为 0.5.0 且未发布）
+- 严重度：低（不影响仓库内行为正确性；错配窗口内用户经 cargo install 取到的是旧文法二进制，属发布卫生问题）
+- 状态：开放（登记不改——修复波纪律：发布轮事项不在本轮代码面处置）
+- 处置建议：发布轮一次性闭合——bump 版本（建议 0.6.0，与文法版本对齐）+ CHANGELOG 发布段落 + crates.io 发布 + git tag；发布前不得有「仓库语义 = 0.6、crates.io 语义 = 0.5」的对外口径混淆
+- 负责阶段：发布轮（owner 裁决版本号与发布时机）
+
+### LED-16 D5-io：io 信封嵌入 OS 本地化错误消息文本（非 ASCII 面豁免登记）
+- 来源：深审 A 报告 D5 与任务 #25 根因报告（docs/dev/io-encoding-rootcause-2026-08-15.md）裁定：io 信封 detail 中的 OS 错误消息属「环境面」而非「产品面」，Windows 代码页消息经 lossy 转码后合法 UTF-8 保留；ASCII 契约已收窄为信封结构面（status token/command id/字段名/code/exit_code）纯 ASCII
+- 严重度：低（已裁定保留，仅登记备查）
+- 状态：已裁定（登记不改）
+- 处置：无代码动作——结构面 ASCII 契约由 ascii_output_contract_guard 等守护；io 消息文本按根因报告口径保留，fix-ledger D5 条目销账「登记」终态
+- 负责阶段：无（闭合备查；若未来 owner 裁决全信封纯 ASCII，再立专项）

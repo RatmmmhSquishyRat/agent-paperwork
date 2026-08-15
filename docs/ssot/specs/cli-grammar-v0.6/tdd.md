@@ -176,7 +176,7 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 | `--author` 空值 | S-SEND-18 | `.code(1)`；`error validation:` |
 | 缺 PATH（send） | S-SEND-19 | `.code(2)`；`error usage:` |
 | edit 仅 `--stdin` | S-EDIT-09 | exit 0；正文逐字为 stdin 内容 |
-| read total 口径与空 window | S-READ-06 / S-READ-07 | `showing: 0/4` 无 window 字段；`showing: 20/25`（过滤后口径） |
+| read total 口径与空 window | S-READ-06 / S-READ-07 | `showing: 0/0` 无 window 字段；`showing: 20/25`（两者均为过滤后口径，fix-ledger A-01） |
 | read `--to` 身份值 / read `--author` 迁移 | S-READ-08 / S-READ-09 | 两者均 `.code(2)` usage（F1 显式方向防线；习惯迁移 fix 点名 `--mention`） |
 | `--json` 与 `--plain` 同给 | S-OUT-06 | `.code(2)`；JSON 错误对象 `category:"usage"` |
 | 冻结回归抽查 | v0.5 bdd S-READ-01~03 / S-SUM-01 / S-PATH-* / S-ALIAS-* / S-OUT-01~04 | v0.5 既有对应用例改参数层后断言原样通过（showing/window/implicit-mention/三级解析/别名/三档输出） |

@@ -84,7 +84,7 @@ paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply
 | 参数 | 形态 | 必填 | 说明 |
 |---|---|---|---|
 | `PATH` | 位置参数 | 是 | 线程文件路径；经 ensure_suffix 三级解析（v0.5 spec §5，继承不变） |
-| `--author/-a` | 具名 flag | 是 | 发送者名字（署名）；语义与校验沿用 v0.5 NAME（trim 后为空拒绝 validation；可含空格；不与 profile/contacts 做存在性校验）；不设 `allow_hyphen_values`（名字值无 `-` 开头合法形态，设置反扩大误解析面，F4 复核结论） |
+| `--author/-a` | 具名 flag | 是 | 发送者名字（署名）；语义与校验沿用 v0.5 NAME（trim 后为空拒绝 validation；**单 token 校验：拒绝空格/制表符/换行与括号**，违规 validation exit 1——以实现 `validate_sender` 为准，spec format §5.6；初稿「可含空格」为文档与实现不一致，按实现收口，fix-ledger D7）；不与 profile/contacts 做存在性校验；不设 `allow_hyphen_values`（名字值无 `-` 开头合法形态，设置反扩大误解析面，F4 复核结论） |
 | `--message/-m` | 具名 flag | 与 `--stdin` 二选一 | 消息正文；flag 值直传，以 `-` 开头的正文无需 `--` 边界；clap 属性 `allow_hyphen_values = true`（rework 裁定 F4，impl_plan 步骤(2) 硬性指令） |
 | `--stdin` | 开关 flag | 与 `--message` 二选一 | 从 stdin 读正文（多行大片内容首选通道） |
 | `--reply-to` | 具名 flag | 否 | 回复锚点 seq；format-v2 D2 下为糖衣 flag：值以 `@#N` token 注入正文首行，读取时派生（OQ-4）；指向不存在 seq 静默跳过（沿用 v0.5，已登记 ux-open-items-backlog） |
