@@ -84,7 +84,7 @@ owner 要求（v0.7_feedbacks §一 (2)）：brief 与 post 都应支持「先�
 ### 4.1 Windows 判例（QA BUG-2，os error 33）
 
 - 判例出处：worktree 分支 cli-grammar-v0.6 `repos/paperwork-cli/src/cmd/post.rs` L459-469 注释：Windows 强制字节区间锁下，**跨句柄读取被另一进程锁定的字节区间会即时失败 ERROR_LOCK_VIOLATION（os error 33）**；旧无锁 pre-read 与并发 `thread_send` 竞态导致间歇性丢消息。解法：先取锁（阻塞至写者完成），且**经同一持锁句柄读取**（同文件 L485-487 补充注释）。
-- 对本轮的约束：新补锁的五个写路径一律「开句柄 -> lock_exclusive -> 经持锁句柄读 -> 变更 -> 锁内重写 -> 解锁」，禁止锁外预读。
+- 对本轮的约束：新补锁的五个写路径一律「开句柄 -> lock_exclusive -> 经持锁句柄读 -> 变更 -> 锁内重写 -> 解锁」，禁止锁外预读。（**口径注明，2026-08-15 追加，任务 #45 F3 / INV-02 / LED-08**：本句「五个写路径」为调研时点口径——contacts remove/update 合记一行「本轮新增」；下游实施落地后实际补锁写路径为 **六条**：contacts_add / contacts_remove / contacts_update / brief_add_entry / brief_remove_entry / edit_profile（contacts remove 与 update 拆分为两个独立函数并各自带锁）。后续引用以六写路径口径为准。）
 - fast fail 语义：`lock_exclusive` 获取本身失败（IO/锁错误）即落 `IoContext` 信封 exit 1，fix 沿用既有文案「another process may hold the lock; retry shortly」（thread.rs L97），不做无锁降级写入。
 
 ### 4.2 崩溃窗口判例
@@ -149,6 +149,8 @@ owner 要求（v0.7_feedbacks §一 (2)）：brief 与 post 都应支持「先�
 | 锁失败重试/超时机制 | 无既有先例（thread 路径即阻塞 + IO 错误 fast fail）；引入超时参数扩大 flag 面，违背最小变更；owner 指令即「锁定阻塞 + fast fail」两态 |
 | brief 选择性详情用位置参数或 seq 序号 | 违背 v0.6 规则 1（位置参数仅剩 PATH）；条目无 seq 概念，键为存储标题，与 brief remove 既有 `--entry-title` 同构复用成本最低 |
 | temp+rename 原子重写 | format-v2 §5.7 判例已接受崩溃窗口且明言「后续加固方向，本次不做」；本轮保持一致，避免五处写路径行为分叉 |
+
+> **口径注明（2026-08-15 追加，任务 #45 F3 / INV-02 / LED-08）**：本节及第 4.1 节中「五处/五个写路径」为调研时点口径（contacts remove/update 合记一行）；下游实施落地后实际补锁写路径为六条（contacts_add / contacts_remove / contacts_update / brief_add_entry / brief_remove_entry / edit_profile），六路径均遵循 4.1 节「开句柄 -> lock_exclusive -> 经持锁句柄读 -> 变更 -> 锁内重写 -> 解锁」模板，行为未分叉；后续引用以六写路径口径为准。
 
 ## 7. 冻结边界与 additive 关系核对
 

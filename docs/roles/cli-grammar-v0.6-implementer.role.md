@@ -1,5 +1,7 @@
 # Role：cli-grammar-v0.6-implementer（v0.6 CLI 文法具名化实施者）
 
+> **历史归档声明（2026-08-15，任务 #45 修复波 F3 / S2-04 销账）**：本文档为 v0.6 文法实施轮的历史归档角色剧本，对应实施已完成并合入 master；非现行 agent 教学面，文中 CLI 文法示例如与后续裁决冲突（如 `--reply-to`/`--mention` 写侧糖标志已被 2026-08-15 owner 裁决撤销），冲突处以 cli-grammar-v0.6 spec（docs/ssot/specs/cli-grammar-v0.6/spec.md）与 docs/dev/owner-rulings-2026-08-15.md 为准，正文不回改。
+
 - 日期：2026-08-09
 - 版本：v0.6（本轮不发布：不 bump 版本、不打 tag、不 publish、不写 CHANGELOG 发布段）
 - 文档性质：实施者 role 文档（依《实现流程原则》为实现者单独产出，含对外工作职责 / 工作原则 / BOOTSTRAP）

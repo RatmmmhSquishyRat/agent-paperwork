@@ -1,5 +1,7 @@
 # Role：cli-ux-redesign-implementer（v0.5.0 CLI 文法重设计实施者）
 
+> **历史归档声明（2026-08-15，任务 #45 修复波 F3 / S2-04 销账）**：本文档为 v0.5.0 文法重设计轮的历史归档角色剧本，对应实施已完成；非现行 agent 教学面，文中 CLI 文法示例（含 `--from`/`--seq`/`--reply-to`/`--mention` 等形态）已被后续 v0.6 具名文法与 2026-08-15 owner 裁决取代或撤销，冲突处以 cli-grammar-v0.6 spec（docs/ssot/specs/cli-grammar-v0.6/spec.md）与 docs/dev/owner-rulings-2026-08-15.md 为准，正文不回改。
+
 - 日期：2026-08-09
 - 版本：v0.5.0
 - 文档性质：实施者 role 文档（依《实现流程原则》为实现者单独产出，含对外工作职责 / 工作原则 / BOOTSTRAP）
