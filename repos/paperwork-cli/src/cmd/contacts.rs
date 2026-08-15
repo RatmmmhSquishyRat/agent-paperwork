@@ -240,6 +240,12 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
 /// Non-UTF-8 destination content fails `read_to_string` (InvalidData) and
 /// therefore falls into the SECOND probe level "is not readable" — by
 /// probe order, readable is defined as decodable to a string (Ray S-2).
+///
+/// B-7 cost semantics (review S note, task #47): the probe is a FULL
+/// read-and-decode of the destination with NO size guard (measured
+/// ~123ms @10MB, audit-robustness-round2 A-09); it stays non-blocking
+/// and advisory-only. If a hard cost ceiling is ever needed, that is a
+/// separate ruling (open-items ledger LED-25).
 fn destination_advisory(contacts_path: &std::path::Path, destination: &str) -> Option<String> {
     let resolved = paperwork_core::ops::contacts::resolve_contact_path(contacts_path, destination);
     if !resolved.exists() {

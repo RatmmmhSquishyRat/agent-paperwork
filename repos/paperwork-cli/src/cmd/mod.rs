@@ -32,6 +32,14 @@ pub struct Context {
 /// report not-found when all three stages miss.
 pub fn ensure_suffix(path: PathBuf, suffix: &str) -> PathBuf {
     // Stage 1: original path exists as a file -> use as-is.
+    //
+    // B-5 platform dependency (review S-2 note): on Windows, `is_file()`
+    // returns false for a bare reserved device name such as `CON` or `NUL`
+    // (it is a device, not a file), so stage 1 misses and the name falls
+    // through to suffix normalization (`CON` -> `CON.post.md`), sealing the
+    // device surface. The behaviour anchor is the cli_integration test
+    // `reserved_device_names_are_sealed_by_suffix_normalization`; do not
+    // "simplify" stage 1 without re-checking that anchor.
     if path.is_file() {
         return path;
     }

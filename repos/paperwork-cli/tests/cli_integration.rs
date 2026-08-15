@@ -5530,6 +5530,22 @@ fn large_thread_2500_messages_send_read_roundtrip() {
         .assert()
         .success()
         .stdout(predicate::str::contains("#1 alice"));
+    // midpoint spot-check (review S-3): guards against window/offset-class
+    // parse defects that head+tail sampling alone could miss.
+    cmd()
+        .args([
+            "post",
+            "read",
+            path.to_str().unwrap(),
+            "--from",
+            "1250",
+            "--to",
+            "1250",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#1250 alice"))
+        .stdout(predicate::str::contains("bulk"));
     cmd()
         .args([
             "post",
@@ -5584,6 +5600,50 @@ fn h1_leniency_missing_and_duplicate_h1_read_cleanly() {
         .stdout(predicate::str::contains("1 messages"));
     cmd()
         .args(["validate", double_h1.to_str().unwrap(), "--type", "post"])
+        .assert()
+        .code(0);
+}
+
+/// B-3: emoji / combining-character roundtrip pin — senders and body
+/// tokens carrying emoji or combining marks (U+0301) round-trip verbatim:
+/// the CLI applies NO Unicode normalization (NFC/NFD) to sender, body, or
+/// mention tokens (probes E-03/E-04/E-05; registered in the open-items
+/// ledger section 17 closure row, task #47).
+#[test]
+fn emoji_and_combining_chars_roundtrip_without_normalization() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("emoji.post.md");
+
+    // Emoji sender + body carrying a combining acute accent (decomposed
+    // form "cafe" + U+0301) and a matching @mention token.
+    cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "🦊fox",
+            "--title",
+            "Emoji Thread",
+            "--message",
+            "cafe\u{0301} break cc @cafe\u{0301}",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seq: 1"));
+
+    // Sender and the decomposed combining sequence read back byte-verbatim
+    // (no NFC collapse to "café").
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("🦊fox"))
+        .stdout(predicate::str::contains("cafe\u{0301}"));
+
+    // validate passes on the non-ASCII content.
+    cmd()
+        .args(["validate", path.to_str().unwrap(), "--type", "post"])
         .assert()
         .code(0);
 }
