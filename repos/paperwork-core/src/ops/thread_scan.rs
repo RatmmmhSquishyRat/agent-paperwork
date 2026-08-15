@@ -308,7 +308,11 @@ pub(super) fn read_last_seq_locked(file: &File, path: &Path) -> Result<u64> {
 /// applies the R7 first-line-drop rule plus the R6 fence-aware scan via
 /// [`read_tail_scan_buffer`]. Returns `None` when no fence-aware header
 /// with that seq appears in the buffer (missing seq, or a target beyond the
-/// 64KB + 256B window — the residual limitation documented in spec §5.5).
+/// 64KB + 256B window — spec §5.5 only mandates the tail-scan window for
+/// SEQ resolution; reusing the same window for the sender lookup is an
+/// implementation decision, and the resulting limitation on large threads
+/// is disclosed in the CHANGELOG — Ultra Review F5 wording fix, backported
+/// from wip 8539a08).
 pub(super) fn find_message_sender_locked(
     file: &File,
     path: &Path,

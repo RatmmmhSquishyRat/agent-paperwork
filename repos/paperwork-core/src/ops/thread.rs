@@ -579,16 +579,19 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
 
 /// Look up the sender of message `seq` in a thread file (NEW-12).
 ///
-/// Bounded reverse tail scan (spec §5.5) instead of a whole-file parse:
-/// the caller only needs one header's sender field, so the same 64KB +
-/// 256B window the send path already scans is reused. Runs under an
-/// exclusive lock; every exit path releases it explicitly (P-1 master
-/// lock stance).
+/// Bounded reverse tail scan instead of a whole-file parse: the caller
+/// only needs one header's sender field, so the same 64KB + 256B window
+/// spec §5.5 mandates for SEQ resolution (and the send path already
+/// scans) is reused — an implementation decision, not a spec mandate for
+/// the sender lookup itself (Ultra Review F5 wording fix, backported from
+/// wip 8539a08). Runs under an exclusive lock; every exit path releases
+/// it explicitly (P-1 master lock stance).
 ///
 /// Returns `Ok(None)` when the file carries no fence-aware header with
 /// that seq inside the tail window (missing seq, or a target beyond the
-/// window — the residual limitation documented in spec §5.5); callers
-/// treat it like a missing target. `Err` only for I/O / lock failures.
+/// window — a limitation on legitimately large threads, disclosed in the
+/// CHANGELOG); callers treat it like a missing target. `Err` only for
+/// I/O / lock failures.
 pub fn find_message_sender(path: &Path, seq: u64) -> Result<Option<String>> {
     let file = OpenOptions::new().read(true).open(path).map_err(|e| {
         PaperworkError::io_ctx(

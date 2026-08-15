@@ -160,6 +160,10 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
         } => {
             // Default title derives from the original path argument
             // (spec section 5.7: strip .post.md, else strip .md, else keep as-is).
+            // Ultra Review F2 (backported from wip ffb7a54): the suffix list is the
+            // §5.7 title chain only — the historical superset also stripped
+            // `.profile.md`, over-stripping degenerate inputs (x.profile.md used as
+            // a post path derives title `x.profile` per spec, not `x`).
             let default_title = default_title(&path);
             let path = ensure_suffix(path, ".post.md");
 
@@ -526,9 +530,10 @@ fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Default preamble title (spec section 5.7): strip the managed-file
-/// suffixes (`.profile.md`, `.post.md`, `.md`) from the file name, else
-/// keep the file name as-is.
+/// Default preamble title (spec section 5.7): strip `.post.md` first,
+/// then `.md`, else keep the file name as-is — the §5.7 title chain
+/// (Ultra Review F2, backported from wip ffb7a54; the historical superset
+/// also stripped `.profile.md` and over-stripped degenerate inputs).
 ///
 /// NEW-3 (P-6): the suffix stripping runs on the native `OsStr` so a
 /// non-Unicode file name is never rewritten by a `to_string_lossy()`
@@ -545,7 +550,9 @@ fn default_title(path: &Path) -> String {
         .unwrap_or_else(|| path.as_os_str().to_os_string());
 
     let mut stem = name;
-    for suffix in [".profile.md", ".post.md", ".md"] {
+    // Spec §5.7 title chain (Ultra Review F2): `.post.md` first, then
+    // `.md`; anything else is kept as-is.
+    for suffix in [".post.md", ".md"] {
         if let Some(base) = crate::cmd::os_strip_suffix(&stem, OsStr::new(suffix)) {
             stem = base;
             break;

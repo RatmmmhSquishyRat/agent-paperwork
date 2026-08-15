@@ -44,6 +44,11 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Docs
+        # Ultra Review F3 (backported from wip 8539a08): RUSTDOCFLAGS -D
+        # warnings makes the gate actually fail on rustdoc warnings
+        # (cargo doc alone does not propagate them).
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --workspace
 
   smoke:
@@ -74,7 +79,10 @@ jobs:
 
           # Post (first send creates the thread and writes the preamble)
           $BIN post send standup --title "Test" --author alice --message "Hello world" | grep "^ok post.send"
-          $BIN post send standup --author bob --reply-to 1 --mention alice --message "Reply" | grep "^ok post.send"
+          # v0.6 owner ruling (2026-08-15): write-side --reply-to/--mention
+          # sugar flags are withdrawn; reply/mention semantics are written
+          # as body tokens @#N / @name (spec §3.1).
+          $BIN post send standup --author bob --message "@#1 Reply @alice" | grep "^ok post.send"
           $BIN post read standup | grep "^ok post.read"
           $BIN post read standup --json | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='ok'"
           $BIN post summary standup | grep "^ok post.summary"
@@ -173,7 +181,10 @@ jobs:
 
           # Post (first send creates the thread and writes the preamble)
           & $BIN post send standup --title "Test" --author alice --message "Hello world" | Assert-Contains "^ok post.send" "post send (create)"
-          & $BIN post send standup --author bob --reply-to 1 --mention alice --message "Reply" | Assert-Contains "^ok post.send" "post send (reply)"
+          # v0.6 owner ruling (2026-08-15): write-side --reply-to/--mention
+          # sugar flags are withdrawn; reply/mention semantics are written
+          # as body tokens @#N / @name (spec §3.1).
+          & $BIN post send standup --author bob --message "@#1 Reply @alice" | Assert-Contains "^ok post.send" "post send (reply)"
           & $BIN post read standup | Assert-Contains "^ok post.read" "post read"
           & $BIN post summary standup | Assert-Contains "^ok post.summary" "post summary"
           & $BIN post edit standup --author bob --seq 2 --message "Edited reply" | Assert-Contains "^ok post.edit" "post edit"

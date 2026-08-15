@@ -284,9 +284,10 @@ pub fn resolve_contact_path(contacts_path: &Path, entry_path: &str) -> PathBuf {
 /// Derive the link label for a profile path (spec §7.3, R11).
 ///
 /// Reads the target profile's H1 as the label; on any failure falls back to
-/// the file-name stem via the shared [`crate::format::strip_known_suffix`]
-/// (`.profile.md` first, then `.post.md`, then `.md`, else keep the
-/// original name). Resolution is delegated to [`resolve_contact_path`]
+/// the file-name stem via the §7.3 R11 label chain
+/// [`crate::format::strip_label_suffix`] (`.profile.md` first, then `.md`,
+/// else keep the original name). Resolution is delegated to
+/// [`resolve_contact_path`]
 /// (as-given first, then contacts-directory-relative).
 fn derive_label(contacts_path: &Path, profile_path: &str) -> String {
     let as_given = Path::new(profile_path);
@@ -298,10 +299,14 @@ fn derive_label(contacts_path: &Path, profile_path: &str) -> String {
         }
     }
 
-    // Fallback: file-name stem (P-3: shared `strip_known_suffix`).
+    // Fallback: file-name stem per spec §7.3 R11 (`.profile.md` first,
+    // then `.md`). Ultra Review F2 (backported from wip ffb7a54): the
+    // label chain is its own thin wrapper ([`strip_label_suffix`]) — the
+    // historical `strip_known_suffix` superset over-stripped post-shaped
+    // entry names.
     let file_name = as_given
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| profile_path.to_string());
-    crate::format::strip_known_suffix(&file_name).to_string()
+    crate::format::strip_label_suffix(&file_name).to_string()
 }
