@@ -11,10 +11,13 @@
 //! `Some(ThreadMeta)`; the ops layer guards on in-lock file size (spec section 5.7,
 //! OQ-1: ignored silently when the file is non-empty).
 //!
-//! Reference state is body-text only (owner ruling D2): `--reply-to N` /
-//! `--mention a,b` are sugar flags whose values are injected into the body
-//! as `@#N` / `@name` tokens before calling core (spec section 11 OQ-4); the
-//! `--to` / `--participants` flags are deleted (D1/D2).
+//! Reference state is body-text only (owner ruling D2): the `--to` /
+//! `--participants` flags are deleted (D1/D2). The write-side sugar flags
+//! `--reply-to` / `--mention` are REVOKED as well (2026-08-15 owner
+//! ruling, spec §3.1): reply/mention semantics are expressed by the agent
+//! writing `@#N` / `@name` tokens directly in the message body; the CLI
+//! writes the body verbatim (no injection) and the read-side derive
+//! mechanism recovers reply/mention relations from the body text.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -46,7 +49,7 @@ pub fn command_id(args: &PostArgs) -> &'static str {
 enum PostCommand {
     /// Send a message to a post thread (first send creates the thread)
     #[command(
-        after_help = "Examples:\n  paperwork post send standup.post.md --author alice --message \"Parser module is 80% done.\"\n  paperwork post send standup.post.md -a alice -m \"Tests merged.\" --reply-to 2 --mention bob\n  echo \"multi-line body\" | paperwork post send standup.post.md --author alice --stdin\n  paperwork post send standup.post.md --author alice --message \"-starts with dash is fine\"\n  paperwork post send new-topic.post.md --author alice --message \"kickoff\" --title \"New Topic\"\n  # --title (thread title, honoured on first write only, silently ignored on existing threads);\n  # --reply-to / --mention are sugar flags: their values are injected into the body as @#N / @name tokens;\n  # a body that looks like a flag (e.g. literal \"--stdin\") is taken verbatim after -m/--message; use the equals form -m=\"--stdin\" / --message=\"--stdin\" to make the intent explicit."
+        after_help = "Examples:\n  paperwork post send standup.post.md --author alice --message \"Parser module is 80% done.\"\n  paperwork post send standup.post.md -a alice -m \"Tests merged.\"\n  paperwork post send standup.post.md --author bob --message \"@#2 Sure, @alice I'll take it.\"\n  echo \"multi-line body\" | paperwork post send standup.post.md --author alice --stdin\n  paperwork post send standup.post.md --author alice --message \"-starts with dash is fine\"\n  paperwork post send new-topic.post.md --author alice --message \"kickoff\" --title \"New Topic\"\n  # --title (thread title, honoured on first write only, silently ignored on existing threads);\n  # reply/mention semantics live in the body itself: write an @#N token (reply to seq N) or @name tokens (mentions) directly in the message;\n  # a body that looks like a flag (e.g. literal \"--stdin\") is taken verbatim after -m/--message; use the equals form -m=\"--stdin\" / --message=\"--stdin\" to make the intent explicit."
     )]
     Send {
         /// Path to the post thread file
@@ -70,16 +73,6 @@ enum PostCommand {
         /// Read body from stdin
         #[arg(long)]
         stdin: bool,
-
-        /// Seq number being replied to (injected as an `@#N` body token,
-        /// spec section 11 OQ-4)
-        #[arg(long = "reply-to")]
-        reply_to: Option<u64>,
-
-        /// Names mentioned (comma-separated; injected as `@name` body
-        /// tokens, spec section 11 OQ-4)
-        #[arg(long = "mention", value_delimiter = ',')]
-        mention: Vec<String>,
 
         /// Thread title for the preamble on first write
         /// (default: path with .post.md / .md suffix stripped)
@@ -163,8 +156,6 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
             author,
             message,
             stdin,
-            reply_to,
-            mention,
             title,
         } => {
             // Default title derives from the original path argument
@@ -203,62 +194,26 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                 .into());
             }
 
-            // Reject --reply-to 0 up front (review n4): seq numbers start at
-            // 1 (spec §5.3), so 0 can never reference an existing message.
-            if reply_to == Some(0) {
-                return Err(paperwork_core::PaperworkError::Validation {
-                    message: "reply-to must be >= 1".to_string(),
-                    fix: "pass the seq number of an existing message (seq numbers start at 1)"
-                        .to_string(),
-                    example: format!(
-                        "paperwork post send {} --author alice --reply-to 1 --message \"Hello\"",
-                        path.display()
-                    ),
-                }
-                .into());
-            }
-
-            // Clean the --mention list first (trim each segment, drop empty
-            // segments so "alice, bob" and trailing commas are legal —
-            // review n3), then validate every surviving value at the flag
-            // layer (review MJ-2): values are injected verbatim as `@name`
-            // body tokens, so shapes that the spec section 5.4 derivation
-            // would silently mangle or drop are rejected up front instead
-            // of writing corrupted references.
-            let mut mentions = clean_list(mention);
-            for value in &mentions {
-                validate_mention_value(value, &author)?;
-            }
-
-            // Reply carries an implicit @: auto-add the original sender to
-            // the mention list (boundaries unchanged: self-reply, already
-            // listed, and missing seq never trigger). NEW-12: the lookup is
-            // a bounded tail scan (`find_message_sender`, spec §5.5) instead
-            // of a whole-file `thread_read` — the send path tail-scans the
-            // same file again inside its lock, so the double read is gone.
-            // Missing file / missing seq stay silent here (no implicit
-            // mention) and surface later exactly like before.
+            // Implicit mention is derived from the BODY TOKENS (2026-08-15
+            // owner ruling; the write-side sugar flags are revoked): an `@#N`
+            // reply reference in the body resolves to the original sender via
+            // the bounded tail scan (`find_message_sender`, spec §5.5); the
+            // sender is reported unless it is the author itself or already
+            // `@`-mentioned explicitly in the body (v0.5 boundaries frozen,
+            // S-SEND-10b/S-SEND-11). The lookup is advisory and read-only:
+            // a missing file / missing seq stays silent, and the body is
+            // written exactly as given (no injection).
             let mut implicit_mention: Option<String> = None;
-            if let Some(reply_seq) = reply_to {
+            if let Some(reply_seq) = paperwork_core::format::thread::derive_reply_to(&body) {
                 if let Ok(Some(original_sender)) =
                     paperwork_core::ops::thread::find_message_sender(&path, reply_seq)
                 {
-                    if !mentions.contains(&original_sender) && original_sender != author {
-                        mentions.push(original_sender.clone());
+                    let explicit = paperwork_core::format::thread::derive_mentions(&body, &author);
+                    if !explicit.contains(&original_sender) && original_sender != author {
                         implicit_mention = Some(original_sender);
                     }
                 }
             }
-            // Deduplicate mention tokens (first occurrence wins). NEW-10:
-            // the shared `dedup_preserve_order` (HashSet+Vec) runs in O(n)
-            // instead of the historical O(n²) `Vec::contains` loop — this
-            // was the last remaining inline dedup site.
-            let mentions = paperwork_core::format::dedup_preserve_order(mentions);
-
-            // Reference state lives in the body text only (D2): inject
-            // `@#N` / `@name` tokens before calling core (OQ-4). The 64KB
-            // cap is then enforced by core on the final body.
-            let body = inject_reference_tokens(&body, reply_to, &mentions);
 
             // Preamble metadata: the CLI always passes Some(meta); the ops
             // layer writes it only when the file is empty inside the lock
@@ -599,76 +554,6 @@ fn default_title(path: &Path) -> String {
 
     stem.into_string()
         .unwrap_or_else(|os| os.to_string_lossy().into_owned())
-}
-
-/// Trim each segment of a comma-separated list and drop empty segments.
-fn clean_list(values: Vec<String>) -> Vec<String> {
-    values
-        .into_iter()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .collect()
-}
-
-/// Validate a single `--mention` flag value (review MJ-2).
-///
-/// Each value is injected verbatim as an `@name` body token (spec section 11 OQ-4)
-/// and must survive the spec section 5.4 derivation unchanged:
-/// - non-empty;
-/// - no whitespace / `@` / `(` / `)` (the token scan would truncate it);
-/// - not `#<pure digits>` (that shape derives as a reply reference, and the
-///   structured channel for replies is `--reply-to`);
-/// - not the sender itself (self-mentions are silently dropped).
-fn validate_mention_value(value: &str, from: &str) -> anyhow::Result<()> {
-    let bad_chars = value
-        .chars()
-        .any(|c| c.is_whitespace() || c == '@' || c == '(' || c == ')');
-    let reply_shaped = value
-        .strip_prefix('#')
-        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
-
-    let reason = if value.is_empty() {
-        Some("it is empty")
-    } else if bad_chars {
-        Some("it contains whitespace, '@' or parentheses")
-    } else if reply_shaped {
-        Some("it is a reply reference shape (#<seq>), not a mention")
-    } else if value == from {
-        Some("it mentions the sender itself")
-    } else {
-        None
-    };
-
-    match reason {
-        None => Ok(()),
-        Some(reason) => Err(paperwork_core::PaperworkError::Validation {
-            message: format!("invalid --mention value '{}': {}", value, reason),
-            fix: "mention values must be non-empty single tokens without whitespace, '@' or parentheses; use --reply-to N for reply references; do not mention the sender itself".to_string(),
-            example: format!("paperwork post send myfile --author {} --mention bob --message \"Hello\"", from),
-        }
-        .into()),
-    }
-}
-
-/// Inject reference tokens into the body head (spec section 11 OQ-4, D2).
-///
-/// `--reply-to N` yields `@#N`; each mention yields `@name`. All tokens sit
-/// on a single first line separated by single spaces, followed by a blank
-/// line, then the original body - so the spec section 5.4 derivation rules can
-/// recover reply-to and mentions from the persisted body text.
-fn inject_reference_tokens(body: &str, reply_to: Option<u64>, mentions: &[String]) -> String {
-    let mut tokens: Vec<String> = Vec::new();
-    if let Some(seq) = reply_to {
-        tokens.push(format!("@#{}", seq));
-    }
-    for name in mentions {
-        tokens.push(format!("@{}", name));
-    }
-    if tokens.is_empty() {
-        body.to_string()
-    } else {
-        format!("{}\n\n{}", tokens.join(" "), body)
-    }
 }
 
 /// Resolve body from the --message flag or --stdin flag.

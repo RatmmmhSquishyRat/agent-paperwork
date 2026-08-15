@@ -220,7 +220,9 @@ fn missing_subcommand_message() -> String {
 /// v0.6: required values are named flags. Unknown-argument errors carry
 /// migration teaching; a suspected body value starting with '-' is guided
 /// to the `--message` flag (allow_hyphen_values), the `--` boundary form
-/// is retired.
+/// is retired. The revoked write-side sugar flags `--reply-to`/`--mention`
+/// (2026-08-15 owner ruling, spec §3.1) teach the body-direct `@#N` /
+/// `@name` token form; the read-side filters of the same names stay valid.
 fn usage_fix(err: &clap::Error, command: &str) -> String {
     let base = "required values are named flags (--author/--message for post send/edit); see the canonical example below";
     let unknown = extract_unknown_argument(err);
@@ -234,6 +236,17 @@ fn usage_fix(err: &clap::Error, command: &str) -> String {
         ),
         Some(tok) if tok.starts_with("--") && command == "post.read" => format!(
             "{}; this flag is not recognized by post read; its filters are --from/--to/--mention/--reply-to/--limit",
+            base
+        ),
+        // Revoked write-side sugar flags (2026-08-15 owner ruling, spec
+        // §3.1; bdd S-SEND-22/23, S-EDIT-10): reply/mention semantics are
+        // expressed in the message body itself as `@#N` / `@name` tokens.
+        Some(tok) if tok == "--reply-to" && matches!(command, "post.send" | "post.edit") => format!(
+            "{}; --reply-to was removed from write commands (owner ruling 2026-08-15); write the reply reference into the message body itself as an @#N token (e.g. --message \"@#2 Sure\")",
+            base
+        ),
+        Some(tok) if tok == "--mention" && matches!(command, "post.send" | "post.edit") => format!(
+            "{}; --mention was removed from write commands (owner ruling 2026-08-15); write mentions into the message body itself as @name tokens (e.g. --message \"@carol ping\")",
             base
         ),
         // Long unknown flag (--from as identity, pre-v0.6 leftovers, ...):
