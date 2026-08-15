@@ -2764,7 +2764,10 @@ fn post_send_reply_token_no_injection_dedup() {
         .assert()
         .success();
 
-    // Reply + explicit mention of the same sender: exactly the given body
+    // Reply + double explicit mention of the same sender: exactly the given
+    // body. With the injection pipeline revoked the former "dedup" property
+    // is now falsifiable verbatim pass-through: the two @alice tokens the
+    // agent wrote must survive as exactly two on disk (Ray S-4).
     cmd()
         .args([
             "post",
@@ -2773,15 +2776,15 @@ fn post_send_reply_token_no_injection_dedup() {
             "--author",
             "bob",
             "--message",
-            "@#1 @alice also this",
+            "@#1 @alice @alice also this",
         ])
         .assert()
         .success();
 
     let content = std::fs::read_to_string(dir.path().join("dedup.post.md")).unwrap();
     assert!(content.contains("@#1 follow-up"));
-    assert!(content.contains("@#1 @alice also this"));
-    assert_eq!(content.matches("@alice").count(), 1);
+    assert!(content.contains("@#1 @alice @alice also this"));
+    assert_eq!(content.matches("@alice").count(), 2);
 }
 
 #[test]
@@ -3772,9 +3775,11 @@ fn short_form_whitelist_is_exact() {
         "root shorts must be exactly {{-q, -h, -V}}"
     );
 
-    // Negative probes: bdd S-SHORT-02 full 26-flag no-short-form list
-    // (contacts CRUD round: built out from the former 6 one-shot probes,
-    // spec §4 full table + --reply-to/--mention; --new-profile probed with
+    // Negative probes: bdd S-SHORT-02 narrowed no-short-form enumeration
+    // (24 flags after the 2026-08-15 owner ruling revoked the write-side
+    // sugar flags; the enumeration is the source of truth, no hardcoded
+    // total — read-side --reply-to/--mention filter probes retained,
+    // send-side probes removed with the flags; --new-profile probed with
     // both -N and -w typo-style shorts). No flag outside the whitelist may
     // gain a short form.
     let dir = TempDir::new().unwrap();
@@ -3864,18 +3869,6 @@ fn short_form_whitelist_is_exact() {
         vec!["post", "read", path.to_str().unwrap(), "-j"],
         // --plain
         vec!["post", "read", path.to_str().unwrap(), "-P"],
-        // --reply-to (post send side)
-        vec![
-            "post",
-            "send",
-            path.to_str().unwrap(),
-            "--author",
-            "a",
-            "--message",
-            "m",
-            "-r",
-            "1",
-        ],
         // --reply-to (post read side, completeness review Ray m-1)
         vec!["post", "read", path.to_str().unwrap(), "-r", "1"],
         // --mention (post read side)

@@ -189,6 +189,7 @@ R1(锁 helper) -> R2(contacts 三写路径) / R3(brief/profile 补锁) -> R4(CLI
 - **文件**：`docs/reviews/v0.6-owner-rulings-review-{实施完成日期}.md`
 - **内容**：独立 agent 实测：撤销面（send/edit 传入该两 flag 落 usage exit 2 + 迁移教学文案）、正文 @语义往返（写入 -> read 过滤命中 -> implicit-mention 派生）、读侧过滤器冻结回归（--mention/--reply-to 过滤、无短形式）、advisory 面（触发/不触发/三形态 + JSON key + 永不 exit≠0）、黄金快照重冻 diff 核验、ASCII 契约抽测。
 - **依赖**：O4 后执行；不得由 impl agent 自评（MainAgent工作编排.md）。
+- 〔偏离裁定登记（编排层裁定，任务 #37 修复轮补登；销账完整性评审 I-1 / 影响面评审 W-3）〕实际执行中 O5 批次号改挂 CHANGELOG Unreleased + 执行日志（72c85ac + 补录 b9b059c），本步 QA 交付由编排层裁定以「任务 #37 Terry 验证报告 + 三维评审三报告」承载：docs/dev/rulings-verification-2026-08-15.md、docs/reviews/rulings-review-{completeness,correctness,impact}-2026-08-15.md（四份均已提交入库）；承载映射表全文见 docs/dev/rulings-execution-log-2026-08-15.md「O5 偏离裁定登记」节。
 
 ### 本批依赖图
 

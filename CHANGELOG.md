@@ -11,7 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added — contacts destination advisory (2026-08-15 owner ruling, task #36 O2)
 
-- `contacts add` / `contacts update` now run a cheap, non-blocking advisory probe on the destination after the write succeeds: when the destination profile does not exist, is not readable, or is not a valid profile file, the write still completes with exit 0 and the ok envelope gains a single-line pure-ASCII `advisory` field (`destination '<P>' does not exist` / `is not readable` / `is not a valid profile file`), carried under the same key in the default and `--json` output. Destination problems never change the exit code and introduce no new failure path; valid destinations produce no field (output protocol is add-only). Version discipline unchanged: no bump, no tag, no publish (spec §7 rules 4/6); crate version stays 0.5.0.
+- `contacts add` / `contacts update` now run a cheap, non-blocking advisory probe on the destination after the write succeeds: when the destination profile does not exist, is not readable, or is not a valid profile file, the write still completes with exit 0 and the ok envelope gains a single-line `advisory` field (wording template pure ASCII; the destination is echoed verbatim as given, so the whole line is ASCII only when the path is ASCII — Ray S-1 wording-scope narrowing) (`destination '<P>' does not exist` / `is not readable` / `is not a valid profile file`), carried under the same key in the default and `--json` output. Destination problems never change the exit code and introduce no new failure path; valid destinations produce no field (output protocol is add-only). Version discipline unchanged: no bump, no tag, no publish (spec §7 rules 4/6); crate version stays 0.5.0.
 
 ### Added — write-side injection guardrails (P-2 batch)
 
@@ -40,9 +40,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - `ops/thread.rs` is split into `thread.rs` (write side), `thread_read.rs` (read side), and `thread_scan.rs` (byte-level scans); the public re-export surface (`paperwork_core::ops::thread::*`) is unchanged (T5).
 - `post send --reply-to` resolves the original sender via a bounded tail scan (`find_message_sender`) instead of a whole-file re-read, removing the double read on the send path; a missing seq stays silent exactly like before (NEW-12).
+  - 〔2026-08-15 owner-ruling correction, task #36〕 the send-side `--reply-to` sugar flag has since been **revoked** — see the `Removed — write-side sugar flags` section above. The reply reference now lives in the message body as an `@#N` token written by the agent; the bounded tail-scan optimization survives as-is, now serving the body-token-driven implicit-mention derivation (docs/dev/owner-rulings-2026-08-15.md, ruling 1).
 - `post edit` rewrites only from the last message header when the on-disk region already matches the canonical serialization, falling back to a full rewrite otherwise; both paths produce byte-identical files (NEW-8).
 - `hash_file` now streams the file in 64KB chunks instead of loading it whole; the SHA-256 digest is bit-identical (NEW-7), and hex encoding runs in a single pass (NEW-11).
 - The last inline mention dedup loop (`post send --mention`) moved onto the shared order-preserving `dedup_preserve_order` helper, matching `thread_summary` participants and `derive_mentions` (NEW-10).
+  - 〔2026-08-15 owner-ruling correction, task #36〕 the send-side `--mention` flag and its entire dedup pipeline have since been **deleted** with the sugar-flag revocation — see the `Removed — write-side sugar flags` section above. The code surface this entry describes no longer exists in the unreleased state; mentions are now `@name` tokens written directly into the body, persisted verbatim, with the read-side derive deduplicating (docs/dev/owner-rulings-2026-08-15.md, rulings 1/3).
 
 ### Changed — CI (P-8 batch)
 

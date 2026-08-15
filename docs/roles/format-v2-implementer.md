@@ -1,5 +1,7 @@
 # Role: Format v2 Implementer（v0.5 "Format Renewal" 实现者）
 
+> **归档声明（2026-08-15，任务 #37 修复轮 Paul S-1 销账）**：本文档为 v0.5 Format Renewal 时代的历史归档角色剧本，非现行 agent 教学面；文中 CLI 文法示例（含 `--reply-to`/`--from`/`--to`/位置正文等旧形态）已被后续裁决撤销或取代，冲突处以 cli-grammar-v0.6 spec（docs/ssot/specs/cli-grammar-v0.6/spec.md）为准，正文不回改。
+
 > **角色定位**：负责将定稿的 Managed File Format v2 规格落地为 `paperwork-core` / `paperwork-cli` 代码的唯一实现者。本文档依《实现流程原则》产出，含对外工作职责、工作原则与 BOOTSTRAP。
 
 ---

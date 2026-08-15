@@ -78,12 +78,13 @@ Grammar: paperwork [global flags] <group> <verb> <PATH> --required flags [--opti
 # post send
 Examples:
   paperwork post send standup.post.md --author alice --message "Parser module is 80% done."
-  paperwork post send standup.post.md -a alice -m "Tests merged." --reply-to 2 --mention bob
+  paperwork post send standup.post.md -a alice -m "Tests merged."
+  paperwork post send standup.post.md --author bob --message "@#2 Sure, @alice I'll take it."
   echo "multi-line body" | paperwork post send standup.post.md --author alice --stdin
   paperwork post send standup.post.md --author alice --message "-starts with dash is fine"
   paperwork post send new-topic.post.md --author alice --message "kickoff" --title "New Topic"
   # --title (thread title, honoured on first write only, silently ignored on existing threads);
-  # --reply-to / --mention are sugar flags: their values are injected into the body as @#N / @name tokens.
+  # reply/mention semantics live in the body itself: write an @#N token (reply to seq N) or @name tokens (mentions) directly in the message.
 
 # post edit
 Examples:
@@ -95,7 +96,7 @@ Examples:
   paperwork post read standup.post.md --mention alice --limit 20
 ```
 
-Grammar 模板行必填段移出方括号（rework 修正，Pete N6）；send 示例补 `--title` 建线程载荷演示与糖衣 flag 注记（基线勘误后替换原 `--to` 收件人演示与三 flag 区分注记，见 §11）。
+Grammar 模板行必填段移出方括号（rework 修正，Pete N6）；send 示例补 `--title` 建线程载荷演示（基线勘误后替换原 `--to` 收件人演示与三 flag 区分注记，见 §11）。〔2026-08-15 owner 裁决更正〕原此处示例行尾的 `--reply-to 2 --mention bob` 与糖衣 flag 注记已随写侧糖衣 flag 撤销废止（传入落 usage exit 2）；上方示例块已换正文直书形态，与 post.rs 现行 send after_help 逐字同源（任务 #37 修复轮 L-1/W-2）。
 
 ### 2.2 profile: create 回收具名
 
@@ -216,7 +217,7 @@ v0.5 design §7 遗留项裁决总表**整体沿用**，本轮不受影响：
 - v0.5 §7.4 规格模糊点裁定（usage category、implicit-mention 形态、showing/window 形态、exit_code 如实、command=usage、ensure_suffix 三级、help 英文）全部继续有效。
 - **本轮新增登记（rework 裁定 F6 与 Pete N3）**：
   - send 元数据 flag（基线勘误后仅 `--title`）对既有线程静默忽略的可检测化：未来工作项为 ok 信封增补 `ignored` 字段（如 `ignored: title`），需解冻输出协议（JSON 只增不改不删约束下可 additive 实现），由发布轮或后续 UX 线另行裁决；本轮仅行为登记与教学（spec §3.1、bdd S-SEND-17）。原同批评估候选（ok 信封回显收件人名单使 send `--to` 数字串误用可检测）随 `--to` flag 删除而废止。
-  - `--reply-to` 指向不存在 seq 静默跳过（冻结沿用）与 Q-02 的张力：已登记 `docs/researches/ux-open-items-backlog-2026-08-08.md`，供发布轮或后续 UX 线裁决。
+  - `--reply-to` 指向不存在 seq 静默跳过与 Q-02 的张力：**已随 2026-08-15 owner 裁决消解**——写侧 `--reply-to` 糖衣 flag 撤销（裁决 1，docs/dev/owner-rulings-2026-08-15.md 口径 A），reply 语义改由 agent 正文直书 `@#N` token；缺失 seq 的静默跳过语义冻结沿用（现由正文 token 驱动，spec §3.1/§10）；原 backlog 登记（`docs/researches/ux-open-items-backlog-2026-08-08.md` B-01）随裁决闭合保留为历史。
 
 ---
 

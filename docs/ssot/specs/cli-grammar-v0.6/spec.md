@@ -178,7 +178,7 @@ paperwork contacts read <PATH>
 - **destination advisory 校验契约（2026-08-15 owner 裁决新增，bdd S-CONTACTS-16/17；任务 #36 实施）**：contacts add/update 对 destination（add 的 `--profile`；update 的 `--new-profile`）执行**非阻塞 advisory 校验**（owner 裁决原文：「contact 可以加入路径和格式上面的 validation, 但是不阻塞 agent 编辑即可, 也就是如果文件不存在或者错误, 也不需要阻塞编辑的 agents 添加这个 profile 文件」）：
   - **触发条件**（任一命中即触发）：① destination 路径不存在；② 存在但不可读（非文件/打开失败）；③ 可读但非合法 profile 格式（parse 失败）。校验在写入动作完成之后、ok 信封渲染之前执行，仅只读探测，不改变写入结果。
   - **非阻塞保证**：触发时仍**照常写入、exit 0**；永不因 destination 问题 exit≠0；不引入任何新 flag、不阻塞 agent 编辑（label 依 R11 回退行为不变，上一条静默面契约维持，其上叠加 advisory 提示）。
-  - **advisory 字段契约**：ok 信封增补字段，字段名钉住为 `advisory`（值 = 单行纯 ASCII 提示文本，建议文案形态：`destination '<P>' does not exist` / `destination '<P>' is not readable` / `destination '<P>' is not a valid profile file`，2026-08-15 任务 #36 实施定稿冻结：三形态文案逐字采用建议形态）；**仅触发时出现**（destination 合法时字段不存在，避免噪音）；Default 与 `--json` 档同名出现（JSON 只增不改不删纪律之下的 additive 字段）。被否替代字段名登记：`destination_note`（编排层候选，裁定取 `advisory`，理由：语义更准确且为后续同类提示预留通用面）。
+  - **advisory 字段契约**：ok 信封增补字段，字段名钉住为 `advisory`（值 = 单行提示文本，文案**模板**恒为纯 ASCII，建议文案形态：`destination '<P>' does not exist` / `destination '<P>' is not readable` / `destination '<P>' is not a valid profile file`，2026-08-15 任务 #36 实施定稿冻结：三形态文案逐字采用建议形态；2026-08-15 三维评审 Ray S-1 口径收窄：destination 按用户所给原文插值回显（与 conclusion/profile 字段同权），整行 ASCII 仅当 destination 路径本身为 ASCII，纯 ASCII 声明的口径限于文案模板）；**仅触发时出现**（destination 合法时字段不存在，避免噪音）；Default 与 `--json` 档同名出现（JSON 只增不改不删纪律之下的 additive 字段）。被否替代字段名登记：`destination_note`（编排层候选，裁定取 `advisory`，理由：语义更准确且为后续同类提示预留通用面）。
   - **适用范围**：仅 contacts add/update 两写路径；contacts remove（键不命中为 not-found exit 1，无 advisory 面）、brief/profile 组不适用；与空键护栏（上一条 F1）不冲突：空键仍落 validation exit 1，advisory 仅覆盖「非空但异常」的 destination。
 - **`updated` 字段值格式契约（rework 补录，Ryan m-4 定案）**：编排层裁定维持箭头串形态（与 ok 首行 conclusion 同构，不新增分键），值格式逐字钉住为 `<OLD> -> <NEW>`（单空格分隔的三段拼接，如 `alice.profile.md -> carol.profile.md`）；机器解析侧可退回解析 conclusion，两载体携带同一信息。
 - **update 与 edit 的语义分工（rework 补录，Ryan M-1 ②）**：`edit` 恒为「对文件自身内容的就地修改」（post 消息正文、profile 字段）；`contacts update` 恒为「条目 destination 路径的换绑」（键控条目的身份替换），contacts 组无 `edit` 动词；两动词作用对象不同，不构成语义重叠。`--new-profile` 命名被否替代（`--to`/`--old-profile` 对称形态/`--replace-with`）见研究文档 §5.4 被否替代表（Ryan m-6）。
@@ -239,7 +239,7 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 3. **validation fix 文案的 `--` 教学废止**：正文经 `--message` flag 值直传，以 `-` 开头的正文不再需要 `--` 边界（v0.5 spec §4.2 末条废止）；usage 信封涉及裸 `-xxx` 残留时的 `--` 教学改为引导 `--message` 形态。
 4. **纯 ASCII 输出契约（口径收窄，任务 #34 文档轮修订；行为面零变更）**：信封结构面（status 行 / category / `fix:` / `example:` 字段）全部 stdout/stderr 字节保持 ASCII，本版不变，`ascii_output_contract_guard` 级别集成测试防线保留；全量字节流恒为合法 UTF-8，消费端须按 UTF-8 解码；已知 locale 依赖面：io 类信封的 `message` 字段可内嵌 OS 本地化文本（字节为合法 UTF-8，依据 docs/dev/io-encoding-rootcause-2026-08-15.md §6 钉住结论；是否进一步代码硬化去本地化文本由修复波评估，审计建议不做）。
 5. **VALUE_TAKING_FLAGS 对应表口径（2026-08-15 owner 裁决配套声明）**：写侧 `--reply-to`/`--mention` 撤销后，main.rs `VALUE_TAKING_FLAGS` 常量中该两项**保留**（post read 侧仍是带值 flag，usage 路径 `--json` 探针的值跳过逻辑依赖其在列）；常量其余项不变，计数口径（audit-grammar-matrix §6）随任务 #36 实施重盘。
-6. **advisory 信封字段形态（2026-08-15 owner 裁决新增）**：contacts add/update 成功（exit 0）且 destination advisory 校验触发时，ok 信封字段区增补 `advisory: <单行提示>`（Default 档与 `--json` 档同名 key；仅触发时出现；纯 ASCII；字段契约全文见 §3.6「destination advisory 校验契约」）。
+6. **advisory 信封字段形态（2026-08-15 owner 裁决新增）**：contacts add/update 成功（exit 0）且 destination advisory 校验触发时，ok 信封字段区增补 `advisory: <单行提示>`（Default 档与 `--json` 档同名 key；仅触发时出现；文案模板纯 ASCII，destination 原文插值回显，整行 ASCII 仅当路径为 ASCII——Ray S-1 口径收窄；字段契约全文见 §3.6「destination advisory 校验契约」）。
 
 ---
 

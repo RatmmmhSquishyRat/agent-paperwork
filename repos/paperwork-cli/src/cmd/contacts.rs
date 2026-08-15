@@ -230,9 +230,16 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
 /// spec §7.3 R11): as given (CWD-relative) first, then relative to the
 /// contacts file's own directory.
 ///
-/// Wording frozen 2026-08-15 (task #36; spec §3.6 回冻): single-line pure
-/// ASCII, three forms — `does not exist` / `is not readable` /
-/// `is not a valid profile file`.
+/// Wording frozen 2026-08-15 (task #36; spec §3.6 回冻): three forms —
+/// `does not exist` / `is not readable` / `is not a valid profile file`.
+/// The wording TEMPLATE is always pure ASCII; the destination is echoed
+/// back verbatim as given (same weight as the conclusion/profile fields),
+/// so the whole line is ASCII only when the destination path is ASCII
+/// (Ray S-1, wording-scope narrowing 2026-08-15).
+///
+/// Non-UTF-8 destination content fails `read_to_string` (InvalidData) and
+/// therefore falls into the SECOND probe level "is not readable" — by
+/// probe order, readable is defined as decodable to a string (Ray S-2).
 fn destination_advisory(contacts_path: &std::path::Path, destination: &str) -> Option<String> {
     let resolved = paperwork_core::ops::contacts::resolve_contact_path(contacts_path, destination);
     if !resolved.exists() {

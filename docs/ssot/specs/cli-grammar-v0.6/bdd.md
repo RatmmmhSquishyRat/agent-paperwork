@@ -433,7 +433,7 @@
 
 - **Given** contacts 文件 `team.contacts.md` 存在；`ghost.profile.md` 不存在
 - **When** 执行 `paperwork contacts add team.contacts.md --profile ghost.profile.md`
-- **Then** exit 0（destination 问题不阻塞写入，永不因 destination 问题 exit≠0）；条目照常落盘，label 依 R11 回退文件名主干（`[ghost](ghost.profile.md)`）；ok 信封字段区含 `advisory`（值提示 destination 不存在，建议文案 `destination 'ghost.profile.md' does not exist`，纯 ASCII，2026-08-15 任务 #36 实施定稿冻结：建议形态逐字采用）；`--json` 模式含同名 key `advisory`（只增不改协议）。
+- **Then** exit 0（destination 问题不阻塞写入，永不因 destination 问题 exit≠0）；条目照常落盘，label 依 R11 回退文件名主干（`[ghost](ghost.profile.md)`）；ok 信封字段区含 `advisory`（值提示 destination 不存在，建议文案 `destination 'ghost.profile.md' does not exist`，本例逐字节纯 ASCII；ASCII 声明口径收窄见 spec §3.6：文案模板恒纯 ASCII，destination 原文插值回显，整行 ASCII 仅当路径为 ASCII（Ray S-1）；2026-08-15 任务 #36 实施定稿冻结：建议形态逐字采用）；`--json` 模式含同名 key `advisory`（只增不改协议）。
 - **And 不触发形态**：destination 为存在且合法的 profile 文件时（如 S-CONTACTS-02 的 alice.profile.md），信封**不含** `advisory` 字段（仅触发时出现，避免噪音）；S-CONTACTS-02 既有断言面冻结不变。
 - **And 格式非法触发形态**：destination 存在但非合法 profile（内容损坏）时仍 exit 0 照常写入，`advisory` 提示格式非法（2026-08-15 任务 #36 实施定稿冻结：`destination '<P>' is not a valid profile file`）。
 

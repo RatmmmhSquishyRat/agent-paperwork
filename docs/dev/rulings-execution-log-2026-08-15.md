@@ -2,7 +2,7 @@
 
 - 基线：master @ d920271，419 测试全绿。
 - 权威依据：docs/dev/owner-rulings-2026-08-15.md（裁决原文与口径 A~D）；docs/ssot/specs/cli-grammar-v0.6/impl_plan.md「2026-08-15 owner 裁决实施批次」O1~O5；spec.md / bdd.md / tdd.md 修订段。
-- 纪律执行：原子提交（每 O 批一个提交，带批次号）；输出协议只增不改；不 bump/tag/不推送；版本纪律 0.5.0；ops_tests.rs 零改动防线延续（本批未触碰任何 core 与 ops_tests 字节）。
+- 纪律执行：原子提交（每 O 批一个提交，带批次号；O5 含一个补录提交 b9b059c，回填 O5 提交 hash，见 L-2 修正）；输出协议只增不改；不 bump/tag/不推送；版本纪律 0.5.0；ops_tests.rs 零改动防线延续（本批未触碰任何 core 与 ops_tests 字节）。
 - 门禁口径登记：impl_plan 对 O1/O2 步显式允许 cli_integration/char_tests 红（由 O3 恢复），O1/O2 提交时门禁为 build + clippy（+fmt）绿；O3 起恢复并维持「cargo test --workspace --locked 全绿 + clippy -D warnings + fmt --check」。
 
 ## O1 写侧糖参数撤销 — 提交 9821933
@@ -67,12 +67,30 @@ char_tests（31 -> 33）：
 - SKILL.md：post send 示例改正文直书（`--message "@#1 On it, @alice"`）；post 说明段新增正文 token 语义、撤销声明（usage exit 2 + fix 教学、读侧过滤器保留）；contacts 段新增 advisory 非阻塞行为声明（agent-first UX 方向）。
 - 根 README.md：快速上手与 Commands 段两处示例改正文直书；糖衣说明段整体改写为正文直书 + 撤销声明；contacts 段追加 advisory 声明。
 - repos/paperwork-cli/README.md：盘点确认无撤销 flag 示例，无需改动（事实登记）。
-- design.md（impl_plan 点名两处）：§2.1 签名示意删除糖衣 flag 并加裁决更正注；§12 基线勘误记录行追加〔2026-08-15 owner 裁决更正〕（注入机制废止、正文直书 + 读侧 derive、读侧过滤器保留）；L60/L79/L84/L217 属历史论证文本，按 impl_plan 范围不改。
+- design.md（impl_plan 点名两处）：§2.1 签名示意删除糖衣 flag 并加裁决更正注；§12 基线勘误记录行追加〔2026-08-15 owner 裁决更正〕（注入机制废止、正文直书 + 读侧 derive、读侧过滤器保留）；§2.1 布局理由段中 `--title` 条目属历史论证文本，按 impl_plan 范围不改（本行登记已校正点名口径，任务 #37 L-1：原登记行号 L60/L79/L84/L217 与实际位置漂移）；§2.1 after_help 示意块（原示例行尾糖衣 flag + sugar 注记）与 §8 B-01 张力段已在任务 #37 修复轮更正（L-1/W-2 销账）。
 
-## O5 CHANGELOG Unreleased — 提交 72c85ac
+## O5 CHANGELOG Unreleased — 提交 72c85ac（补录 b9b059c）
 
 - CHANGELOG.md `[Unreleased]` 顶部新增两段：`Removed — write-side sugar flags`（breaking for 糖参数调用方：usage exit 2、fix 教学、正文直书迁移路径、读侧过滤器保留）；`Added — contacts destination advisory`（非阻塞探测、exit 0 不变、advisory 字段三形态文案、Default/--json 同名 key、只增不改协议、版本纪律 0.5.0 不 bump/tag/publish）。
 - 既有发布段不回改；不新增版本段（spec §7 第 4/6 条）。
+
+## O5 偏离裁定登记（编排层裁定，任务 #37 修复轮补登；销账 I-1/W-3）
+
+- **偏离事实**：impl_plan 步骤 O5 的定义是独立 QA Review Book（落点 `docs/reviews/v0.6-owner-rulings-review-{实施完成日期}.md`，不得由 impl agent 自评）；实际执行中 O5 批次号改挂给 CHANGELOG Unreleased 条目 + 本执行日志（72c85ac + 补录 b9b059c），QA 交付由编排层裁定移交任务 #37 承载（Terry 验证报告 + 三维评审三报告），该口径变更此前未登记，本节补登。
+- **承载映射表**（O5 QA 交付面 -> 实际载体，四份报告已随任务 #37 修复轮提交入库）：
+
+| O5 QA 交付面 | 实际承载 |
+|---|---|
+| 端到端实测验证（冷重建回归/撤销面/advisory/全命令面冒烟/冻结面/版本纪律） | docs/dev/rulings-verification-2026-08-15.md（任务 #37 Terry 验证报告，放行结论：放行） |
+| 完整性维度评审（需求覆盖） | docs/reviews/rulings-review-completeness-2026-08-15.md |
+| 正确性维度评审（逻辑与安全 bug） | docs/reviews/rulings-review-correctness-2026-08-15.md |
+| 影响面维度评审（回归与破坏性变更） | docs/reviews/rulings-review-impact-2026-08-15.md |
+
+- **处置说明**：路径/命名与 impl_plan 点名形态的偏差随本登记与提交说明销账（impact 评审 W-3 建议的「提交入库 + 偏差登记」路径）；CHANGELOG 批次仍记 O5（72c85ac/b9b059c），不重写提交历史。
+
+## 任务 #37 三维评审修复轮登记（2026-08-15）
+
+本日志上述 O5 偏离登记、O4 点名行号校正与纪律措辞修正（L-2）均在任务 #37 修复轮完成；同轮销账项：I-2（send 侧探针移除 + 24 口径）、W-1（CHANGELOG NEW-12/NEW-10 更正标注）、L-1/W-2（design.md after_help 块与 B-01 张力段）、Ray S-1/S-2/S-4、Paul S-1。提交哈希见 git log（本提交自身，不自指）。
 
 ## 最终验证（O3 门禁口径，O5 提交前复跑）
 
