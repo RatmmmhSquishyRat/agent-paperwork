@@ -316,3 +316,47 @@
 - 状态：由「开放」刷新为「已闭合」（LED-13 一并刷新为「已闭合」）
 
 （第十节完。追加：修复轮二执行 agent；2026-08-15。）
+
+---
+
+## 十一、终局闭合（任务 #30，2026-08-15，append-only，未改动第一至十节）
+
+追加依据：任务 #30 终局收尾现场实测。取证基线：master @ 20e3042（终局门禁全绿时点）；门禁证据：cargo test --workspace --locked 419 全绿（6+31+143+4+101+12+33+18+71）、clippy -D warnings 零警告、fmt --check 通过、release 构建 paperwork 0.5.0；tag 最新 v0.5.0、CHANGELOG 无新发布段（仅 Unreleased）；git status 干净。
+
+### LED-01 分支未合 master / 未推 origin — 状态刷新：已闭合（已合并已推送后闭合）
+- 合并面：cli-grammar-v0.6 三方合并 @ 3829fd9（第八节口径已确认）；origin/cli-grammar-v0.6 在案
+- 推送面：本任务将 master 本地领先提交（a941b3b..20e3042 及后续 docs 提交）推送 origin 并 fetch --prune 核对（推送结果见终局报告；若失败如实记录不阻塞）
+- 状态：由「进行中」刷新为「已闭合」
+
+### LED-02 master 工作区未提交状态 — 状态刷新：已闭合（工作区清理完成）
+- 刷新依据：终局门禁实测 `git status --porcelain` 为空；全部 perfection 产物、治理文档修订、评审报告均已按归属分批提交（a941b3b..20e3042 提交链）
+- 状态：由「进行中」刷新为「已闭合」
+
+### LED-03 qa-tmp/ 未跟踪目录 — 状态刷新：已闭合（工作区清理完成）
+- 刷新依据：实测 `Test-Path qa-tmp` = False，目录已删除（执行「删除」路径，未走 gitignore 悬置）；.gitignore 无 qa-tmp 条目，无残留登记
+- 状态：由「进行中」刷新为「已闭合」
+
+### LED-04 M-2 io 信封中文 OS 错误乱码 — 终态确认：钉住为环境问题，报告在案
+- 确认依据：第十节已刷新为已闭合；本节固化终局口径——根因为 Windows 代码页 OS 消息经 lossy 转码，裁定属环境面非产品面；根因报告 docs/dev/io-encoding-rootcause-2026-08-15.md 在案；豁免登记点 LED-16
+- 状态：维持「已闭合（裁定保留，登记于 LED-16）」
+
+### LED-05 v0.5-perfection-plan 闭合批 — 终态确认：已闭合
+- 确认依据：第十节已刷新；P-0~P-9 全批终态，成果已随 a941b3b..20e3042 提交链回流 master，419 测试全绿为终局基线
+- 状态：维持「已闭合」
+
+### LED-13 cli-ux-v0.5 分支处置 — 终态确认：已清理
+- 确认依据：终局实测 `git branch -a` 无 cli-ux-v0.5（本地与远端均已移除）；cli-ux-redesign 规格集原地保留为历史档案
+- 状态：维持「已闭合」
+
+### LED-14 perfection 闭合批续做 — 终态确认：成果已回流 master
+- 确认依据：续做成果（P-0~P-9）已全部移植 master（a941b3b..20e3042 提交链，含锁层融合、护栏移植、JSON 收口、拆分性能批、文档 CI 批）；wip 快照分支已推 origin 保全（origin/wip/v0.5-perfection-snapshot-2026-08-15 在案）
+- 状态：维持「已闭合」
+
+### 终局台账统计
+- 登记总数 16（LED-01 至 LED-16）：闭合 8（LED-01/02/03/04/05/13/14 + 已裁定备查的 LED-16）；仍开放 8——
+  - 文档轮 3：LED-06（tdd 注记勘误）、LED-07（销账计数勘误）、LED-08（写路径计数口径，发布轮顺带亦可）
+  - owner 决策 4：LED-09（B-01）、LED-10（B-02）、LED-11（U-04）、LED-12（U-13）
+  - 发布轮 1：LED-15（crates.io 版本对齐，随发布轮 bump + CHANGELOG + crates.io + tag 一次性闭合）
+- 遗留 owner 决策清单详见同日 docs/dev/workflow-and-todo-2026-08-15.md 第四节（含 v0.6 发布轮是否启动、版本号裁定等）
+
+（第十一节完。追加：任务 #30 终局 agent；2026-08-15。）
