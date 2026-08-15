@@ -113,9 +113,15 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
             paperwork_core::ops::contacts::contacts_add(&path, &profile)?;
 
             let conclusion = format!("{} -> {}", profile, path.display());
-            let env = output::Envelope::new("contacts.add", conclusion)
+            let mut env = output::Envelope::new("contacts.add", conclusion)
                 .field("contacts", &path.display().to_string())
                 .field("profile", &profile);
+            // Non-blocking destination advisory (2026-08-15 owner ruling,
+            // spec §3.6): probe AFTER the write succeeded; never changes the
+            // exit code or the write outcome (add-only, output protocol).
+            if let Some(note) = destination_advisory(&path, &profile) {
+                env = env.field("advisory", &note);
+            }
             output::emit_ok(ctx, env);
             Ok(())
         }
@@ -141,9 +147,15 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
             paperwork_core::ops::contacts::contacts_update(&path, &profile, &new_profile)?;
 
             let conclusion = format!("{} -> {}", profile, new_profile);
-            let env = output::Envelope::new("contacts.update", conclusion)
+            let mut env = output::Envelope::new("contacts.update", conclusion)
                 .field("contacts", &path.display().to_string())
                 .field("updated", &format!("{} -> {}", profile, new_profile));
+            // Non-blocking destination advisory (2026-08-15 owner ruling,
+            // spec §3.6): the destination is the NEW profile path; probe
+            // AFTER the write succeeded, never changes the exit code.
+            if let Some(note) = destination_advisory(&path, &new_profile) {
+                env = env.field("advisory", &note);
+            }
             output::emit_ok(ctx, env);
             Ok(())
         }
@@ -207,6 +219,36 @@ pub fn run(ctx: &Context, args: ContactsArgs) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Non-blocking destination advisory (2026-08-15 owner ruling, spec §3.6).
+///
+/// Runs AFTER the write succeeded: a cheap, read-only probe of the
+/// destination profile path. Never changes the exit code and introduces no
+/// new write-failure path — any probe failure simply yields the matching
+/// advisory text. Resolution matches the read side (`resolve_contact_path`,
+/// spec §7.3 R11): as given (CWD-relative) first, then relative to the
+/// contacts file's own directory.
+///
+/// Wording frozen 2026-08-15 (task #36; spec §3.6 回冻): single-line pure
+/// ASCII, three forms — `does not exist` / `is not readable` /
+/// `is not a valid profile file`.
+fn destination_advisory(contacts_path: &std::path::Path, destination: &str) -> Option<String> {
+    let resolved = paperwork_core::ops::contacts::resolve_contact_path(contacts_path, destination);
+    if !resolved.exists() {
+        return Some(format!("destination '{}' does not exist", destination));
+    }
+    let content = match std::fs::read_to_string(&resolved) {
+        Ok(c) => c,
+        Err(_) => return Some(format!("destination '{}' is not readable", destination)),
+    };
+    if paperwork_core::format::profile::parse_profile(&content).is_err() {
+        return Some(format!(
+            "destination '{}' is not a valid profile file",
+            destination
+        ));
+    }
+    None
 }
 
 /// Try to read a profile file and return (name, description).
