@@ -21,6 +21,11 @@ No server. No database. No daemon. No login. No workspace. Every command takes a
 cargo install paperwork-cli
 ```
 
+> **Version notice:** the published `paperwork-cli 0.5.0` on crates.io ships the
+> old v0.5 positional grammar and old file formats; the examples below follow
+> the unreleased v0.6 named-flag grammar on master. Install from source until
+> the next release — see [Install](#install).
+
 Then, from any directory:
 
 ```bash
@@ -55,13 +60,23 @@ AI agents that work together need three minimal things: **who they are**, **a wa
 | Knowledge | `brief` | `*.brief.md` | Reading lists with staleness detection |
 | Directory | `contacts` | `*.contacts.md` | A list of agent profiles as Markdown links |
 
-Every output is a **structured, ASCII-only envelope** built for machine parsing — an agent can detect success/failure from the first line and self-correct from the error's `fix:` and `example:` fields without reading docs.
+Every output is a **structured envelope** built for machine parsing — the
+envelope structure (status line, category, `fix:`, `example:`) is pure ASCII;
+an agent can detect success/failure from the first line and self-correct from
+the error's `fix:` and `example:` fields without reading docs.
 
 ---
 
 ## Install
 
-**From [crates.io](https://crates.io/crates/paperwork-cli)** (recommended):
+> **Version notice (2026-08-15):** the `paperwork-cli 0.5.0` currently
+> published on crates.io carries the **v0.5 positional grammar and the old file
+> formats** — every example in this document follows the v0.6 named-flag
+> grammar and the v2 file formats, which are on master and **not yet
+> released**. Install **from source** (below) until the release round aligns
+> crates.io with this document.
+
+**From [crates.io](https://crates.io/crates/paperwork-cli)** (the published 0.5.0 — v0.5 grammar, old formats):
 
 ```bash
 cargo install paperwork-cli
@@ -101,6 +116,7 @@ paperwork post send standup --author alice --stdin < report.md  # multi-line via
 paperwork post read standup --mention alice                    # filter by @mention
 paperwork post read standup --reply-to 1                       # filter by reply
 paperwork post summary standup
+paperwork post edit standup --author alice --seq 3 --message "corrected body"
 ```
 
 `--reply-to N` and `--mention a,b` are sugar: they inject `@#N` / `@name` tokens at the head of the body before writing. References live only in the body text — reply/mention state is re-derived from it on every read.
@@ -113,6 +129,7 @@ paperwork brief add onboarding --entry src/main.rs --regex "fn main"
 paperwork brief verify onboarding                              # fresh | shifted | stale
 paperwork brief read onboarding --full
 paperwork brief read onboarding --entry-title main.rs          # details of a single entry
+paperwork brief remove onboarding --entry-title main.rs        # remove by stored basename
 ```
 
 ### `contacts` — registry of profiles
@@ -122,7 +139,7 @@ paperwork contacts create team --title "Team"
 paperwork contacts add team --profile ./alice.profile.md
 paperwork contacts remove team --profile ./alice.profile.md
 paperwork contacts update team --profile ./alice.profile.md --new-profile ./carol.profile.md
-paperwork contacts read team                                   # shows name + description
+paperwork contacts read team                                   # shows stored path + name (+ description)
 ```
 
 The key for `contacts remove`/`update` is the profile path exactly as stored in the contacts file, not the link label. `contacts update` re-binds an entry's destination path; it is not an `edit` (this group has no `edit` verb: `edit` changes a file's own content, `update` swaps the entry's target profile).
@@ -140,7 +157,18 @@ Parses by type suffix; for posts it additionally enforces consecutive seq number
 
 ## Output protocol
 
-All output is pure ASCII — no color, no Unicode symbols. Parseable without JSON.
+No color, no ANSI codes. Parseable without JSON.
+
+**Encoding contract:** every byte paperwork writes — stdout and stderr, all
+modes (`default` / `--json` / `--plain`, with or without `-q`) — is valid
+UTF-8, and consumers must decode it as UTF-8. The envelope structure surface
+(status line, category, `fix:`, `example:`) is pure ASCII; `io` error
+`message` fields may embed OS-localized text (e.g. Chinese on zh-CN Windows).
+On Windows PowerShell, set `[Console]::OutputEncoding =
+[System.Text.Encoding]::UTF8` before capturing output (otherwise stderr
+captured in a default cp936 session is mis-decoded — see
+`docs/dev/io-encoding-rootcause-2026-08-15.md`). For structured consumption
+prefer `--json`: error envelopes go to stdout as single-line JSON.
 
 **Grammar (v0.6):** `paperwork [global flags] <group> <verb> <PATH> --required-flag ... [--optional-flag ...]` — PATH is the only positional argument; every required payload is a named flag (`--author` / `--message` or `--stdin` for `post send`/`post edit`, plus `--seq` for `post edit`).
 
@@ -164,7 +192,7 @@ example: paperwork post send standup --author alice --message "first message"
 **Usage failure** (stderr, exit 2) — wrong invocation (missing/unknown arguments), with a canonical copy-paste example:
 
 ```
-error usage: the following required arguments were not provided: --author <AUTHOR>...
+error usage: the following required arguments were not provided: --author <AUTHOR>
 fix: required values are named flags (--author/--message for post send/edit); see the canonical example below
 example: paperwork post send standup.post.md --author alice --message "Parser module is 80% done."
 ```

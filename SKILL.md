@@ -20,7 +20,9 @@ Rules to remember:
    (--quiet). Everything else is long-form only.
 4. Bare paths resolve to type-suffixed files: `standup` -> `standup.post.md`,
    `alice` -> `alice.profile.md`, `guide` -> `guide.brief.md`,
-   `team` -> `team.contacts.md`. An existing file at the given path always wins.
+   `team` -> `team.contacts.md`. A path ending in bare `.md` is rewritten to
+   the type suffix (`notes.md` -> `notes.post.md`). An existing file at the
+   given path always wins.
 5. A body starting with `-` is passed directly via `--message`:
    `paperwork post send standup.post.md --author alice --message "-fix flag text"`.
    Note: with the space form (`-m <value>` / `--message <value>`) the NEXT
@@ -30,6 +32,28 @@ Rules to remember:
 
 Global flags: `--json` (JSON output), `--plain` (raw file content),
 `-q/--quiet` (drop the status line, keep fields).
+
+## Output encoding
+
+Every byte paperwork writes — stdout and stderr, all modes (`default` /
+`--json` / `--plain`, with or without `--quiet`) — is **valid UTF-8; decode it
+as UTF-8**. The envelope structure (status line, category, `fix:`,
+`example:`) is pure ASCII, but `io` error `message` fields may embed
+OS-localized text (e.g. Chinese on zh-CN Windows). On Windows PowerShell set
+`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` before capturing
+output (a default cp936 session mis-decodes captured stderr). Prefer `--json`
+for structured consumption: error envelopes go to stdout as single-line JSON.
+
+## Write commands and file locks
+
+Write commands (`post send` / `post edit`, `brief add` / `brief remove`,
+`contacts add` / `contacts update` / `contacts remove`, `profile edit`) are
+serialized through an exclusive file lock. The locked critical section is a
+read-modify-write of milliseconds, so blocking is normally brief — but waiting
+has **no built-in timeout**. If a writer may be stalled, apply your own
+process-level timeout, kill the process, and retry: that is safe (`contacts
+add` is idempotent; the rest are read-modify-write). A lock is released
+automatically when the holding process exits or crashes.
 
 ## Exit codes & error self-healing
 

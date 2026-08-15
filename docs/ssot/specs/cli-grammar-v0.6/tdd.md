@@ -242,9 +242,11 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 | 特殊字符路径往返 | S-CONTACTS-13 | 转义条目键匹配命中；其余条目字节不变；二次操作仍命中（rework 补录 Daniel M-4） |
 | update NEW 不存在静默成功 | S-CONTACTS-14 | `.code(0)`；条目落为原值 destination + 回退 label；`updated` 回显原值（rework 补录 Ryan M-3） |
 | label-as-key 触发形态 | S-CONTACTS-07 And 段 | `--profile alice`（label 当键）`.code(1)` `error not-found:`；fix 含键口径教学句（rework 补录 Ryan m-3） |
+| add/update 空键护栏 | S-CONTACTS-15 | `--profile ""` 与 `--new-profile ""`（含全空白）均 `.code(1)` `error validation:`；message/fix 逐字断言（spec §3.6 空键护栏）；无文件写入；护栏先于 not-found 判定；既有覆盖：core 单测 ops_contacts_crud_tests.rs（`profile path (--profile) is empty` 断言）与集成测试 cli_integration.rs（任务 #34 文档轮补映射，grep 实证测试在场） |
 | brief read 选择性详情 | S-BRIEF-07 | exit 0；stdout 首行 `ok brief.read <N> entries`（N 为全量条目数，现状冻结形态，rework 修订 Daniel M-2）；输出仅含目标条目详情字段（path/hash/regex/note）；`--json` entries 仅含该条目且含 path/hash/regex/note（命中即 --full 档字段，不受 `--full` 门控，Daniel m-4） |
 | brief read 无匹配 | S-BRIEF-08 | `.code(1)`；`error not-found:`；fix 含 `brief read` |
 | brief read 组合 --full | S-BRIEF-09 | exit 0；与单条目详情等价；未给 `--entry-title` 时 TOC/--full 两档冻结回归（既有 brief read 用例原样通过） |
+| brief read `--entry-title` 空值守栏 | S-BRIEF-10 | `--entry-title ""`（含全空白）`.code(1)` `error validation:`；message 逐字 `entry title (--entry-title) is empty`、fix 逐字 `provide a non-empty --entry-title value`、example 逐字断言（spec §3.5 空值守栏）；无文件写入；既有覆盖：集成测试 cli_integration.rs（`entry title (--entry-title) is empty` 断言，任务 #34 文档轮补映射，grep 实证测试在场） |
 | 多进程并发 contacts/brief 写 | S-LOCK-01 | 全部 exit 0；条目集合 = 并集；validate 合法；Given 预创建 N 个 entry 目标文件（brief add 快照前置，rework 补录 Daniel m-2） |
 | profile edit 并发 | S-LOCK-02 | 两者 exit 0；最终文件 validate 通过，终态为两次编辑的字段并集（不重叠字段无丢失写；同字段变体则最后写入者胜，二选一在用例内写清，rework 修订 Daniel M-1） |
 | ASCII 契约扩展 | S-OUT-05 延伸 | remove/update 的 usage/not-found/already-exists 信封 stderr 纳入逐字节 ASCII 断言；`all_help_output_is_pure_ascii` 动词清单追加 `contacts remove`、`contacts update` 两行（现状清单止于 contacts create/add/read，rework 补录 Daniel m-3） |
@@ -253,7 +255,7 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 
 **现状基线（worktree cli_integration.rs 实测，Daniel 评审 §六）**：`short_form_whitelist_is_exact` 仅 6 个负向短形式探针（`-s/-l/-n/-t/-e/-p`），不存在 26 项逐 flag 负向清单；组级动词集合断言仅 post 组存在（`post_group_help_lists_verbs` 先例），contacts 组无任何动词断言；`all_help_output_is_pure_ascii` 动词清单止于 contacts create/add/read。
 
-1. 无短形式负向断言清单：本轮**新建/扩展**为 bdd S-SHORT-02 枚举的 26 项全量清单（修订前基线 25 项 + `--new-profile` = 26 项，spec §4 全表同步）；`--new-profile` 探针建议形态：`contacts update <PATH> --profile a.profile.md --new-profile b.profile.md` 加 `-N`/`-w` 类短形式误写触发 usage exit 2；
+1. 无短形式负向断言清单：本轮**新建/扩展**为 bdd S-SHORT-02 枚举的全量清单（项数以 bdd 枚举分项口径为准，不维护硬编码总数；含本轮 additive 的 `--new-profile`，spec §4 全表同步）；`--new-profile` 探针建议形态：`contacts update <PATH> --profile a.profile.md --new-profile b.profile.md` 加 `-N`/`-w` 类短形式误写触发 usage exit 2；
 2. contacts 组 help 动词列表断言：**新建**（现状不存在可追加点位），仿 `post_group_help_lists_verbs` 体例断言 contacts 组动词集合精确等于 {create,add,remove,update,read}，含反向断言（不出现清单外动词）；`update` 的白名单扩容来源登记见 spec §7 第 5 条与 v0.7_feedbacks §2.5（owner 指令 (1) 授权）；
 3. 短形式集合断言 {-a, -m, -q} 不变（新 flag 一律仅长形式）；
 4. 组集合断言 {profile,post,brief,contacts,validate} 不变；

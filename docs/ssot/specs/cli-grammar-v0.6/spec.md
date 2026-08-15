@@ -226,7 +226,7 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 1. **`--message` 与 `--stdin` 互斥两形态的错误层级**：两者同给 -> clap conflicts 判定，**usage exit 2**（v0.5 为 validation exit 1，本版层级提升）；两者皆缺 -> clap `required_unless_present` 组合在解析层判定（MissingRequiredArgument），同样 **usage exit 2**，命令层无需管道（rework 裁定 F2，与 v0.6_feedbacks §2.3 裁定补记一致）。信封结构不变。
 2. **usage 信封静态规范示例全部换 v0.6 文法，每命令一条**：机制（静态规范示例、不携带用户原参数值、`--help/-V` 穿透、argv 扫描感知 `--json`、顶层失败 command 填 `usage`）沿用 v0.5 spec §4.3，仅示例文案更新；每命令一条静态规范可执行示例（具体值、无占位符，v0.5 F2/F7 裁定延续，rework 裁定 F5），post send 规范示例为 `paperwork post send standup.post.md --author alice --message "Hello"`（采 `--message` 通道形态）；「二选一」等形态指引由 message/fix 文案承担，不在 example 中表达。**本轮新命令逐字钉住（rework 补录，Ryan m-2）**：contacts remove 规范示例 `paperwork contacts remove team.contacts.md --profile alice.profile.md`；contacts update 规范示例 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md`（与 §3.6 同一出处，实施与测试逐字断言以此为准）；not-found example 形态：remove/update 未命中均为 `paperwork contacts read <PATH>`（PATH 取用户所给实际值）。
 3. **validation fix 文案的 `--` 教学废止**：正文经 `--message` flag 值直传，以 `-` 开头的正文不再需要 `--` 边界（v0.5 spec §4.2 末条废止）；usage 信封涉及裸 `-xxx` 残留时的 `--` 教学改为引导 `--message` 形态。
-4. **纯 ASCII 输出契约**（v0.5 修复轮确立的 `ascii_output_contract_guard` 级别约束）：全部 stdout/stderr 字节保持 ASCII，本版不变，集成测试防线保留。
+4. **纯 ASCII 输出契约（口径收窄，任务 #34 文档轮修订；行为面零变更）**：信封结构面（status 行 / category / `fix:` / `example:` 字段）全部 stdout/stderr 字节保持 ASCII，本版不变，`ascii_output_contract_guard` 级别集成测试防线保留；全量字节流恒为合法 UTF-8，消费端须按 UTF-8 解码；已知 locale 依赖面：io 类信封的 `message` 字段可内嵌 OS 本地化文本（字节为合法 UTF-8，依据 docs/dev/io-encoding-rootcause-2026-08-15.md §6 钉住结论；是否进一步代码硬化去本地化文本由修复波评估，审计建议不做）。
 
 ---
 

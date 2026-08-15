@@ -1,5 +1,7 @@
 # CLI UX 重设计 v0.5.0 — Spec（行为规范）
 
+> **Superseded-by note (v0.6)**: 本文文法层（位置参数文法三规则与命令签名）已被 v0.6 具名文法整体取代，现行文法以 `docs/ssot/specs/cli-grammar-v0.6/spec.md` 为准；本文保留为历史治理档案，正文不可改写。（Superseded by the v0.6 named-flag grammar, authoritative in `docs/ssot/specs/cli-grammar-v0.6/spec.md`. Historical content below is immutable.）
+
 - 日期：2026-08-09
 - 版本：v0.5.0
 - 文档性质：行为规范（命令契约 + 输出协议），实现与测试的唯一验收基准

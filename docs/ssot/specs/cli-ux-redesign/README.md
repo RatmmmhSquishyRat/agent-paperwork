@@ -1,5 +1,7 @@
 # CLI UX 重设计 v0.5.0 — 文档索引
 
+> **Superseded-by note (v0.6)**: 本套件的 CLI 文法层已由 v0.6 具名文法整体取代，现行文法以 `docs/ssot/specs/cli-grammar-v0.6/spec.md` 为准；本套件保留为历史治理档案，历史正文不可改写。（The CLI grammar layer of this suite is superseded by the v0.6 named-flag grammar, authoritative in `docs/ssot/specs/cli-grammar-v0.6/spec.md`; this suite is retained as a historical governance archive. Historical content below is immutable.）
+
 - 日期：2026-08-09
 - 版本：v0.5.0
 - **状态：文档层已闭合（2026-08-09），NF-2/NF-3 非阻塞补录已完成，待按 impl_plan 开工**（三份一轮评审报告与闭合复核报告见 `docs/reviews/cli-ux-redesign-doc-review-{ssot,agent-ux,feasibility,closure}-2026-08-09.md`；合并修复清单已逐条落实，design.md §7.4/§7.5 为两轮裁定记录；NF-1（并行 format-v2 线程版本边界）待编排层裁定）
@@ -42,3 +44,4 @@
 - [x] **闭合复核（已完成，2026-08-09）**：`cli-ux-redesign-doc-review-closure-2026-08-09.md` 判定文档层闭合（36 项独立问题：已修复 35 + 已修复带轻微残留 1）；F1-F7 7/7 逐字落实；事实抽查 29 处 8/8、14 处 5/5 吻合且全量枚举盘净
 - [x] **非阻塞补录（已完成，2026-08-09）**：NF-2（bdd S-SEND-14 usage 负形态 + spec §4.3 `--` 教学条款 + tdd §3 用例）、NF-3（tdd §3 补 S-CREATE-02/S-CREATE-03/S-PROF-02/S-READ-04/S-BRIEF-07/S-CONTACTS-05 六行映射）
 - [ ] 按 impl_plan 开始实现（前置：编排层对 NF-1 两线程版本边界裁定；裁定若影响 spec §6 基线须回写适配注记）
+- [x] **实现后事追加（2026-08-15，不改写上文）**：v0.5.0 位置文法实现已随 0.5.0 发布（tag v0.5.0 @ 70f7e43），随后被 v0.6 具名文法整体取代；v0.6 实现已随 master @ 3829fd9 三方合并生效。上一未勾项按既成事实结案（实现与裁定均已成为历史），现行文法见文首 Superseded-by 注记。
