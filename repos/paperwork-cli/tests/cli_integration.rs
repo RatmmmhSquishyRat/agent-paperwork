@@ -1453,7 +1453,9 @@ fn path_both_missing_not_found_names_suffixed_path() {
 
 #[test]
 fn implicit_mention_triggered_on_reply() {
-    // S-SEND-03: replying auto-mentions the original sender (singular field)
+    // S-SEND-03 (rewritten 2026-08-15, owner ruling / S-SEND-04): replying
+    // auto-mentions the original sender; the reply reference now lives in
+    // the BODY as an `@#N` token (write-side sugar flags revoked).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -1465,10 +1467,8 @@ fn implicit_mention_triggered_on_reply() {
             path.to_str().unwrap(),
             "--author",
             "bob",
-            "--reply-to",
-            "1",
             "--message",
-            "reply body",
+            "@#1 reply body",
         ])
         .assert()
         .code(0)
@@ -1483,10 +1483,8 @@ fn implicit_mention_triggered_on_reply() {
             path.to_str().unwrap(),
             "--author",
             "carol",
-            "--reply-to",
-            "2",
             "--message",
-            "again",
+            "@#2 again",
         ])
         .assert()
         .code(0)
@@ -1495,7 +1493,8 @@ fn implicit_mention_triggered_on_reply() {
 
 #[test]
 fn implicit_mention_not_triggered_boundaries() {
-    // S-SEND-10b / S-SEND-11: self-reply, explicit mention, missing seq
+    // S-SEND-10b / S-SEND-11 (rewritten 2026-08-15, owner ruling): self-reply,
+    // explicit mention, missing seq — all driven by body tokens now.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -1508,10 +1507,8 @@ fn implicit_mention_not_triggered_boundaries() {
             path.to_str().unwrap(),
             "--author",
             "alice",
-            "--reply-to",
-            "1",
             "--message",
-            "self reply",
+            "@#1 self reply",
         ])
         .assert()
         .code(0)
@@ -1525,12 +1522,8 @@ fn implicit_mention_not_triggered_boundaries() {
             path.to_str().unwrap(),
             "--author",
             "bob",
-            "--reply-to",
-            "1",
-            "--mention",
-            "alice",
             "--message",
-            "explicit",
+            "@#1 @alice explicit",
         ])
         .assert()
         .code(0)
@@ -1544,10 +1537,8 @@ fn implicit_mention_not_triggered_boundaries() {
             path.to_str().unwrap(),
             "--author",
             "bob",
-            "--reply-to",
-            "99",
             "--message",
-            "ghost reply",
+            "@#99 ghost reply",
         ])
         .assert()
         .code(0)
@@ -2054,14 +2045,17 @@ fn flag_inventory_matches_spec() {
         let out = cmd().args(["post", "send", "--help"]).assert().success();
         String::from_utf8_lossy(&out.get_output().stdout).to_string()
     };
-    for flag in [
-        "--author",
-        "--message",
-        "--stdin",
-        "--reply-to",
-        "--mention",
-    ] {
+    for flag in ["--author", "--message", "--stdin"] {
         assert!(send_help.contains(flag), "post send must keep {}", flag);
+    }
+    // 2026-08-15 owner ruling (S-SHORT-02 narrowed): the write-side sugar
+    // flags are revoked from send; they survive on read only.
+    for flag in ["--reply-to", "--mention"] {
+        assert!(
+            !send_help.contains(flag),
+            "post send must not keep revoked {}",
+            flag
+        );
     }
     assert!(
         !send_help.contains("--from"),
@@ -2176,8 +2170,9 @@ fn flag_inventory_matches_spec() {
         "brief read must keep --full"
     );
 
-    // Format v2 flag surface (D1/D2): send keeps the sugar flags but never
-    // gains --to / --participants; --title is the preamble carrier.
+    // Format v2 flag surface (D1/D2 + 2026-08-15 owner ruling): send keeps
+    // no sugar flags (revoked) and never gains --to / --participants;
+    // --title is the preamble carrier.
     assert!(send_help.contains("--title"), "post send must keep --title");
     assert!(
         !send_help.contains("--to\n"),
@@ -2527,7 +2522,9 @@ fn read_mention_filter_zero_hits_on_nonempty_thread() {
 
 #[test]
 fn implicit_mention_persisted_to_file() {
-    // The auto-added mention lands in the body as an `@name` token (D2).
+    // Rewritten 2026-08-15 (owner ruling): the reply token is written by the
+    // AGENT into the body; the CLI persists it verbatim (no injection) and
+    // still derives the implicit mention from the body token (D2).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("t.post.md");
     std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
@@ -2539,10 +2536,8 @@ fn implicit_mention_persisted_to_file() {
             path.to_str().unwrap(),
             "--author",
             "bob",
-            "--reply-to",
-            "1",
             "--message",
-            "reply",
+            "@#1 reply",
         ])
         .assert()
         .code(0)
@@ -2550,8 +2545,14 @@ fn implicit_mention_persisted_to_file() {
 
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
-        content.contains("@#1 @alice\n\nreply"),
-        "implicit mention token not persisted to body: {}",
+        content.contains("@#1 reply"),
+        "body token not persisted verbatim: {}",
+        content
+    );
+    // No injection: the original sender is NOT added to the body.
+    assert!(
+        !content.contains("@alice"),
+        "CLI must not inject mention tokens: {}",
         content
     );
 }
@@ -2603,8 +2604,10 @@ fn post_send_to_and_participants_flags_removed() {
 }
 
 #[test]
-fn post_send_mention_injects_body_tokens() {
-    // OQ-4: --mention a,b injects `@a @b` tokens at the body head.
+fn post_send_mention_body_tokens_verbatim() {
+    // S-SEND-20 (rewritten 2026-08-15, owner ruling): @name tokens are
+    // written directly into the body by the agent; the CLI persists them
+    // verbatim and the read side derives the mention list.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("mention.md");
 
@@ -2615,17 +2618,15 @@ fn post_send_mention_injects_body_tokens() {
             path.to_str().unwrap(),
             "--author",
             "alice",
-            "--mention",
-            "charlie,dave",
             "--message",
-            "hello team",
+            "@charlie @dave hello team",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("seq: 1"));
 
     let content = std::fs::read_to_string(dir.path().join("mention.post.md")).unwrap();
-    assert!(content.contains("@charlie @dave\n\nhello team"));
+    assert!(content.contains("@charlie @dave hello team"));
 
     // Derived mentions show up in the default read output
     cmd()
@@ -2643,14 +2644,14 @@ fn post_send_mention_injects_body_tokens() {
 }
 
 #[test]
-fn post_send_mention_rejects_malformed_values() {
-    // MJ-2: --mention values are validated at the flag layer; shapes that
-    // the derivation rules would silently mangle or drop are rejected with
-    // a Validation envelope and no file is written.
+fn post_send_mention_tokens_pass_through_unvalidated() {
+    // 2026-08-15 owner ruling: in-body @name tokens get NO name-legality
+    // validation (the revoked --mention flag's validation branches are
+    // deleted with the flag). Odd shapes are persisted verbatim and the
+    // read-side derivation simply ignores what its rules don't recognise.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("strict.md");
 
-    // 1. reply-shaped value (#<digits>) belongs to --reply-to, not --mention
     cmd()
         .args([
             "post",
@@ -2658,57 +2659,22 @@ fn post_send_mention_rejects_malformed_values() {
             path.to_str().unwrap(),
             "--author",
             "alice",
-            "--mention",
-            "#5",
             "--message",
-            "hello",
+            "@two words and @#5 shapes pass through",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("error validation:"))
-        .stderr(predicate::str::contains("invalid --mention value '#5'"));
+        .success()
+        .stdout(predicate::str::contains("seq: 1"));
 
-    // 2. whitespace inside the value would be truncated by the token scan
-    cmd()
-        .args([
-            "post",
-            "send",
-            path.to_str().unwrap(),
-            "--author",
-            "alice",
-            "--mention",
-            "two words",
-            "--message",
-            "hello",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("error validation:"));
-
-    // 3. mentioning the sender itself is silently dropped by derivation
-    cmd()
-        .args([
-            "post",
-            "send",
-            path.to_str().unwrap(),
-            "--author",
-            "alice",
-            "--mention",
-            "alice",
-            "--message",
-            "hello",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("error validation:"));
-
-    // No file was created by any rejected invocation
-    assert!(!dir.path().join("strict.post.md").exists());
+    let content = std::fs::read_to_string(dir.path().join("strict.post.md")).unwrap();
+    assert!(content.contains("@two words and @#5 shapes pass through"));
 }
 
 #[test]
-fn post_send_reply_to_injects_body_tokens() {
-    // OQ-4: --reply-to N injects `@#N` plus the implicit @original-sender.
+fn post_send_reply_to_body_token_verbatim() {
+    // S-SEND-20 (rewritten 2026-08-15, owner ruling): the reply reference
+    // lives in the body as `@#N`; the CLI writes it verbatim (no implicit
+    // @sender injection into the file) and the read side derives the rest.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("reply.md");
 
@@ -2732,25 +2698,26 @@ fn post_send_reply_to_injects_body_tokens() {
             path.to_str().unwrap(),
             "--author",
             "bob",
-            "--reply-to",
-            "1",
             "--message",
-            "agreed",
+            "@#1 agreed",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("seq: 2"));
 
     let content = std::fs::read_to_string(dir.path().join("reply.post.md")).unwrap();
-    assert!(content.contains("@#1 @alice\n\nagreed"));
+    assert!(content.contains("@#1 agreed"));
+    // No injection: @alice never enters the written body.
+    assert!(!content.contains("@alice"));
 
-    // JSON read exposes the parse-time derived fields (no `to` field)
+    // JSON read exposes the parse-time derived fields (no `to` field);
+    // mentions derive from explicit @name tokens only -> empty here.
     cmd()
         .args(["--json", "post", "read", path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"reply_to\":1"))
-        .stdout(predicate::str::contains("\"mentions\":[\"alice\"]"))
+        .stdout(predicate::str::contains("\"mentions\":[]"))
         .stdout(predicate::str::contains("\"to\"").not());
 
     // Read filter matches on the derived reply reference
@@ -2763,9 +2730,10 @@ fn post_send_reply_to_injects_body_tokens() {
 }
 
 #[test]
-fn post_send_reply_token_dedup() {
-    // Implicit @ original sender never duplicates: self-reply skips it and
-    // an explicit --mention of the same name is injected exactly once.
+fn post_send_reply_token_no_injection_dedup() {
+    // Rewritten 2026-08-15 (owner ruling): with injection gone, "dedup" is a
+    // verbatim pass-through freeze — the body on disk is exactly what the
+    // agent wrote, for self-replies and explicit mentions alike.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("dedup.md");
 
@@ -2782,7 +2750,7 @@ fn post_send_reply_token_dedup() {
         .assert()
         .success();
 
-    // Self-reply: only the `@#1` token, no `@alice`
+    // Self-reply: only the `@#1` token the agent wrote
     cmd()
         .args([
             "post",
@@ -2790,15 +2758,13 @@ fn post_send_reply_token_dedup() {
             path.to_str().unwrap(),
             "--author",
             "alice",
-            "--reply-to",
-            "1",
             "--message",
-            "follow-up",
+            "@#1 follow-up",
         ])
         .assert()
         .success();
 
-    // Reply + explicit mention of the same sender: single `@alice` token
+    // Reply + explicit mention of the same sender: exactly the given body
     cmd()
         .args([
             "post",
@@ -2806,25 +2772,22 @@ fn post_send_reply_token_dedup() {
             path.to_str().unwrap(),
             "--author",
             "bob",
-            "--reply-to",
-            "1",
-            "--mention",
-            "alice,alice",
             "--message",
-            "also this",
+            "@#1 @alice also this",
         ])
         .assert()
         .success();
 
     let content = std::fs::read_to_string(dir.path().join("dedup.post.md")).unwrap();
-    assert!(content.contains("@#1\n\nfollow-up"));
-    assert!(content.contains("@#1 @alice\n\nalso this"));
+    assert!(content.contains("@#1 follow-up"));
+    assert!(content.contains("@#1 @alice also this"));
     assert_eq!(content.matches("@alice").count(), 1);
 }
 
 #[test]
-fn post_send_oversized_body_after_injection() {
-    // The 64KB cap applies to the final body AFTER token injection.
+fn post_send_oversized_body_rejected() {
+    // The 64KB cap applies to the body as given (2026-08-15 owner ruling:
+    // no injection happens, so there is no post-injection size surface).
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("big.md");
 
@@ -2837,8 +2800,6 @@ fn post_send_oversized_body_after_injection() {
             path.to_str().unwrap(),
             "--author",
             "alice",
-            "--mention",
-            "bob",
             "--stdin",
         ])
         .write_stdin(huge)
@@ -4979,12 +4940,12 @@ fn contacts_add_rejects_legacy_file() {
 }
 
 #[test]
-fn post_send_mention_trims_whitespace_and_trailing_comma() {
-    // n3: --mention values are cleaned (trim / drop empty segments)
-    // before per-value validation, so "alice, bob" and trailing commas
-    // are legal.
+fn post_send_revoked_reply_to_flag_usage_rejected() {
+    // S-SEND-22 (2026-08-15 owner ruling): --reply-to is revoked on the
+    // write side; passing it lands in the unknown-flag usage rejection
+    // (exit 2) whose fix teaches the body-token form. No file is written.
     let dir = TempDir::new().unwrap();
-    let path = dir.path().join("clean.md");
+    let path = dir.path().join("t.post.md");
 
     cmd()
         .args([
@@ -4992,12 +4953,51 @@ fn post_send_mention_trims_whitespace_and_trailing_comma() {
             "send",
             path.to_str().unwrap(),
             "--author",
-            "alice",
+            "bob",
+            "--reply-to",
+            "1",
             "--message",
-            "first",
+            "x",
         ])
         .assert()
-        .success();
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(
+            "--reply-to was removed from write commands",
+        ))
+        .stderr(predicate::str::contains("@#N token"));
+
+    // JSON tier carries the same teaching under the usage category.
+    cmd()
+        .args([
+            "--json",
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "bob",
+            "--reply-to",
+            "1",
+            "--message",
+            "x",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("\"category\":\"usage\""))
+        .stdout(predicate::str::contains(
+            "--reply-to was removed from write commands",
+        ));
+
+    assert!(!dir.path().join("t.post.md").exists());
+}
+
+#[test]
+fn post_send_revoked_mention_flag_usage_rejected() {
+    // S-SEND-23 (2026-08-15 owner ruling): --mention is revoked on the
+    // write side; same usage rejection surface, teaching the @name body
+    // form. No file is written.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
 
     cmd()
         .args([
@@ -5007,37 +5007,321 @@ fn post_send_mention_trims_whitespace_and_trailing_comma() {
             "--author",
             "bob",
             "--mention",
-            "alice, carol,",
+            "alice",
             "--message",
-            "ping both",
+            "x",
         ])
         .assert()
-        .success();
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(
+            "--mention was removed from write commands",
+        ))
+        .stderr(predicate::str::contains("@name tokens"));
 
-    let content = std::fs::read_to_string(dir.path().join("clean.post.md")).unwrap();
-    assert!(content.contains("@alice @carol"));
+    assert!(!dir.path().join("t.post.md").exists());
 }
 
 #[test]
-fn post_send_reply_to_zero_rejected() {
-    // n4: --reply-to 0 is not a valid target; Validation envelope.
+fn post_edit_revoked_flags_usage_rejected() {
+    // S-EDIT-10 (2026-08-15 owner ruling): the write-command extension
+    // covers post edit too; revoked flags fall into the same usage surface
+    // and no file is touched.
     let dir = TempDir::new().unwrap();
-    let path = dir.path().join("zero.md");
+    let path = dir.path().join("e.post.md");
 
     cmd()
         .args([
             "post",
-            "send",
+            "edit",
             path.to_str().unwrap(),
             "--author",
             "alice",
+            "--seq",
+            "1",
             "--reply-to",
-            "0",
+            "2",
             "--message",
-            "hello",
+            "y",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("error validation:"))
-        .stderr(predicate::str::contains("reply-to must be >= 1"));
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(
+            "--reply-to was removed from write commands",
+        ));
+
+    cmd()
+        .args([
+            "post",
+            "edit",
+            path.to_str().unwrap(),
+            "--author",
+            "alice",
+            "--seq",
+            "1",
+            "--mention",
+            "bob",
+            "--message",
+            "y",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"))
+        .stderr(predicate::str::contains(
+            "--mention was removed from write commands",
+        ));
+
+    assert!(!dir.path().join("e.post.md").exists());
+}
+
+#[test]
+fn revoked_flag_usage_envelopes_are_pure_ascii() {
+    // S-OUT-05 extension (tdd §9.2): the revoked-flag usage envelopes join
+    // the byte-level pure-ASCII guard.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    for flag in ["--reply-to", "--mention"] {
+        let out = cmd()
+            .args([
+                "post",
+                "send",
+                path.to_str().unwrap(),
+                "--author",
+                "bob",
+                flag,
+                "1",
+                "--message",
+                "x",
+            ])
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(
+            out.stderr.is_ascii(),
+            "revoked-flag usage stderr must be pure ASCII ({})",
+            flag
+        );
+    }
+}
+
+#[test]
+fn contacts_add_destination_advisory_nonblocking() {
+    // S-CONTACTS-16 (2026-08-15 owner ruling): destination problems never
+    // block the write — exit 0, entry persisted, `advisory` field added.
+    let dir = TempDir::new().unwrap();
+    let contacts = dir.path().join("team.contacts.md");
+
+    cmd()
+        .args(["contacts", "create", contacts.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // (a) missing destination -> `does not exist`
+    cmd()
+        .args([
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "ghost.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "advisory: destination 'ghost.profile.md' does not exist",
+        ));
+    let content = std::fs::read_to_string(&contacts).unwrap();
+    assert!(content.contains("ghost.profile.md"), "entry still written");
+
+    // (b) invalid profile format -> `is not a valid profile file`
+    std::fs::write(
+        dir.path().join("bad.profile.md"),
+        "# Bad\n\nnot a profile\n",
+    )
+    .unwrap();
+    cmd()
+        .args([
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "bad.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "advisory: destination 'bad.profile.md' is not a valid profile file",
+        ));
+
+    // (c) unreadable (a directory standing in for the profile file)
+    std::fs::create_dir(dir.path().join("adir.profile.md")).unwrap();
+    cmd()
+        .args([
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "adir.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "advisory: destination 'adir.profile.md' is not readable",
+        ));
+
+    // (d) --json tier carries the same key (add-only protocol)
+    cmd()
+        .args([
+            "--json",
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "other-ghost.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"advisory\":"))
+        .stdout(predicate::str::contains(
+            "destination 'other-ghost.profile.md' does not exist",
+        ));
+
+    // (e) advisory text is pure ASCII at the raw-byte level
+    let out = cmd()
+        .args([
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "yet-another-ghost.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    assert!(out.stdout.is_ascii(), "advisory stdout must be pure ASCII");
+}
+
+#[test]
+fn contacts_add_valid_destination_no_advisory() {
+    // S-CONTACTS-16 And (non-trigger form): a present, valid destination
+    // keeps the envelope free of any `advisory` field (noise-free).
+    let dir = TempDir::new().unwrap();
+    let contacts = dir.path().join("team.contacts.md");
+    cmd()
+        .args(["contacts", "create", contacts.to_str().unwrap()])
+        .assert()
+        .success();
+    std::fs::write(
+        dir.path().join("alice.profile.md"),
+        "# alice\n\n- model: m\n\n## Scope\n\n- read: *.rs\n",
+    )
+    .unwrap();
+
+    cmd()
+        .args([
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "alice.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("advisory").not());
+
+    cmd()
+        .args([
+            "--json",
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "alice.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"advisory\"").not());
+}
+
+#[test]
+fn contacts_update_destination_advisory_nonblocking() {
+    // S-CONTACTS-17 (2026-08-15 owner ruling): update's destination is the
+    // NEW profile path; advisory coexists with `updated`, behaviour stays
+    // byte-identical with S-CONTACTS-14.
+    let dir = TempDir::new().unwrap();
+    let contacts = dir.path().join("team.contacts.md");
+    cmd()
+        .args(["contacts", "create", contacts.to_str().unwrap()])
+        .assert()
+        .success();
+    cmd()
+        .args([
+            "contacts",
+            "add",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "alice.profile.md",
+        ])
+        .assert()
+        .success();
+
+    // Missing new destination: exit 0, re-bind happens, advisory present.
+    cmd()
+        .args([
+            "contacts",
+            "update",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "alice.profile.md",
+            "--new-profile",
+            "carol",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "updated: alice.profile.md -> carol",
+        ))
+        .stdout(predicate::str::contains(
+            "advisory: destination 'carol' does not exist",
+        ));
+
+    // --json tier: both keys coexist.
+    cmd()
+        .args([
+            "--json",
+            "contacts",
+            "update",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "carol",
+            "--new-profile",
+            "dave.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"updated\":"))
+        .stdout(predicate::str::contains("\"advisory\":"));
+
+    // Valid new destination: no advisory.
+    std::fs::write(
+        dir.path().join("erin.profile.md"),
+        "# erin\n\n- model: m\n\n## Scope\n\n- read: *.rs\n",
+    )
+    .unwrap();
+    cmd()
+        .args([
+            "contacts",
+            "update",
+            contacts.to_str().unwrap(),
+            "--profile",
+            "dave.profile.md",
+            "--new-profile",
+            "erin.profile.md",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("advisory").not());
 }

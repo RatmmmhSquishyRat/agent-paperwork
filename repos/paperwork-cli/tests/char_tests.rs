@@ -326,7 +326,9 @@ fn char_post_send_stdin_body() {
 
 #[test]
 fn char_post_send_reply_to_implicit_mention() {
-    // seed: alice #1, then bob replies to #1 -> implicit mention of alice
+    // seed: alice #1, then bob replies to #1 via the body token `@#1`
+    // (2026-08-15 owner ruling: sugar flags revoked, body is written
+    // verbatim) -> implicit mention of alice
     let dir = TempDir::new().unwrap();
     run(
         &dir,
@@ -348,10 +350,8 @@ fn char_post_send_reply_to_implicit_mention() {
             "chat",
             "--author",
             "bob",
-            "--reply-to",
-            "1",
             "--message",
-            "the reply",
+            "@#1 the reply",
         ],
     );
     assert_eq!(r.code, 0);
@@ -379,10 +379,8 @@ fn char_post_send_reply_to_implicit_mention() {
                 "chat",
                 "--author",
                 "bob",
-                "--reply-to",
-                "1",
                 "--message",
-                "the reply",
+                "@#1 the reply",
             ],
         )
         .stdout
@@ -393,11 +391,12 @@ fn char_post_send_reply_to_implicit_mention() {
     );
 }
 
-// NEW-12 (ported from wip, v0.6 grammar): reply-to pointing at a missing
-// seq keeps the historical envelope — the send succeeds, the `@#N` token is
-// injected, and NO implicit mention appears (the bounded tail-scan lookup
-// returns None exactly like the old whole-file read returned an empty
-// filter).
+// NEW-12 (ported from wip, v0.6 grammar; rewritten 2026-08-15 owner
+// ruling): a body token `@#5` pointing at a missing seq keeps the
+// historical envelope — the send succeeds, the body is written verbatim
+// (no injection), and NO implicit mention appears (the bounded tail-scan
+// lookup returns None exactly like the old whole-file read returned an
+// empty filter).
 #[test]
 fn char_post_send_reply_to_missing_seq_envelope_unchanged() {
     let dir = TempDir::new().unwrap();
@@ -421,10 +420,8 @@ fn char_post_send_reply_to_missing_seq_envelope_unchanged() {
             "chat",
             "--author",
             "bob",
-            "--reply-to",
-            "5",
             "--message",
-            "ping",
+            "@#5 ping",
         ],
     );
     assert_eq!(r.code, 0);
@@ -436,8 +433,11 @@ fn char_post_send_reply_to_missing_seq_envelope_unchanged() {
     );
 }
 
+// Rewritten 2026-08-15 (owner ruling): mention tokens are written directly
+// into the body by the agent; the CLI persists them verbatim (the old
+// --mention flag injection is gone).
 #[test]
-fn char_post_send_mention_flag_injection() {
+fn char_post_send_mention_body_tokens() {
     let dir = TempDir::new().unwrap();
     let r = run(
         &dir,
@@ -447,10 +447,8 @@ fn char_post_send_mention_flag_injection() {
             "chat",
             "--author",
             "alice",
-            "--mention",
-            "bob,carol",
             "--message",
-            "heads up",
+            "@bob @carol heads up",
         ],
     );
     assert_eq!(r.code, 0);
@@ -1584,6 +1582,148 @@ fn char_usage_envelopes() {
 }
 
 // ===========================================================================
+// 2026-08-15 owner ruling: revoked sugar flags + contacts advisory golds
+// ===========================================================================
+
+#[test]
+fn char_revoked_sugar_flags_usage_gold() {
+    // The revoked write-side flags land in the usage surface (exit 2) with
+    // migration teaching pointing at the body-token form (S-SEND-22/23,
+    // S-EDIT-10).
+    let dir = TempDir::new().unwrap();
+
+    let r = run(
+        &dir,
+        &[
+            "post",
+            "send",
+            "chat",
+            "--author",
+            "bob",
+            "--reply-to",
+            "1",
+            "--message",
+            "x",
+        ],
+    );
+    assert_eq!(r.code, 2);
+    gold("usage_revoked_reply_to_stderr", &r.stderr);
+
+    let r = run(
+        &dir,
+        &[
+            "post",
+            "send",
+            "chat",
+            "--author",
+            "bob",
+            "--mention",
+            "alice",
+            "--message",
+            "x",
+        ],
+    );
+    assert_eq!(r.code, 2);
+    gold("usage_revoked_mention_stderr", &r.stderr);
+
+    // edit shares the write-command extension
+    let r = run(
+        &dir,
+        &[
+            "post",
+            "edit",
+            "chat",
+            "--author",
+            "alice",
+            "--seq",
+            "1",
+            "--reply-to",
+            "2",
+            "--message",
+            "y",
+        ],
+    );
+    assert_eq!(r.code, 2);
+    gold("usage_revoked_reply_to_edit_stderr", &r.stderr);
+
+    // json tier carries the same teaching
+    let r = run(
+        &dir,
+        &[
+            "--json",
+            "post",
+            "send",
+            "chat",
+            "--author",
+            "bob",
+            "--mention",
+            "alice",
+            "--message",
+            "x",
+        ],
+    );
+    assert_eq!(r.code, 2);
+    gold("usage_revoked_mention_json_stdout", &r.stdout);
+
+    // nothing was written by any rejected invocation
+    assert!(!dir.path().join("chat.post.md").exists());
+}
+
+#[test]
+fn char_contacts_advisory_gold() {
+    // Advisory field golden envelopes (S-CONTACTS-16/17): triggered forms
+    // carry the field, the valid form does not.
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir,
+        "agents/alice.profile.md",
+        "# alice\n\n- model: gpt-4o\n",
+    );
+    run(&dir, &["contacts", "create", "team"]);
+
+    let r = run(
+        &dir,
+        &[
+            "contacts",
+            "add",
+            "team.contacts.md",
+            "--profile",
+            "ghost.profile.md",
+        ],
+    );
+    assert_eq!(r.code, 0);
+    gold("contacts_add_advisory_default_stdout", &r.stdout);
+
+    let r = run(
+        &dir,
+        &[
+            "--json",
+            "contacts",
+            "add",
+            "team.contacts.md",
+            "--profile",
+            "ghost2.profile.md",
+        ],
+    );
+    assert_eq!(r.code, 0);
+    gold("contacts_add_advisory_json_stdout", &r.stdout);
+
+    // valid destination: no advisory (noise-free)
+    let r = run(
+        &dir,
+        &[
+            "contacts",
+            "add",
+            "team.contacts.md",
+            "--profile",
+            "agents/alice.profile.md",
+        ],
+    );
+    assert_eq!(r.code, 0);
+    gold("contacts_add_valid_no_advisory_stdout", &r.stdout);
+}
+
+// ===========================================================================
 // Freeze table (generated by record mode; normative v0.6 contract)
 // ===========================================================================
 
@@ -1620,11 +1760,14 @@ static FROZEN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         ("brief_verify_hash_mismatch_stderr", ""),
         ("brief_verify_hash_mismatch_stdout", "ok brief.verify 0/2 fresh\n---\nmain.rs: stale\nlib.rs: stale\n"),
         ("brief_verify_json_stdout", "{\"command\":\"brief.verify\",\"conclusion\":\"1/2 fresh\",\"results\":[{\"path\":\"main.rs\",\"status\":\"fresh\",\"title\":\"main.rs\"},{\"path\":\"lib.rs\",\"status\":\"stale\",\"title\":\"lib.rs\"}],\"status\":\"ok\"}\n"),
+        ("contacts_add_advisory_default_stdout", "ok contacts.add ghost.profile.md -> team.contacts.md\ncontacts: team.contacts.md\nprofile: ghost.profile.md\nadvisory: destination 'ghost.profile.md' does not exist\n"),
+        ("contacts_add_advisory_json_stdout", "{\"advisory\":\"destination 'ghost2.profile.md' does not exist\",\"command\":\"contacts.add\",\"conclusion\":\"ghost2.profile.md -> team.contacts.md\",\"contacts\":\"team.contacts.md\",\"profile\":\"ghost2.profile.md\",\"status\":\"ok\"}\n"),
         ("contacts_add_default_stderr", ""),
         ("contacts_add_default_stdout", "ok contacts.add agents/alice.profile.md -> team.contacts.md\ncontacts: team.contacts.md\nprofile: agents/alice.profile.md\n"),
         ("contacts_add_file", "# Core Team\n\n- [alice](agents/alice.profile.md)\n"),
         ("contacts_add_legacy_stderr", "error format: Parse error: contacts file contains legacy bare-path bullets that v0.5 parsing ignores\nfix: this file is in the v0.4 legacy format; v0.5 is not forward compatible - migrate it by hand per the CHANGELOG migration guide before adding entries\nexample: see CHANGELOG.md, [0.5.0] 'Migration guide (manual)', contacts\n"),
-        ("contacts_add_second_json_stdout", "{\"command\":\"contacts.add\",\"conclusion\":\"agents/bob.profile.md -> team.contacts.md\",\"contacts\":\"team.contacts.md\",\"profile\":\"agents/bob.profile.md\",\"status\":\"ok\"}\n"),
+        ("contacts_add_second_json_stdout", "{\"advisory\":\"destination 'agents/bob.profile.md' does not exist\",\"command\":\"contacts.add\",\"conclusion\":\"agents/bob.profile.md -> team.contacts.md\",\"contacts\":\"team.contacts.md\",\"profile\":\"agents/bob.profile.md\",\"status\":\"ok\"}\n"),
+        ("contacts_add_valid_no_advisory_stdout", "ok contacts.add agents/alice.profile.md -> team.contacts.md\ncontacts: team.contacts.md\nprofile: agents/alice.profile.md\n"),
         ("contacts_create_default_stderr", ""),
         ("contacts_create_default_stdout", "ok contacts.create team.contacts.md\npath: team.contacts.md\ntitle: Core Team\n"),
         ("contacts_create_duplicate_stderr", "error already-exists: Contacts 'team.contacts.md' already exists\nfix: use `paperwork contacts add` to add entries\nexample: paperwork contacts add team.contacts.md --profile agents/alice.profile.md\n"),
@@ -1668,18 +1811,18 @@ static FROZEN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         ("post_send_default_stderr", ""),
         ("post_send_default_stdout", "ok post.send #1 -> chat.post.md\nseq: 1\npath: chat.post.md\nsender: alice\n"),
         ("post_send_foreign_stderr", "error format: Parse error: foreign.post.md is not a valid post thread: no valid message boundaries found\nfix: expected an H1 title preamble with `## #N sender timestamp` message headers; or validate it explicitly\nexample: paperwork validate foreign.post.md --type post\n"),
-        ("post_send_implicit_mention_file", "# chat\n\n## #1 alice (TS)\n\n```md\nopening\n```\n\n## #2 bob (TS)\n\n```md\n@#1 @alice\n\nthe reply\n```\n\n"),
+        ("post_send_implicit_mention_file", "# chat\n\n## #1 alice (TS)\n\n```md\nopening\n```\n\n## #2 bob (TS)\n\n```md\n@#1 the reply\n```\n\n"),
         ("post_send_implicit_mention_json_stdout", "{\"command\":\"post.send\",\"conclusion\":\"#2 -> chat.post.md\",\"implicit-mention\":\"alice\",\"path\":\"chat.post.md\",\"sender\":\"bob\",\"seq\":\"2\",\"status\":\"ok\"}\n"),
         ("post_send_implicit_mention_stdout", "ok post.send #2 -> chat.post.md\nseq: 2\npath: chat.post.md\nsender: bob\nimplicit-mention: alice\n"),
         ("post_send_json_stderr", ""),
         ("post_send_json_stdout", "{\"command\":\"post.send\",\"conclusion\":\"#1 -> chat.post.md\",\"path\":\"chat.post.md\",\"sender\":\"alice\",\"seq\":\"1\",\"status\":\"ok\"}\n"),
         ("post_send_legacy_json_stdout", "{\"category\":\"format\",\"command\":\"post.send\",\"example\":\"paperwork validate old.post.md --type post\",\"exit_code\":1,\"fix\":\"expected an H1 title preamble with `## #N sender timestamp` message headers; or validate it explicitly\",\"message\":\"Parse error: old.post.md is not a valid post thread: no valid message boundaries found\",\"status\":\"error\"}\n"),
         ("post_send_legacy_stderr", "error format: Parse error: old.post.md is not a valid post thread: no valid message boundaries found\nfix: expected an H1 title preamble with `## #N sender timestamp` message headers; or validate it explicitly\nexample: paperwork validate old.post.md --type post\n"),
-        ("post_send_mention_file", "# chat\n\n## #1 alice (TS)\n\n```md\n@bob @carol\n\nheads up\n```\n\n"),
+        ("post_send_mention_file", "# chat\n\n## #1 alice (TS)\n\n```md\n@bob @carol heads up\n```\n\n"),
         ("post_send_mention_stdout", "ok post.send #1 -> chat.post.md\nseq: 1\npath: chat.post.md\nsender: alice\n"),
         ("post_send_plain_stdout", ""),
         ("post_send_quiet_stdout", "seq: 1\npath: chat.post.md\nsender: alice\n"),
-        ("post_send_reply_missing_seq_file", "# chat\n\n## #1 alice (TS)\n\n```md\nstart\n```\n\n## #2 bob (TS)\n\n```md\n@#5\n\nping\n```\n\n"),
+        ("post_send_reply_missing_seq_file", "# chat\n\n## #1 alice (TS)\n\n```md\nstart\n```\n\n## #2 bob (TS)\n\n```md\n@#5 ping\n```\n\n"),
         ("post_send_reply_missing_seq_stderr", ""),
         ("post_send_reply_missing_seq_stdout", "ok post.send #2 -> chat.post.md\nseq: 2\npath: chat.post.md\nsender: bob\n"),
         ("post_send_seq2_stdout", "ok post.send #2 -> chat.post.md\nseq: 2\npath: chat.post.md\nsender: bob\n"),
@@ -1724,6 +1867,10 @@ static FROZEN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         ("usage_missing_author_stderr", "error usage: the following required arguments were not provided: --author <AUTHOR>\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below\nexample: paperwork post send standup.post.md --author alice --message \"Hello\"\n"),
         ("usage_missing_subcommand_stderr", "error usage: missing subcommand: expected one of profile, post, brief, contacts, validate\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below\nexample: paperwork post send standup.post.md --author alice --message \"Hello\"\n"),
         ("usage_post_read_author_stderr", "error usage: unexpected argument '--author' found\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below; post read has no --author flag; to locate messages by a sender, filter on mentions via --mention (e.g. paperwork post read standup.post.md --mention alice)\nexample: paperwork post read standup.post.md --from 5 --to 20\n"),
+        ("usage_revoked_mention_json_stdout", "{\"category\":\"usage\",\"command\":\"post.send\",\"example\":\"paperwork post send standup.post.md --author alice --message \\\"Hello\\\"\",\"exit_code\":2,\"fix\":\"required values are named flags (--author/--message for post send/edit); see the canonical example below; --mention was removed from write commands (owner ruling 2026-08-15); write mentions into the message body itself as @name tokens (e.g. --message \\\"@carol ping\\\")\",\"message\":\"unexpected argument '--mention' found\",\"status\":\"error\"}\n"),
+        ("usage_revoked_mention_stderr", "error usage: unexpected argument '--mention' found\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below; --mention was removed from write commands (owner ruling 2026-08-15); write mentions into the message body itself as @name tokens (e.g. --message \"@carol ping\")\nexample: paperwork post send standup.post.md --author alice --message \"Hello\"\n"),
+        ("usage_revoked_reply_to_edit_stderr", "error usage: unexpected argument '--reply-to' found\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below; --reply-to was removed from write commands (owner ruling 2026-08-15); write the reply reference into the message body itself as an @#N token (e.g. --message \"@#2 Sure\")\nexample: paperwork post edit standup.post.md --author alice --seq 3 --message \"corrected body\"\n"),
+        ("usage_revoked_reply_to_stderr", "error usage: unexpected argument '--reply-to' found\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below; --reply-to was removed from write commands (owner ruling 2026-08-15); write the reply reference into the message body itself as an @#N token (e.g. --message \"@#2 Sure\")\nexample: paperwork post send standup.post.md --author alice --message \"Hello\"\n"),
         ("usage_unknown_flag_stderr", "error usage: unexpected argument '--from' found\nfix: required values are named flags (--author/--message for post send/edit); see the canonical example below; this flag is not recognized; if it came from older grammar, give the value via the matching named flag\nexample: paperwork post send standup.post.md --author alice --message \"Hello\"\n"),
         ("validate_missing_stderr", "error io: (OS ERROR)\nfix: check that the file exists and is readable\nexample: paperwork validate absent.post.md\n"),
         ("validate_ok_default_stderr", ""),
