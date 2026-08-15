@@ -69,7 +69,7 @@ char_tests（31 -> 33）：
 - repos/paperwork-cli/README.md：盘点确认无撤销 flag 示例，无需改动（事实登记）。
 - design.md（impl_plan 点名两处）：§2.1 签名示意删除糖衣 flag 并加裁决更正注；§12 基线勘误记录行追加〔2026-08-15 owner 裁决更正〕（注入机制废止、正文直书 + 读侧 derive、读侧过滤器保留）；L60/L79/L84/L217 属历史论证文本，按 impl_plan 范围不改。
 
-## O5 CHANGELOG Unreleased — 提交（本提交）
+## O5 CHANGELOG Unreleased — 提交 72c85ac
 
 - CHANGELOG.md `[Unreleased]` 顶部新增两段：`Removed — write-side sugar flags`（breaking for 糖参数调用方：usage exit 2、fix 教学、正文直书迁移路径、读侧过滤器保留）；`Added — contacts destination advisory`（非阻塞探测、exit 0 不变、advisory 字段三形态文案、Default/--json 同名 key、只增不改协议、版本纪律 0.5.0 不 bump/tag/publish）。
 - 既有发布段不回改；不新增版本段（spec §7 第 4/6 条）。
