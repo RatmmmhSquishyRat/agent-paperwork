@@ -16,8 +16,8 @@ use crate::{Manifest, ManifestEntry, PaperworkError, Result};
 
 use super::{
     collect_outside_fence, compute_fence_length, extract_attribute, fence_close_matches,
-    fence_info, fence_open_len, first_outside_fence, normalize_line_endings, parse_timestamp,
-    RFC3339_FMT,
+    fence_info, fence_open_len, first_outside_fence, for_each_outside_fence,
+    normalize_line_endings, parse_timestamp, unclosed_fence, RFC3339_FMT,
 };
 
 /// Named-capture-group scanner (`(?<name>...)`), compiled once (M-review M5).
@@ -32,13 +32,27 @@ pub fn extract_regex_groups(pattern: &str) -> Vec<String> {
         .collect()
 }
 
-/// Representability check for a brief entry note (M-review M1).
+/// Representability check for a brief entry note (M-review M1, extended
+/// by the C-1 write→read closure guards).
 ///
 /// A note whose FIRST non-blank line is attribute-shaped (`- key: value`,
 /// matching the attribute regex) or opens a ```` ```regex ```` fence cannot
 /// survive a parse → serialize roundtrip: the attribute-zone rule (blank
 /// lines do not terminate it) would re-absorb that line as an attribute or
-/// as a regex carrier. Returns a human-readable reason if unrepresentable.
+/// as a regex carrier.
+///
+/// C-1 extension: notes are serialized BARE inside the entry section, so
+/// any fence-OUTSIDE heading-shaped line is structural damage on the next
+/// parse — a `### ` line trips the SAM-1 legacy-residue parse guard and
+/// permanently locks the whole brief out of read/add/remove/verify, and a
+/// `## ` line silently splits the entry (forged empty-path entry). Both
+/// shapes are refused here before anything touches disk; headings INSIDE a
+/// note fence stay legal (the parse side is fence-aware, mirroring
+/// `contains_legacy_brief_residue`). An unclosed note fence would swallow
+/// every later entry on the next parse and is likewise refused (D2
+/// fence-balance discipline).
+///
+/// Returns a human-readable reason if unrepresentable.
 pub fn note_representation_issue(note: &str) -> Option<&'static str> {
     let first = note.lines().find(|l| !l.trim().is_empty())?;
     if extract_attribute(first).is_some() {
@@ -47,7 +61,37 @@ pub fn note_representation_issue(note: &str) -> Option<&'static str> {
     if fence_info(first) == "regex" && fence_open_len(first).is_some() {
         return Some("note starts with a ```regex fence opening line");
     }
+    if note_contains_heading_outside_fence(note) {
+        return Some(
+            "note embeds a heading-shaped line ('#', '##' or '###') outside a code fence; \
+             notes are serialized bare inside the entry section, so an embedded heading \
+             would trip the residue parse guard ('### '), split the entry ('## ') or forge \
+             structure on the next parse",
+        );
+    }
+    if unclosed_fence(&normalize_line_endings(note)).is_some() {
+        return Some(
+            "note opens a code fence that is never closed; the unclosed fence would \
+             swallow every later entry on the next parse",
+        );
+    }
     None
+}
+
+/// Fence-aware heading scan for notes (C-1 write-side guard): mirrors the
+/// parse side's fence awareness (`contains_legacy_brief_residue`,
+/// `parse_entry_body`) so quoted headings inside a note fence stay legal.
+fn note_contains_heading_outside_fence(note: &str) -> bool {
+    let normalized = normalize_line_endings(note);
+    let mut found = false;
+    for_each_outside_fence(&normalized, |_i, line| {
+        if line.trim_start().starts_with('#') {
+            found = true;
+            return false; // early stop
+        }
+        true
+    });
+    found
 }
 
 /// Locate fence-aware H2 line indices (entry boundaries, spec §3.3/§6.2).
@@ -199,6 +243,12 @@ fn parse_entry_body(title: String, lines: &[&str]) -> ManifestEntry {
                     groups = extract_regex_groups(&pattern);
                     regex = Some(pattern);
                     regex_lines.clear();
+                } else {
+                    // A note-fence closing line is note content: keep it,
+                    // otherwise a fenced block inside a note loses its
+                    // closer on parse and the note stops roundtripping
+                    // (C-1 roundtrip guarantee).
+                    note_lines.push(line);
                 }
             } else if collecting_regex {
                 regex_lines.push(line);
@@ -590,5 +640,33 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("## fake entry"));
+    }
+
+    // C-1: note write→read closure guard (unit surface of
+    // note_representation_issue). Fence-OUTSIDE heading shapes damage the
+    // next parse (lockout / entry split); INSIDE a fence they are quoted
+    // content and stay legal.
+    #[test]
+    fn test_note_representation_issue_heading_and_fence_balance() {
+        // heading-shaped lines outside fences: refused (any position)
+        assert!(note_representation_issue("First\n### sub\nlast").is_some());
+        assert!(note_representation_issue("### first\nrest").is_some());
+        assert!(note_representation_issue("Intro\n## forged\ntail").is_some());
+        assert!(note_representation_issue("Intro\n# h1 line\ntail").is_some());
+        // CRLF input behaves like LF
+        assert!(note_representation_issue("Intro\r\n### sub\r\n").is_some());
+        // an unclosed note fence would swallow every later entry
+        assert!(note_representation_issue("Intro\n```\ncode").is_some());
+
+        // headings INSIDE a closed fence stay legal (quoted content)
+        assert!(note_representation_issue("Example:\n```\n### quoted\n```").is_none());
+        assert!(note_representation_issue("a\n```\nx\n```\nb").is_none());
+
+        // pre-existing M1 rules unchanged
+        assert!(note_representation_issue("- path: evil\nrest").is_some());
+        assert!(note_representation_issue("```regex\nx\n```").is_some());
+        // plain prose stays legal
+        assert!(note_representation_issue("Plain note.\nSecond line.").is_none());
+        assert!(note_representation_issue("").is_none());
     }
 }

@@ -907,3 +907,124 @@ fn thread_edit_refuses_unclosed_fence_thread() {
     let after = fs::read_to_string(&path).expect("read");
     assert!(after.contains("corrected"));
 }
+
+// ============================================================================
+// C-1: brief note / entry-title write→read closure guards. Notes are
+// serialized bare inside the entry section: a fence-OUTSIDE heading line
+// either permanently locks the brief out (`### ` trips the read-side
+// SAM-1 residue guard) or silently splits the entry (`## ` forges an
+// empty-path entry), and an entry title serializing to `## Entries`
+// locks out likewise. The write side must fast-fail zero-write; headings
+// INSIDE a note fence stay legal (parse side is fence-aware).
+// ============================================================================
+
+#[test]
+fn brief_add_note_heading_outside_fence_refused_zero_write() {
+    let dir = tempdir().expect("tempdir");
+    let brief = dir.path().join("b.brief.md");
+    let target = dir.path().join("src.rs");
+    fs::write(&target, "content").expect("write target");
+    manifest::brief_create(&brief, "t", None, "").expect("create");
+    let before = fs::read(&brief).expect("read bytes");
+
+    // Negative (C-1 path A): a `### ` line ANYWHERE in the note (incl.
+    // non-first lines) trips the read-side residue guard and would lock
+    // the whole brief out — write side refuses.
+    let err = manifest::brief_add_entry(
+        &brief,
+        "src.rs",
+        None,
+        Some("First line\n### sub heading\nlast"),
+    )
+    .expect_err("note with a ### heading outside a fence must be refused");
+    assert_validation(&err);
+    assert!(err.to_string().contains("not representable"));
+
+    let err =
+        manifest::brief_add_entry(&brief, "src.rs", None, Some("### first line heading\nrest"))
+            .expect_err("note starting with a ### heading must be refused");
+    assert_validation(&err);
+
+    // Negative (P3): a `## ` line in the note silently splits the entry
+    // into a forged empty-path entry — refused likewise.
+    let err =
+        manifest::brief_add_entry(&brief, "src.rs", None, Some("Intro\n## forged entry\ntail"))
+            .expect_err("note with a ## heading outside a fence must be refused");
+    assert_validation(&err);
+
+    // Negative (D2 fence-balance discipline): an unclosed note fence would
+    // swallow every later entry on the next parse.
+    let err = manifest::brief_add_entry(
+        &brief,
+        "src.rs",
+        None,
+        Some("Intro\n```\ncode without close"),
+    )
+    .expect_err("note with an unclosed fence must be refused");
+    assert_validation(&err);
+
+    // Zero write across all refusals; the brief stays fully operable.
+    assert_eq!(fs::read(&brief).expect("read bytes"), before);
+    manifest::brief_read(&brief).expect("brief still readable");
+}
+
+#[test]
+fn brief_add_note_fenced_heading_roundtrips() {
+    // Positive roundtrip: heading-shaped lines INSIDE a note fence are
+    // quoted content — write accepts, the next parse reads them back
+    // intact (write→read closure preserved).
+    let dir = tempdir().expect("tempdir");
+    let brief = dir.path().join("b.brief.md");
+    let target = dir.path().join("src.rs");
+    fs::write(&target, "content").expect("write target");
+    manifest::brief_create(&brief, "t", None, "").expect("create");
+
+    let note = "Example below:\n```\n### quoted heading\n## quoted too\n```";
+    manifest::brief_add_entry(&brief, "src.rs", None, Some(note))
+        .expect("fenced headings are legal");
+    let m = manifest::brief_read(&brief).expect("read back");
+    assert_eq!(m.entries.len(), 1);
+    assert_eq!(m.entries[0].note.as_deref(), Some(note));
+
+    // A second add (read-modify-rewrite) keeps the fenced note intact.
+    fs::write(dir.path().join("other.rs"), "x").expect("write");
+    manifest::brief_add_entry(&brief, "other.rs", None, None).expect("second add");
+    let m = manifest::brief_read(&brief).expect("read back");
+    assert_eq!(m.entries.len(), 2);
+    assert_eq!(m.entries[0].note.as_deref(), Some(note));
+}
+
+#[test]
+fn brief_add_entry_titled_entries_refused_zero_write() {
+    // C-1 path B: an entry file named `Entries` serializes to the legacy
+    // `## Entries` wrapper heading → read-side lockout. The write side
+    // refuses before locking/writing.
+    let dir = tempdir().expect("tempdir");
+    let brief = dir.path().join("b.brief.md");
+    let target = dir.path().join("Entries");
+    fs::write(&target, "content").expect("write target");
+    manifest::brief_create(&brief, "t", None, "").expect("create");
+    let before = fs::read(&brief).expect("read bytes");
+
+    let err = manifest::brief_add_entry(&brief, "Entries", None, None)
+        .expect_err("entry titled 'Entries' must be refused");
+    assert_validation(&err);
+    assert!(err.to_string().contains("Entries"));
+
+    // the directory form derives the same title and is refused too
+    // (the guard runs before target-file IO)
+    let err = manifest::brief_add_entry(&brief, "notes/Entries", None, None)
+        .expect_err("notes/Entries must be refused too");
+    assert_validation(&err);
+
+    // Zero write; the brief stays fully operable.
+    assert_eq!(fs::read(&brief).expect("read bytes"), before);
+    manifest::brief_read(&brief).expect("brief still readable");
+
+    // Positive control: any other file name stays legal.
+    fs::write(dir.path().join("entries.rs"), "x").expect("write");
+    manifest::brief_add_entry(&brief, "entries.rs", None, None).expect("lowercase name legal");
+    let m = manifest::brief_read(&brief).expect("read back");
+    assert_eq!(m.entries.len(), 1);
+    assert_eq!(m.entries[0].title, "entries.rs");
+}

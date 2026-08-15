@@ -75,12 +75,22 @@ pub fn brief_create(
 /// Computes the SHA-256 hash of the file at `entry_path` (resolved relative
 /// to the brief file's parent directory).
 ///
-/// Note representability guard (review M1): a note whose first non-blank
-/// line is attribute-shaped (`- key: value`) or opens a ```` ```regex ````
-/// fence would be re-absorbed into the attribute zone on the next parse,
-/// silently corrupting the entry — such notes are refused with a
-/// Validation error before anything touches disk. Runs under the locked
-/// read-modify-write template (spec cli-grammar-v0.6 §3.9, review M7).
+/// Note representability guard (review M1, extended C-1): a note whose
+/// first non-blank line is attribute-shaped (`- key: value`) or opens a
+/// ```` ```regex ```` fence would be re-absorbed into the attribute zone on
+/// the next parse, silently corrupting the entry; a heading-shaped line
+/// outside a fence trips the residue parse guard (`### `, locking the whole
+/// brief out) or splits the entry (`## `); an unclosed fence swallows every
+/// later entry. All such notes are refused with a Validation error before
+/// anything touches disk.
+///
+/// Entry-title residue guard (C-1): a title serializing to the legacy
+/// `## Entries` wrapper heading would trip the read-side SAM-1 parse guard
+/// and permanently lock the brief out of read/add/remove/verify — refused
+/// before locking/writing.
+///
+/// Runs under the locked read-modify-write template (spec cli-grammar-v0.6
+/// §3.9, review M7).
 pub fn brief_add_entry(
     path: &Path,
     entry_path: &str,
@@ -106,12 +116,37 @@ pub fn brief_add_entry(
     // attribute line (single-line field); a newline would corrupt the entry.
     check_single_line("entry path", entry_path)?;
 
-    // Note representability guard (review M1) — reject before locking/writing.
+    // Derive the entry title from the entry_path file name BEFORE the lock:
+    // the residue guard below needs it, and the derivation is a pure
+    // function of entry_path (C-1).
+    let title = Path::new(entry_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| entry_path.to_string());
+
+    // Entry-title residue guard (C-1): `## Entries` trips the read-side
+    // SAM-1 legacy-residue parse guard and locks the whole brief out.
+    if title.trim() == "Entries" {
+        return Err(PaperworkError::Validation {
+            message: format!(
+                "entry title '{}' serializes to the legacy '## Entries' wrapper heading, which the parser refuses",
+                title
+            ),
+            fix: "use an entry file whose name is not 'Entries'; the v0.5 layout has no entries wrapper — every entry is its own '## <title>' section".to_string(),
+            example: format!(
+                "paperwork brief add {} --entry notes/chapter-one.rs",
+                path.display()
+            ),
+        });
+    }
+
+    // Note representability guard (review M1, extended C-1) — reject before
+    // locking/writing.
     if let Some(note_text) = note {
         if let Some(reason) = note_representation_issue(note_text) {
             return Err(PaperworkError::Validation {
                 message: format!("note is not representable in brief format: {}", reason),
-                fix: "start the note with a plain prose line; attribute-shaped '- key: value' first lines and ```regex fence openings are reserved for entry attributes".to_string(),
+                fix: "start the note with a plain prose line; attribute-shaped '- key: value' first lines and ```regex fence openings are reserved for entry attributes, and heading-shaped lines ('#', '##', '###') belong inside a code fence — outside a fence they would trip the residue parse guard or split the entry".to_string(),
                 example: format!("paperwork brief add {} --entry {} --note \"Reading notes for this file\"", path.display(), entry_path),
             });
         }
@@ -134,12 +169,6 @@ pub fn brief_add_entry(
     locked_read_modify_write(path, |content| {
         let mut manifest = parse_manifest(&content)?;
 
-        // Derive title from entry_path file name
-        let title = Path::new(entry_path)
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| entry_path.to_string());
-
         // Check for duplicate title
         if manifest.entries.iter().any(|e| e.title == title) {
             return Err(PaperworkError::AlreadyExists {
@@ -156,7 +185,7 @@ pub fn brief_add_entry(
         let groups = regex.map(extract_regex_groups).unwrap_or_default();
 
         let entry = ManifestEntry {
-            title,
+            title: title.clone(),
             path: entry_path.to_string(),
             hash: file_hash,
             regex: regex.map(|s| s.to_string()),

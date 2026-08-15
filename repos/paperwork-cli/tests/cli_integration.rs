@@ -259,6 +259,136 @@ fn post_send_and_edit_refuse_unclosed_fence_thread() {
 }
 
 #[test]
+fn brief_add_note_heading_outside_fence_refused_zero_write() {
+    // C-1/I-1: notes are serialized bare inside the entry section — a
+    // fence-OUTSIDE `### ` line trips the read-side residue guard and
+    // permanently locks the whole brief out of read/add/remove/verify
+    // (write→read closure break). The write side must fast-fail with a
+    // validation envelope and zero write; headings INSIDE a note fence
+    // stay legal and roundtrip.
+    let dir = TempDir::new().unwrap();
+    let brief = dir.path().join("c1.brief.md");
+    let target = dir.path().join("src.rs");
+    std::fs::write(&target, "content").unwrap();
+
+    cmd()
+        .args(["brief", "create", brief.to_str().unwrap(), "--title", "C1"])
+        .assert()
+        .success();
+    let before = std::fs::read(&brief).unwrap();
+
+    // Negative: non-first-line `### ` heading in the note
+    cmd()
+        .args([
+            "brief",
+            "add",
+            brief.to_str().unwrap(),
+            "--entry",
+            target.to_str().unwrap(),
+            "--note",
+            "First note line\n### sub heading\nlast line",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("not representable"));
+
+    // Negative: `## ` heading in the note (silent entry-split shape)
+    cmd()
+        .args([
+            "brief",
+            "add",
+            brief.to_str().unwrap(),
+            "--entry",
+            target.to_str().unwrap(),
+            "--note",
+            "Intro\n## forged entry\ntail",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"));
+
+    // zero write: the brief is byte-for-byte unchanged and stays readable
+    assert_eq!(std::fs::read(&brief).unwrap(), before);
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap()])
+        .assert()
+        .code(0);
+
+    // Positive roundtrip: the same heading shapes INSIDE a note fence are
+    // quoted content — write succeeds and the brief reads back.
+    cmd()
+        .args([
+            "brief",
+            "add",
+            brief.to_str().unwrap(),
+            "--entry",
+            target.to_str().unwrap(),
+            "--note",
+            "Example below:\n```\n### quoted heading\n```",
+        ])
+        .assert()
+        .success();
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("ok brief.read 1 entries"));
+}
+
+#[test]
+fn brief_add_entry_titled_entries_refused_zero_write() {
+    // C-1/I-1 path B: an entry file named `Entries` derives a title that
+    // serializes to the legacy `## Entries` wrapper heading, which the
+    // read-side SAM-1 residue guard refuses — write side fast-fails
+    // zero-write instead of producing a permanently unreadable brief.
+    let dir = TempDir::new().unwrap();
+    let brief = dir.path().join("c1b.brief.md");
+    let target = dir.path().join("Entries");
+    std::fs::write(&target, "content").unwrap();
+
+    cmd()
+        .args(["brief", "create", brief.to_str().unwrap(), "--title", "C1B"])
+        .assert()
+        .success();
+    let before = std::fs::read(&brief).unwrap();
+
+    cmd()
+        .args([
+            "brief",
+            "add",
+            brief.to_str().unwrap(),
+            "--entry",
+            target.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("Entries"));
+
+    // zero write: the brief is byte-for-byte unchanged and stays readable
+    assert_eq!(std::fs::read(&brief).unwrap(), before);
+    cmd()
+        .args(["brief", "read", brief.to_str().unwrap()])
+        .assert()
+        .code(0);
+
+    // Positive control: any other file name stays legal.
+    let ok_target = dir.path().join("entries.rs");
+    std::fs::write(&ok_target, "x").unwrap();
+    cmd()
+        .args([
+            "brief",
+            "add",
+            brief.to_str().unwrap(),
+            "--entry",
+            ok_target.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
 fn post_send_stdin_non_utf8_fix_points_at_encoding() {
     // D6 (audit S-06): a non-UTF-8 stdin byte stream must surface a
     // validation envelope whose fix points at the encoding — not the
