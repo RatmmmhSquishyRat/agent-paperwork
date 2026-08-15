@@ -2,7 +2,7 @@
 
 - 日期：2026-08-15
 - 任务：#27 修复波——闭环本轮全部审计发现
-- 权威输入：docs/dev/audit-robustness-2026-08-15.md（深审 A/B：D1–D7 缺陷清单）、docs/dev/audit-ssot-agentux-2026-08-15.md（深审 C：A-01/A-02/S-01）、docs/dev/io-encoding-rootcause-2026-08-15.md（任务 #25 根因裁定）
+- 权威输入：docs/dev/audit-robustness-2026-08-15.md（深审 B：D1–D7 缺陷清单）、docs/dev/audit-grammar-matrix-2026-08-15.md（深审 A：A-01/A-02）、docs/dev/audit-ssot-agentux-2026-08-15.md（深审 C：S-01）、docs/dev/io-encoding-rootcause-2026-08-15.md（任务 #25 根因裁定）（头部归属更正见第六节低-4 销账）
 - 取证基线：master @ a81d9ad（修复波起点）→ master @ 9884d89（修复与文档终点）；本台账自身落盘于随后的 docs 提交（本地未推送）
 - 纪律核验：每组缺陷原子提交（fix 前缀+编号）；每缺陷含正向+负向回归；全程 `cargo test --workspace --locked` 全绿 + `cargo clippy --workspace --all-targets -- -D warnings` 零警告 + `cargo fmt --all --check` 通过；未 bump 版本、未打 tag、未动 CHANGELOG 发布段、未推送
 
@@ -14,7 +14,7 @@
 
 ### D1 带换行单行语义字段注入（阻塞级）— 已闭环（登记）
 - 终态：登记——缺陷已由 v0.5-perfection-plan NEW-1 写侧护栏批（669befa，Felix 移植）先行闭环，本轮无新增代码动作
-- 实测核验（证据链）：修复波复现脚本对三种形态（author 带换行 / scope 带换行 / body 首行伪装属性行）实测均 exit 1 validation 拒绝，修复前基线即已拒绝，前后一致
+- 实测核验（证据链）：修复波复现脚本对 title 带换行三形态（post/brief/contacts，即 D1 原始攻击向量 R-17/R-18）实测均 exit 1 validation 拒绝，修复前基线即已拒绝，前后一致（措辞更正见第六节低-1 销账：原句误写为 author/scope/body 形态）
 - 测试证据：guard_tests.rs 既有 NEW-1 护栏套件（check_single_line / contains_dangerous_attribute_line / first_line_representation_issue 对应测试）持续全绿
 - 提交哈希：无新提交（历史闭环：669befa）
 
@@ -41,6 +41,7 @@
 - 修复内容：ops/profile.rs 新增 `check_scope_globs`（对每个 glob 调 `check_single_line`），create_profile_full 与 edit_profile（锁前）均接入；CLI 侧 profile create 改走 `create_profile_full` 单次原子写，消除 create-then-edit 两步法在校验失败时留下半成品文件的问题
 - 证据链：修复前 scope 值带换行注入 `/etc/**` → exit 0 且 show 显示注入生效（scope.write: /etc/**）；修复后 → exit 1 validation 拒绝 + 零写入（文件不存在）
 - 测试证据：guard_tests.rs 新增 D4 回归；cli_integration.rs 新增 profile create 零写入端到端测试
+- R-12 第二面显式裁决（评审闭环补记）：原报告第二面「带值 flag 空格形态拒收且无绕过引导」——注入面由本项单行校验闭合后，等号形态（`--scope-read=glob`）已成为安全 bypass，该面实质降为 UX 观察项；裁决：登记不处置，不列入修复项
 - 提交哈希：2c7a180（与 D3 同源合并）
 
 ### D5 ASCII 契约收窄（中）— 钉住 + 登记
@@ -120,3 +121,73 @@ D1 无新提交（历史闭环 669befa，NEW-1 护栏批）。
 - 悬置：0——全部条目落入「修复/钉住/登记」三种终态之一
 
 （台账完。撰写：任务 #27 修复波执行 agent；取证时间 2026-08-15；全部结论基于复现脚本实测与测试输出。）
+
+---
+
+## 六、评审闭环节（修复轮二，2026-08-15 追加，append-only，未改动第一至五节）
+
+追加依据：三维独立评审三份报告（docs/reviews/audit-fixwave-review-{completeness,correctness,impact}-2026-08-15.md，评审基线 master @ da954c2）。取证基线补充：master @ da954c2（评审基线）→ master @ db3d023（修复轮二代码/CHANGELOG 终点）；本节与三份报告销账段落盘于随后的 docs 提交（本地未推送）。
+
+### C-1/I-1 brief 写→读闭环断裂（阻塞，正确性 C-1 与影响面 I-1 两名评审员独立命中同一根因）— 修复
+- 终态：修复——写侧补全 fence-aware 标题行护栏 + Entries title 拒绝；正确性报告备注面（note 含 `## x` 行静默分裂空 path entry）由同一护栏合并闭合
+- 修复内容：
+  - format/manifest.rs：`note_representation_issue` 在 M1 首行检查之上扩展两项——全文 fence-aware 标题行扫描（`note_contains_heading_outside_fence`，复用 `for_each_outside_fence`，拒绝 fence 外任何 `#` 起首行）与未闭合 fence 检查；同时修复读侧潜在缺陷：`parse_entry_body` 此前对 note 内非 regex 围栏的闭合行静默丢弃，导致围栏 note 无法 roundtrip——现闭合行保留（roundtrip 回归测试暴露）
+  - ops/manifest.rs：`brief_add_entry` 锁前拒绝 title 为 `Entries` 的 entry（序列化为 `## Entries` 命中 SAM-1 读侧护栏）；title 派生移出锁外
+  - 错误信封：validation，fix 指引声明标题形态行属于 code fence 内；拒绝即零写入
+- 证据链（_fix/repro-c1.ps1 实测，修复前→修复后）：
+  - 修复前：P1/P1b（note 含 fence 外 `### ` 行，非首行/首行）add exit 0 → 随后 brief read exit 1 `error format: Parse error: brief contains legacy v0.4 residue`，永久 lockout；P2（entry 文件名 Entries）同路径 lockout；P3（note 含 `## forged`）add exit 0 → read exit 0 但静默分裂出两个 entry（其一为空 path 的 forged entry）
+  - 修复后：P1/P1b/P3 add exit 1 validation `note is not representable in brief format: note embeds a heading-shaped line ('#', '##' or '###') outside a code fence...` 零写入；P2 add exit 1 `entry title 'Entries' serializes to the legacy '## Entries' wrapper heading`；全部探针后 brief read 保持 exit 0 可读；P4（fence 内标题行）仍 exit 0 且 roundtrip 通过（既往合法内容不受影响）
+- 测试证据：guard_tests.rs +3（note 标题行拒绝、Entries 拒绝、fenced-heading roundtrip）；cli_integration.rs +2（端到端零写入 + roundtrip）；workspace 410 → 419 全绿
+- 兼容面盘点（已入提交信息与 CHANGELOG）：既往「合法」但现拒绝者仅为必然导致损坏的形态（fence 外标题行 note、未闭合 fence note、Entries 文件名）；合法内容不受影响（普通 prose、属性形态非首行、fence 内标题示例）；读侧对存量文件行为不变
+- 提交哈希：0b4da90
+
+### I-2 CHANGELOG Unreleased 补录修复波行为变更（重要）— 修复（文档）
+- 终态：修复——Unreleased 追加 fix-wave guardrails 小节（D2 fence fast-fail、D3 prose 标题行拒绝、D4 scope glob 单行校验 + profile create 原子化、C-1 brief 护栏与读侧闭合行修复、兼容面盘点与 P-2 residue 触发面澄清）及 D6 category io→validation 变更小节，风格对齐既有条目；「半份清单」歧义消除
+- 提交哈希：db3d023
+
+### L-2 R7 尾扫 CRLF 边界（低）— 修复
+- 终态：修复——thread_scan.rs R7 prev 判定放宽为 `\n` 或 `\r` 均为行边界；新增三回归测试（lone-CR 后保留完整首行、CRLF 分裂保持、真·行中切割仍丢弃作回归控制）
+- 提交哈希：ec59c01
+
+### I-5 e2e-verification 文档悬置（低）— 修复
+- 终态：修复——docs/dev/e2e-verification-2026-08-15.md 纳入本次 docs 提交
+- 提交哈希：本节所属 docs 提交（见 git log；三份评审报告与台账追加同批）
+
+### 台账卫生 6 项（完整性报告低-1/2/3/4/6）— 修复/登记
+1. 低-1 D1 证据链措辞更正：第一节 D1 条目已更正为「title 带换行三形态（post/brief/contacts）」，与 _fix/repro-audit.ps1 实际探针对齐 — 本节所属 docs 提交
+2. 低-2 D4 R-12 第二面显式裁决：第一节 D4 条目已补裁决句（等号形态成安全 bypass，降为 UX 观察项，登记不处置）— 本节所属 docs 提交
+3. 低-3 P-6 lossy 集中登记：见本台账第七节 — 本节所属 docs 提交
+4. 低-4 头部 A-01/A-02 归属更正：台账头部权威输入行已更正（A-01/A-02 归深审 A audit-grammar-matrix；深审 C 仅 S-01）— 本节所属 docs 提交
+5. 低-6(1) LED-04/05/14 状态刷新：见 open-items-ledger 第十节 — 本节所属 docs 提交
+6. 低-6(2) thread_scan.rs L15 注释清理 LockedFile 残留：已随 L-2 修复提交（注释改为 caller's lock window）— ec59c01
+
+### L-1 contains_heading_line 对 `#hashtag` 误杀（低）— 裁定：维持保守策略
+- 裁定理由：preamble prose 护栏刻意非 fence-aware，镜像解析器对裸序列化 prose 的行为（写侧镜像解析器所见）；若收窄为 CommonMark 标题结构（# 后随空白），将为形近变体（`#define`、`#hashtag` 起首的粘连注入）重新打开结构伪造面，而误杀代价仅为带 fix 指引的 validation 拒绝，agent 可自愈；正确性优先于宽松度。登记不改，无代码动作。
+
+### I-3 D2 预检锁内读整文件（低）— 登记：已知权衡
+- 登记口径：正确性换性能的有意取舍（防静默数据丢失优先）；本产品场景 thread 文件量级小（笔记/消息体），持锁 O(file) 可接受；若未来出现大线程高并发场景，再立专项改仅扫末段 fence 状态的增量预检。登记不改，无代码动作。
+
+### I-4 .gitattributes eol=lf renormalize 噪音（低）— 裁定：保留
+- 裁定理由：该文件保护字节级黄金测试（char_tests）在 autocrlf=true 机器上不被 CRLF 化，目的必要；单人仓库当前无实际影响，未来协作时一次性 `git add --renormalize .` 或重新检出即可，发布轮 release notes 提一句。登记不改，无代码动作。
+
+### 评审闭环销账统计
+- 三份报告发现总数：11 项（完整性 6 低；正确性 1 阻塞 + 2 低 + 1 备注；影响面 1 阻塞 + 1 重要 + 3 低）
+- 修复：6（C-1/I-1+备注面、L-2 代码；I-2、I-5、卫生 1/2/3/4/5 文档；卫生 6 随 ec59c01）
+- 裁定登记：3（L-1 维持保守、I-3 已知权衡、I-4 保留）
+- 悬置：0
+- 纪律核验：原子提交（0b4da90 fix / ec59c01 fix / db3d023 docs）；`cargo test --workspace --locked` 419 全绿；clippy -D warnings 零警告；fmt --check 通过；未 bump/tag/推送；输出协议只增不改；黄金快照未重冻
+
+---
+
+## 七、P-6 纯展示/推断面 lossy 集中登记（评审闭环追加，2026-08-15）
+
+裁定：保留不改。路径改写面已必修闭合（ensure_suffix OsStr 融合 NEW-3 + default_title OsStr 化，代码注释有裁决）；剩余四处为纯展示/ASCII 后缀推断面，lossy 不影响任何写路径：
+
+| 位点 | 用途 | 保留理由 |
+|---|---|---|
+| cli cmd/profile.rs L263 | profile list 文件名展示 | 纯展示面，lossy 不改写磁盘路径 |
+| cli cmd/validate.rs L53 | 后缀推断验证类型 | ASCII 后缀推断（.post/.brief/.contacts 均为 ASCII），lossy 不改变推断结果 |
+| core ops/contacts.rs L304 | 联系人名 fallback（文件名 stem） | 仅用于展示用的名字推断，非路径改写 |
+| core ops/manifest.rs brief_add_entry title 派生（file_name lossy，约 L124） | entry title 派生 | title 仅序列化为标题文本，不回写路径；非 Unicode 文件名经 C-1 Entries 护栏与常规 title 护栏后行为可预期 |
+
+（第六、七节完。撰写：修复轮二执行 agent；取证时间 2026-08-15。）
