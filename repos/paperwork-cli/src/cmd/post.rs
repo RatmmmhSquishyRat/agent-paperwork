@@ -249,14 +249,11 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
                     }
                 }
             }
-            // Deduplicate mention tokens (first occurrence wins).
-            let mut seen: Vec<String> = Vec::new();
-            for m in mentions {
-                if !seen.contains(&m) {
-                    seen.push(m);
-                }
-            }
-            let mentions = seen;
+            // Deduplicate mention tokens (first occurrence wins). NEW-10:
+            // the shared `dedup_preserve_order` (HashSet+Vec) runs in O(n)
+            // instead of the historical O(n²) `Vec::contains` loop — this
+            // was the last remaining inline dedup site.
+            let mentions = paperwork_core::format::dedup_preserve_order(mentions);
 
             // Reference state lives in the body text only (D2): inject
             // `@#N` / `@name` tokens before calling core (OQ-4). The 64KB
