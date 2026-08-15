@@ -2095,6 +2095,70 @@ fn ascii_output_contract_guard() {
 }
 
 #[test]
+fn ascii_contract_is_structural_surface_only() {
+    // D5 (spec §5 narrowed wording): the ASCII contract covers the
+    // envelope STRUCTURAL surface — status token, command id and field
+    // names — while user-data values may carry legal UTF-8. This test
+    // pins the boundary: a non-ASCII sender round-trips in the value
+    // position, but every structural token stays pure ASCII.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    let unicode_author = format!("alic{}", '\u{00E9}');
+
+    let out = cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            &unicode_author,
+            "--message",
+            "hi",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut saw_sender = false;
+    for (i, line) in stdout.lines().enumerate() {
+        if i == 0 {
+            // conclusion line: `ok post.send #1 -> <path>` — the tempdir
+            // path is ASCII, so the whole line is structural.
+            assert!(line.is_ascii(), "conclusion line must be ASCII: {line}");
+            continue;
+        }
+        // field lines: `<name>: <value>` — the field NAME is structural
+        // and must be ASCII; the value may carry user data.
+        if let Some((name, value)) = line.split_once(':') {
+            assert!(name.is_ascii(), "field name must be ASCII: {name}");
+            if name == "sender" {
+                saw_sender = true;
+                assert_eq!(value.trim(), unicode_author);
+            }
+        }
+    }
+    assert!(saw_sender, "sender field must echo the non-ASCII author");
+
+    // The read side keeps the same boundary: structural header line ASCII,
+    // user data preserved.
+    let read_out = cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let read_stdout = String::from_utf8_lossy(&read_out.stdout).into_owned();
+    let first_line = read_stdout.lines().next().unwrap_or("");
+    assert!(first_line.is_ascii(), "read conclusion must be ASCII");
+    assert!(
+        read_stdout.contains(&unicode_author),
+        "non-ASCII sender must survive the read roundtrip"
+    );
+}
+
+#[test]
 fn send_message_and_stdin_conflict_is_usage() {
     // S-SEND-07 (tdd 1b-C flip): --message + --stdin -> clap conflicts_with
     // -> usage exit 2 (was v0.5 validation exit 1); no file write.
