@@ -18,6 +18,20 @@ use crate::Profile;
 
 use super::create_new_file;
 
+/// Scope glob single-line guard (D4): every scope value serializes as one
+/// `- read:` / `- write:` / `- owns:` attribute line, so an embedded line
+/// break would forge additional scope entries (e.g. a `--scope-read` value
+/// carrying `\n- write: /etc/**`). Runs the shared single-line check
+/// (NEW-1 infrastructure) over each value before anything touches disk.
+fn check_scope_globs(lists: &[&[String]]) -> Result<()> {
+    for list in lists {
+        for value in *list {
+            check_single_line("scope glob", value)?;
+        }
+    }
+    Ok(())
+}
+
 /// Create a new profile file at the given path.
 ///
 /// Fails if the file already exists (no overwrite; atomic `create_new`,
@@ -68,6 +82,11 @@ pub fn create_profile(path: &Path, name: &str, model: &str, description: &str) -
 pub fn create_profile_full(path: &Path, profile: &Profile) -> Result<()> {
     check_single_line("name", &profile.name)?;
     check_single_line("model", &profile.model)?;
+    check_scope_globs(&[
+        &profile.scope_read,
+        &profile.scope_write,
+        &profile.scope_owns,
+    ])?;
     if let Some(reason) = prose_representation_issue(&profile.description) {
         return Err(PaperworkError::Validation {
             message: format!("profile description is not representable: {}", reason),
@@ -138,6 +157,15 @@ pub fn edit_profile(
             example: format!("paperwork profile create {} --name alice", path.display()),
         });
     }
+
+    // D4 scope glob guard BEFORE the lock: a Validation error here leaves
+    // the file untouched and avoids taking the write lock for a doomed
+    // request.
+    check_scope_globs(&[
+        scope_read.as_deref().unwrap_or_default(),
+        scope_write.as_deref().unwrap_or_default(),
+        scope_owns.as_deref().unwrap_or_default(),
+    ])?;
 
     locked_read_modify_write(path, |content| {
         let mut profile = parse_profile(&content)?;

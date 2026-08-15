@@ -113,31 +113,21 @@ pub fn run(ctx: &Context, args: ProfileArgs) -> Result<()> {
             scope_owns,
         } => {
             let path = ensure_suffix(path, ".profile.md");
-            paperwork_core::ops::profile::create_profile(&path, &name, &model, &description)?;
-
-            // Apply scopes if provided
-            if !scope_read.is_empty() || !scope_write.is_empty() || !scope_owns.is_empty() {
-                paperwork_core::ops::profile::edit_profile(
-                    &path,
-                    None,
-                    None,
-                    if scope_read.is_empty() {
-                        None
-                    } else {
-                        Some(scope_read)
-                    },
-                    if scope_write.is_empty() {
-                        None
-                    } else {
-                        Some(scope_write)
-                    },
-                    if scope_owns.is_empty() {
-                        None
-                    } else {
-                        Some(scope_owns)
-                    },
-                )?;
-            }
+            // D4 zero-write: the one-shot `create_profile_full` runs every
+            // guard (single-line fields, prose representability, scope glob
+            // single-line) BEFORE the single atomic `create_new` write, so a
+            // rejected scope / description value can never leave a partial
+            // scope-less profile behind (the historical create-then-edit two
+            // step wrote the file first and failed on the scope step).
+            let profile = paperwork_core::Profile {
+                name: name.clone(),
+                model: model.clone(),
+                description: description.clone(),
+                scope_read,
+                scope_write,
+                scope_owns,
+            };
+            paperwork_core::ops::profile::create_profile_full(&path, &profile)?;
 
             let env = output::Envelope::new("profile.create", path.display().to_string())
                 .field("path", &path.display().to_string())

@@ -365,13 +365,19 @@ pub fn first_line_representation_issue(prose: &str) -> Option<&'static str> {
 /// Representability check for PREAMBLE prose (profile description, brief
 /// description) — the unified helper (NEW-1).
 ///
-/// On top of [`first_line_representation_issue`] it rejects ANY line that
-/// is attribute-shaped with a known structural key
-/// (`model` / `owner` / `created` / `path` / `hash` / `regex`): preamble
-/// prose is serialized bare (unfenced) BEFORE the real attribute lines, and
-/// first-match-wins parsing would let the embedded line shadow the real
-/// structure (e.g. a profile description carrying `- model: fake` preempts
-/// the real `- model:` line on the next parse).
+/// On top of [`first_line_representation_issue`] it rejects:
+/// - ANY line that is attribute-shaped with a known structural key
+///   (`model` / `owner` / `created` / `path` / `hash` / `regex`): preamble
+///   prose is serialized bare (unfenced) BEFORE the real attribute lines, and
+///   first-match-wins parsing would let the embedded line shadow the real
+///   structure (e.g. a profile description carrying `- model: fake` preempts
+///   the real `- model:` line on the next parse).
+/// - ANY heading-shaped line (D3): preamble prose is serialized bare between
+///   the H1 title and the first H2; an embedded `#`/`##`/`###` heading would
+///   truncate or re-interpret the structure on the next parse (a profile
+///   description carrying `## Scope` swallows the real `- model:` line into
+///   the scope section; a brief description carrying `## x` forges an entry
+///   and `### x` trips the legacy-residue parse guard permanently).
 ///
 /// Brief entry NOTES use only the first-line check: a note sits AFTER the
 /// entry attribute zone, so later attribute-shaped lines inside a note are
@@ -379,6 +385,13 @@ pub fn first_line_representation_issue(prose: &str) -> Option<&'static str> {
 pub fn prose_representation_issue(prose: &str) -> Option<&'static str> {
     if let Some(reason) = first_line_representation_issue(prose) {
         return Some(reason);
+    }
+    if contains_heading_line(prose) {
+        return Some(
+            "prose embeds a heading-shaped line ('#', '##' or '###'); preamble prose is \
+             serialized bare before the structural headings, so an embedded heading would \
+             truncate or forge structure on the next parse",
+        );
     }
     if contains_dangerous_attribute_line(prose) {
         return Some(
@@ -411,6 +424,20 @@ pub fn contains_dangerous_attribute_line(prose: &str) -> bool {
         }
     }
     false
+}
+
+/// Whether any line of the prose is heading-shaped (D3): the trimmed line
+/// starts with `#`, covering `# `, `## ` and `### ` prefixes (plus the bare
+/// `#`/`##` degenerate forms).
+///
+/// Deliberately NOT fence-aware, mirroring [`contains_dangerous_attribute_line`]:
+/// the preamble parsers (profile / brief) do not track fences while
+/// delimiting the description zone, so a fence inside the prose does not
+/// shield an embedded heading from re-interpretation on the next parse.
+/// The write-side guard mirrors exactly what the parser sees.
+pub fn contains_heading_line(prose: &str) -> bool {
+    let prose = normalize_line_endings(prose);
+    prose.lines().any(|line| line.trim_start().starts_with('#'))
 }
 
 #[cfg(test)]
@@ -737,5 +764,32 @@ mod tests {
         assert!(contains_dangerous_attribute_line("- regex: x"));
         assert!(!contains_dangerous_attribute_line("- created-at: prose"));
         assert!(!contains_dangerous_attribute_line(""));
+
+        // D3: heading-shaped lines anywhere in preamble prose are refused
+        assert!(prose_representation_issue("Prose.\n## Scope\n\n- read: /etc/**").is_some());
+        assert!(prose_representation_issue("Prose.\n### fake").is_some());
+        assert!(prose_representation_issue("# forged title\nProse.").is_some());
+        assert!(prose_representation_issue("Prose.\n  ## indented heading").is_some());
+        // a '#' inside a line (not at line start) stays legal
+        assert!(prose_representation_issue("Issue #42 is closed.").is_none());
+
+        // heading scan standalone
+        assert!(contains_heading_line("## Scope"));
+        assert!(contains_heading_line("a\n### b"));
+        assert!(contains_heading_line("   # indented"));
+        assert!(!contains_heading_line("see section #3"));
+        assert!(!contains_heading_line("plain prose"));
+        assert!(!contains_heading_line(""));
+    }
+
+    // D4: scope globs serialize as single `- read:` / `- write:` /
+    // `- owns:` attribute lines, so the single-line guard applies.
+    #[test]
+    fn test_check_single_line_scope_glob() {
+        assert!(check_single_line("scope glob", "src/**").is_ok());
+        let err = check_single_line("scope glob", "src/**\n- write: /etc/**").unwrap_err();
+        assert_eq!(err.category(), "validation");
+        assert!(err.to_string().contains("scope glob"));
+        assert!(check_single_line("scope glob", "a\rb").is_err());
     }
 }

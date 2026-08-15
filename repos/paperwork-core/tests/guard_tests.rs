@@ -668,3 +668,180 @@ fn brief_verify_semantic_drift_still_reports_states() {
     let results = manifest::brief_verify(&brief, dir.path()).expect("verify");
     assert_eq!(results[0].1, VerifyResult::Stale);
 }
+
+// ============================================================================
+// D3: heading-shaped lines in preamble prose are refused (= glued flag
+// values take the same path — the guard runs on the value, not on the
+// flag spelling).
+// ============================================================================
+
+#[test]
+fn profile_description_rejects_heading_injection() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.profile.md");
+
+    // Negative: the audit D3 vector — an embedded `## Scope` heading would
+    // swallow the real `- model:` line into the scope section on re-parse.
+    let err = profile::create_profile(
+        &path,
+        "alice",
+        "gpt-4o",
+        "Prose line.\n\n## Scope\n\n- read: /etc/**",
+    )
+    .expect_err("heading-shaped description line must be rejected");
+    assert_validation(&err);
+    assert!(err.to_string().contains("not representable"));
+    assert!(!path.exists());
+
+    // Negative: `### ` and `# ` are equally refused.
+    let err = profile::create_profile(&path, "alice", "gpt-4o", "Prose.\n### fake")
+        .expect_err("### heading must be rejected");
+    assert_validation(&err);
+    let err = profile::create_profile(&path, "alice", "gpt-4o", "Prose.\n# forged")
+        .expect_err("# heading must be rejected");
+    assert_validation(&err);
+    assert!(!path.exists());
+
+    // Positive: plain multi-line prose without heading lines stays legal.
+    profile::create_profile(&path, "alice", "gpt-4o", "Line one.\nLine two.").expect("ok");
+    let p = profile::show_profile(&path).expect("read back");
+    assert_eq!(p.description, "Line one.\nLine two.");
+    assert_eq!(p.model, "gpt-4o");
+}
+
+#[test]
+fn profile_edit_description_rejects_heading_injection() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("alice.profile.md");
+    profile::create_profile(&path, "alice", "gpt-4o", "Original.").expect("create");
+
+    let err = profile::edit_profile(
+        &path,
+        None,
+        Some("Prose.\n## Scope\n- read: /etc/**"),
+        None,
+        None,
+        None,
+    )
+    .expect_err("heading-shaped description line must be rejected");
+    assert_validation(&err);
+
+    // file unchanged
+    let p = profile::show_profile(&path).expect("read");
+    assert_eq!(p.description, "Original.");
+}
+
+#[test]
+fn brief_description_rejects_heading_injection() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("b.brief.md");
+
+    // Negative: an embedded `## x` would forge an entry; `### x` would
+    // trip the legacy-residue parse guard permanently.
+    let err = manifest::brief_create(&path, "t", None, "Prose.\n## fake-entry")
+        .expect_err("## heading in brief description must be rejected");
+    assert_validation(&err);
+    let err = manifest::brief_create(&path, "t", None, "Prose.\n### residue")
+        .expect_err("### heading in brief description must be rejected");
+    assert_validation(&err);
+    assert!(!path.exists());
+
+    // Positive: plain prose stays legal.
+    manifest::brief_create(&path, "t", None, "Plain prose.").expect("ok");
+}
+
+// ============================================================================
+// D4: scope glob values are single-line fields (newline injection via the
+// `=` glued flag form takes the same value path).
+// ============================================================================
+
+#[test]
+fn profile_scope_globs_reject_newline_injection() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("carol.profile.md");
+
+    // Negative: the audit D4 vector — a scope-read value carrying
+    // `\n- write: /etc/**` would forge a write-scope entry.
+    let profile = Profile {
+        name: "carol".to_string(),
+        model: "gpt-4o".to_string(),
+        description: String::new(),
+        scope_read: vec!["src/**\n- write: /etc/**".to_string()],
+        scope_write: Vec::new(),
+        scope_owns: Vec::new(),
+    };
+    let err = profile::create_profile_full(&path, &profile)
+        .expect_err("multiline scope glob must be rejected");
+    assert_validation(&err);
+    assert!(err.to_string().contains("scope glob"));
+    assert!(!path.exists());
+
+    // Positive: single-line globs stay legal.
+    let profile = Profile {
+        name: "carol".to_string(),
+        model: "gpt-4o".to_string(),
+        description: String::new(),
+        scope_read: vec!["src/**".to_string()],
+        scope_write: Vec::new(),
+        scope_owns: Vec::new(),
+    };
+    profile::create_profile_full(&path, &profile).expect("ok");
+    let p = profile::show_profile(&path).expect("read back");
+    assert_eq!(p.scope_read, vec!["src/**"]);
+}
+
+#[test]
+fn edit_profile_scope_globs_reject_newline_injection() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("carol.profile.md");
+    profile::create_profile(&path, "carol", "gpt-4o", "").expect("create");
+
+    // Negative on every scope channel.
+    let err = profile::edit_profile(
+        &path,
+        None,
+        None,
+        Some(vec!["src/**\n- write: /etc/**".to_string()]),
+        None,
+        None,
+    )
+    .expect_err("multiline scope-read glob must be rejected");
+    assert_validation(&err);
+
+    let err = profile::edit_profile(
+        &path,
+        None,
+        None,
+        None,
+        Some(vec!["a\rb".to_string()]),
+        None,
+    )
+    .expect_err("CR scope-write glob must be rejected");
+    assert_validation(&err);
+
+    let err = profile::edit_profile(
+        &path,
+        None,
+        None,
+        None,
+        None,
+        Some(vec!["x\ny".to_string()]),
+    )
+    .expect_err("multiline scope-owns glob must be rejected");
+    assert_validation(&err);
+
+    // file unchanged, then a legal scope edit still works
+    let p = profile::show_profile(&path).expect("read");
+    assert!(p.scope_read.is_empty());
+    profile::edit_profile(
+        &path,
+        None,
+        None,
+        Some(vec!["src/**".to_string()]),
+        None,
+        None,
+    )
+    .expect("legal scope edit");
+    let p = profile::show_profile(&path).expect("read");
+    assert_eq!(p.scope_read, vec!["src/**"]);
+}

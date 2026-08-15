@@ -119,6 +119,99 @@ fn profile_create_duplicate_fails() {
 }
 
 #[test]
+fn profile_create_heading_description_injection_refused_zero_write() {
+    // D3: a description carrying an embedded `## Scope` heading (via the
+    // `=` glued flag form) must be refused with a validation envelope and
+    // ZERO write — no partial profile file may land on disk.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("d3.md");
+
+    cmd()
+        .args([
+            "profile",
+            "create",
+            path.to_str().unwrap(),
+            "--name",
+            "alice",
+            "--model",
+            "gpt-4o",
+            "--description=Prose line.\n\n## Scope\n\n- read: /etc/**",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("not representable"));
+
+    // zero write: the file must not exist
+    assert!(!path.exists());
+}
+
+#[test]
+fn profile_create_scope_glob_injection_refused_zero_write() {
+    // D4: a scope glob carrying a line break (forging a second scope
+    // entry) must be refused with a validation envelope and ZERO write,
+    // whether the value arrives via the `=` glued form or the spaced form.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("d4.md");
+
+    cmd()
+        .args([
+            "profile",
+            "create",
+            path.to_str().unwrap(),
+            "--name",
+            "carol",
+            "--model",
+            "gpt-4o",
+            "--scope-read=src/**\n- write: /etc/**",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"))
+        .stderr(predicate::str::contains("scope glob"));
+
+    cmd()
+        .args([
+            "profile",
+            "create",
+            path.to_str().unwrap(),
+            "--name",
+            "carol",
+            "--model",
+            "gpt-4o",
+            "--scope-read",
+            "src/**\n- write: /etc/**",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error validation:"));
+
+    // zero write: the file must not exist
+    assert!(!path.exists());
+
+    // Positive: legal single-line scope globs still create the profile.
+    cmd()
+        .args([
+            "profile",
+            "create",
+            path.to_str().unwrap(),
+            "--name",
+            "carol",
+            "--model",
+            "gpt-4o",
+            "--scope-read",
+            "src/**",
+        ])
+        .assert()
+        .success();
+    cmd()
+        .args(["profile", "show", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("scope.read: src/**"));
+}
+
+#[test]
 fn profile_edit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("edit.md");
