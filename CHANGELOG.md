@@ -40,6 +40,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - The CI test step now runs `cargo test --locked` (dependency set pinned by the committed lockfile), and `cargo doc --no-deps` gained its own gate; the rustdoc warnings that gate surfaced (private intra-doc links, unclosed `<verb>` tag in doc comments) are fixed.
 
+### Added — write-side guardrails (fix-wave batch: D2/D3/D4/D6 + review C-1)
+
+- `post send` / `post edit` run a fence-balance precheck on the target thread and fast-fail with a `format` envelope plus zero write when a code fence is left unclosed (previously: exit 0, the new message was silently swallowed into the open fence on send, or the tail was erased on the edit rewrite). The envelope's `fix` line points at `paperwork validate` and states the file was left untouched.
+- Preamble prose (profile / brief description) additionally refuses heading-shaped lines (`#` / `##` / `###`-starting lines): preamble prose is serialized bare before the structural headings, so an embedded heading would truncate or forge structure on the next parse (complements the attribute-shaped-line refusal in the P-2 batch above).
+- Profile scope globs (`--scope-read` / `--scope-write` / `--scope-owns`) are validated as single-line fields: a value carrying a line break (which would forge additional scope entries) is refused with a `validation` envelope before anything touches disk. `profile create` is now a single atomic write — a validation failure leaves no partial profile file.
+- `brief add` refuses notes carrying heading-shaped lines (`#` / `##` / `###`) outside a code fence, notes opening a fence that is never closed, and entry files named `Entries`. These shapes serialize bare into the entry section and would either trip the legacy-residue parse guard (permanently locking the whole brief out of `brief read` / `add` / `remove` / `verify`) or silently split the entry; the write side now fast-fails `validation` with zero write. Heading-shaped lines INSIDE a note fence stay legal and roundtrip intact (the parser now keeps note-fence closing lines as note content). Clarification of the P-2 bullet above: the residue guard's trigger surface is ANY fence-outside `### ` line or `## Entries` heading — not only half-migrated v0.4 files; notes with such lines were previously accepted (exit 0) but always produced a permanently unreadable brief, so this tightening converts silent corruption into a fast-fail refusal.
+
+### Changed — CLI (fix-wave batch, D6)
+
+- Non-UTF-8 `--stdin` input now surfaces as `error validation:` (`stdin is not valid UTF-8`, fix pointing at re-encoding or `--message`) instead of a generic io envelope whose fix hint mentioned file permissions; exit code stays 1. The envelope STRUCTURAL surface (status token, command id, field names, `code` / `exit_code`) remains pure ASCII; user-data values may carry legal UTF-8.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal
