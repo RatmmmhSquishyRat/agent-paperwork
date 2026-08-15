@@ -123,4 +123,7 @@
 - git 面：**未推送**（任务书纪律）；wip/v0.5-perfection-snapshot-2026-08-15 分支成果已全部回流，处置由 leader 决定。
 - 工作区残留 M/?? 项均为他人/审计 agent 的未提交改动，按禁区纪律未触碰。
 
+## 更正注记（2026-08-15，owner 边界更正，仅追加不重写正文）
+- 「未闭合残留」节 git 面「wip/v0.5-perfection-snapshot-2026-08-15 分支…处置由 leader 决定」更正：worktree `agent-paperwork-wt-v05perfection` 及该 wip 分支属另一 agent 的在途工作，不属本工作流职责范围，不做处置（含删除/保留/推送）；成果回流 master 部分的事实陈述不变。权威口径见 docs/dev/open-items-ledger-2026-08-15.md 第十二节。
+
 （日志完。执行人：Felix；全部结论基于 git 对象与磁盘实测。）

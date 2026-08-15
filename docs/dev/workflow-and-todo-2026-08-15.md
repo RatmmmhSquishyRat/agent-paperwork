@@ -101,16 +101,16 @@
 | LED-04 | io 信封中文 OS 错误乱码 | 已闭合（裁定保留） | io-encoding-rootcause-2026-08-15.md；豁免登记 LED-16 |
 | LED-05 | perfection-plan 闭合批 | 已闭合 | P-0~P-9 全批终态（perfection-execution-log；三维评审完整性逐批「满足」） |
 | LED-13 | cli-ux-v0.5 分支处置 | 已闭合 | 本地与远端分支已移除（git branch -a 实测无 cli-ux-v0.5）；规格集原地保留为历史档案 |
-| LED-14 | perfection 续做（P-0~P-9） | 已闭合 | 成果已全部回流 master（a941b3b..20e3042 提交链）；wip 快照分支已推 origin 保全 |
+| LED-14 | perfection 续做（P-0~P-9） | 已闭合 | 成果已全部回流 master（a941b3b..20e3042 提交链）；wip 快照分支属另一 agent 在途工作，不属本工作流职责范围，不做处置（更正理由：owner 2026-08-15 边界澄清，见 open-items-ledger 第十二节） |
 
-本轮新登记并就地终态的项：LED-15（登记不改，发布轮）、LED-16（已裁定，备查）。
+本轮新登记并就地终态的项：LED-15（登记不改，仅作事实登记——owner 从未指示发布 0.6，本工作流无发布计划；更正理由见 open-items-ledger 第十二节）、LED-16（已裁定，备查）。
 
 台账终态统计（第十一节落盘后口径）：
 
 - 历史登记 16 项（LED-01 至 LED-16）：闭合 8 项（01/02/03/04/05/13/14 本轮闭环 + 16 已裁定备查）；仍开放 8 项——
-  - 文档轮 3 项：LED-06（tdd 注记勘误）、LED-07（销账计数勘误）、LED-08（写路径计数口径，发布轮顺带亦可）；
+  - 文档轮 3 项：LED-06（tdd 注记勘误）、LED-07（销账计数勘误）、LED-08（写路径计数口径，可随文档轮自主消化）；
   - owner 决策 4 项：LED-09（B-01 reply-to 静默跳过）、LED-10（B-02 destination 校验候选）、LED-11（U-04 mention 自动提取）、LED-12（U-13 completions）；
-  - 发布轮 1 项：LED-15（crates.io 与仓库版本语义错配）。
+  - 事实登记 1 项：LED-15（crates.io 与仓库版本语义错配；发布时机待 owner 指示，本工作流无发布计划——更正理由见 open-items-ledger 第十二节）。
 - 钉住备查：KL-1 至 KL-4（不变）。
 - 代码面：TODO/FIXME/HACK/XXX 零命中（台账第二节实测口径）。
 
@@ -118,13 +118,15 @@
 
 ## 四、遗留 owner 决策项清单（仍需 owner 裁定，按优先级）
 
-1. 是否启动 v0.6 发布轮：仓库代码面已是 v0.6 具名文法 + contacts CRUD，但版本仍 0.5.0 未发布；发布轮是否启动、何时启动，由 owner 裁定。启动后本清单 3/4/5 项随轮一次性闭合。
-2. 版本号裁定：若发布，bump 至 0.6.0（与文法版本对齐，fix-ledger S-01 建议）或其他口径，由 owner 定夺。
-3. LED-15 crates.io 版本对齐：crates.io 上 paperwork 0.5.0 为旧文法形态；随发布轮 bump + CHANGELOG 发布段 + crates.io 发布 + git tag 一次性闭合（发布轮，owner 裁决时机）。
-4. LED-09（B-01）：--reply-to 指向不存在 seq 静默跳过——解冻输出协议增 reply-dropped 字段，或钉住为已知限制；与 F6 ignored 字段（KL-4）同批评估。
-5. LED-10（B-02）：contacts add/update 写前 destination 存在性校验——维持现状钉住或增补 destination-unverified 回显字段（涉输出协议冻结评估）。
-6. LED-11（U-04）：--mention 与正文 @ 冗余自动提取——钉住结案或后续 UX 线立项。
-7. LED-12（U-13）：shell completions——建议正式钉住结案（agent-first 定位下收益低，理由已在案），owner 确认即可。
+> 修订注记（2026-08-15，owner 边界更正）：owner 澄清从未指示发布 0.6；本清单原第 1/2/3 项（是否启动 v0.6 发布轮、bump 至 0.6.0 裁定、随发布轮闭合 LED-15）含「建议启动发布轮/建议 bump/随发布轮根治」类越界表述，已就地修订为「发布时机待 owner 指示，本工作流无发布计划；相关事项仅作事实登记」。另：worktree `agent-paperwork-wt-v05perfection` 及其 wip 分支属另一 agent 在途工作，不属本工作流职责范围，不列入本清单、不做处置。详见 open-items-ledger 第十二节。
+
+1. crates.io 与仓库版本语义错配（事实登记，非待办）：仓库代码面已是 v0.6 具名文法 + contacts CRUD，但版本仍 0.5.0 未发布；crates.io 上 paperwork 0.5.0 为旧文法形态。owner 从未指示发布 0.6，本工作流无发布计划；是否发布、何时发布，待 owner 指示，本清单仅作事实登记、不提出启动建议。（更正理由：原表述为「是否启动 v0.6 发布轮，由 owner 裁定」，隐含启动预期，与 owner 澄清不符。）
+2. 版本号与发布动作（待 owner 指示，无建议）：若未来 owner 指示发布，版本号口径（是否 bump 及其他口径）与 CHANGELOG 发布段、crates.io 发布、git tag 等动作均由 owner 定夺；本工作流不预设 0.6.0 口径、不提出 bump 建议。（更正理由：原表述为「bump 至 0.6.0（fix-ledger S-01 建议）」，属越界建议。）
+3. LED-15 crates.io 版本对齐（事实登记）：错配事实见 LED-15；发布时机待 owner 指示，本工作流无发布计划，本项仅作事实登记、不设「随发布轮一次性闭合」预期。（更正理由：原表述为「随发布轮 bump + CHANGELOG + crates.io + tag 一次性闭合」。）
+4. LED-09（B-01）：--reply-to 指向不存在 seq 静默跳过——解冻输出协议增 reply-dropped 字段，或钉住为已知限制；与 F6 ignored 字段（KL-4）同批评估。（时机待 owner 指示，本工作流无发布计划。）
+5. LED-10（B-02）：contacts add/update 写前 destination 存在性校验——维持现状钉住或增补 destination-unverified 回显字段（涉输出协议冻结评估）。（时机待 owner 指示，本工作流无发布计划。）
+6. LED-11（U-04）：--mention 与正文 @ 冗余自动提取——钉住结案或后续 UX 线立项。（时机待 owner 指示。）
+7. LED-12（U-13）：shell completions——建议正式钉住结案（agent-first 定位下收益低，理由已在案），owner 确认即可。（时机待 owner 指示。）
 8. LED-16 条件项：若未来 owner 裁决全信封纯 ASCII（当前裁定为结构面纯 ASCII、io 消息文本保留），需另立专项。
 9. 文档轮小项（不阻塞 owner，可随下轮自主消化）：LED-06/07 勘误、LED-08 口径注明。
 

@@ -191,3 +191,11 @@ D1 无新提交（历史闭环 669befa，NEW-1 护栏批）。
 | core ops/manifest.rs brief_add_entry title 派生（file_name lossy，约 L124） | entry title 派生 | title 仅序列化为标题文本，不回写路径；非 Unicode 文件名经 C-1 Entries 护栏与常规 title 护栏后行为可预期 |
 
 （第六、七节完。撰写：修复轮二执行 agent；取证时间 2026-08-15。）
+
+---
+
+## 八、边界更正注记（2026-08-15，owner 边界更正，append-only，未改动第一至七节）
+
+- 更正：owner 从未指示发布 0.6。本台账第一节 S-01 条目中「含发布轮一次性闭合建议：bump 0.6.0 + CHANGELOG + crates.io + tag」与第六节 I-4 裁定理由中「发布轮 release notes 提一句」改读为：发布时机待 owner 指示，本工作流无发布计划；相关事项仅作事实登记，不构成 bump 建议或发布轮计划。
+- S-01 的事实登记面（crates.io 0.5.0 与仓库版本语义错配）本身成立，不受本更正影响。
+- 权威口径见 docs/dev/open-items-ledger-2026-08-15.md 第十二节。
