@@ -387,6 +387,10 @@
   5. 同类路由措辞的外延：docs/researches/ux-open-items-backlog-2026-08-08.md B-01/B-02、docs/ssot/specs/cli-grammar-v0.6/spec.md 与 design.md 正文中「供发布轮裁决」等路由措辞，一律改读为「owner 决策（时机待 owner 指示，本工作流无发布计划）」；SSOT 正文按冻结纪律不重写，backlog 文末已追加更正注记；docs/reviews/ 属历史记录，按本次任务规则不追加注记（未发现「待 owner 裁定移除 worktree」类表述）。
 - 事实登记面不受影响：crates.io 0.5.0 为旧文法形态、仓库 master 为 v0.6 具名文法 + contacts CRUD、Cargo.toml 仍 0.5.0 未发布——以上事实陈述维持原样。
 
+### 追加登记（任务 #52，2026-08-15）：wt-v05perfection 分支已完成方案 C 回填，分支存档保留
+
+- owner 于任务 #52 指示执行方案 C 选择性回填：wip/v0.5-perfection-snapshot-2026-08-15 的净增量已逐项对拍后回填 master（决策记录 docs/dev/v05-wip-backport-2026-08-15.md），worktree agent-paperwork-wt-v05perfection 已退役移除；本地与远端 wip 分支保留作存档，不再处置。本条登记取代更正一中「不属本工作流职责范围，不做处置」的旧口径（以 owner 任务 #52 指示为准）。
+
 （第十二节完。追加：owner 边界更正任务执行 agent；2026-08-15。检索口径：docs/ 范围 grep「发布轮」「bump」「wt-v05perfection」「快照分支」全量排查；docs/reviews/ 未发现「待 owner 裁定移除 worktree」类表述，按规则不追加注记。）
 
 ---

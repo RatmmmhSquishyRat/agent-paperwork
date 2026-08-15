@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Internal — backport of residual v0.5-perfection increments (task #52, Plan-C selective backport)
+
+- Internal backport of residual v0.5-perfection increments: the net deltas of the archived wip branch `wip/v0.5-perfection-snapshot-2026-08-15` that master had not already absorbed were backfilled selectively (no branch merge). Adopted items: the Ivy G1–G5 CLI-surface gap tests (16 tests, rewritten to the v0.6 named grammar); the per-spec suffix chains `strip_title_suffix` (spec §5.7) / `strip_label_suffix` (spec §7.3 R11) replacing the over-stripping `strip_known_suffix` superset; the CI Docs gate `RUSTDOCFLAGS=-D warnings`; the `JsonBuilder` key-order documentation + pinning unit test; the `find_message_sender` doc wording fix (tail-scan window is spec-mandated for SEQ resolution only); the CI smoke scripts corrected to the v0.6 body-token form (incidental); two wip-only documents archived (`docs/reviews/v0.5-debt-closure-ledger-2026-08-15.md`, `docs/dev/format-v2/test-matrix-2026-08-15.md`). Skipped items (master rulings): F1 (already absorbed stronger by D3/C-1), F7 (gap vanished), F9 (LockedFile RAII rejected). No output-byte changes; decision record: `docs/dev/v05-wip-backport-2026-08-15.md`. Version discipline unchanged: crate version stays 0.5.0.
+
 ### Removed — write-side sugar flags (2026-08-15 owner ruling, task #36 O1)
 
 - **Breaking for callers passing the sugar flags:** `post send` and `post edit` no longer accept `--reply-to` / `--mention`. Passing either flag is now a usage error (exit 2) whose `fix:` teaches the migration path: reply/mention semantics live in the message body itself — write an `@#N` token (reply to seq N) and/or `@name` tokens (mentions) directly in `--message`; the CLI writes the body verbatim and the read-side derive mechanism recovers the relations (implicit-mention derivation and its v0.5 boundaries are unchanged, now driven by the body token). `post read` keeps its `--reply-to` / `--mention` filters untouched.
