@@ -44,7 +44,9 @@ v0.5_feedbacks §二.1（NAME 前置位置参数）与 v0_feedbacks #3.1（conte
 动线不变：**send（高频）-> read/summary（高频）-> edit（低频纠错）**（post create 已由 format-v2 删除，建线程并入 send 自动创建）。
 
 ```
-paperwork post send    <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply-to N] [--mention a,b] [--title T]
+paperwork post send    <PATH> --author <NAME> (--message <BODY> | --stdin) [--title T]
+# 2026-08-15 owner 裁决更正：写侧糖衣 flag [--reply-to N] [--mention a,b] 已撤销（传入落 usage exit 2）；
+# reply/mention 语义由 agent 在正文直书 @#N / @name token 表达，CLI 逐字写入、读侧 derive（spec §3.1/§10）。
 paperwork post read    <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--limit 20]
 paperwork post summary <PATH>
 paperwork post edit    <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> | --stdin)
@@ -263,4 +265,4 @@ v0.5 design §7 遗留项裁决总表**整体沿用**，本轮不受影响：
 - design §1.2/§2.1/§6/§8/§10：同步删除 `--to`/`--participants` 相关论证与教学条款。
 - impl_plan 步骤(0)：合并基线描述按本节事实链更正。
 - tdd：§1b 行号基线因合并失效，重盘点以合并后实测为准；删除 `--to`/`--participants` 相关用例映射。
-- format-v2 最终 send 形态（本基线下）：`post send <PATH> <NAME> <BODY>|--stdin [--reply-to N] [--mention a,b] [--title T]`（合并提交时点为 v0.5 位置文法；v0.6 具名化后 NAME -> `--author/-a`、BODY -> `--message/-m`）；`--reply-to`/`--mention` 以糖衣 flag 存续（值注入正文 `@#N`/`@name` token，OQ-4），无其他形态变化。
+- format-v2 最终 send 形态（本基线下）：`post send <PATH> <NAME> <BODY>|--stdin [--reply-to N] [--mention a,b] [--title T]`（合并提交时点为 v0.5 位置文法；v0.6 具名化后 NAME -> `--author/-a`、BODY -> `--message/-m`）；`--reply-to`/`--mention` 以糖衣 flag 存续（值注入正文 `@#N`/`@name` token，OQ-4），无其他形态变化。〔2026-08-15 owner 裁决更正：本条记载的糖衣 flag 存续面已撤销——写侧 `--reply-to`/`--mention` 传入落 usage exit 2，注入机制废止（正文逐字写入），reply/mention 改由 agent 正文直书 `@#N`/`@name` token、读侧 derive 恢复；读侧同名过滤器保留。见 spec §3.1/§10、docs/dev/owner-rulings-2026-08-15.md〕

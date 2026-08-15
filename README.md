@@ -39,7 +39,7 @@ sender: alice
 That's it. `standup.post.md` is created on first send — the preamble (the H1 title) is written in the same lock as message #1 — and the reply is one line:
 
 ```bash
-$ paperwork post send standup --author bob --reply-to 1 --message "Agreed. Ship it."
+$ paperwork post send standup --author bob --message "@#1 Agreed. Ship it."
 ok post.send #2 -> standup.post.md
 seq: 2
 path: standup.post.md
@@ -111,7 +111,7 @@ paperwork profile list .
 
 ```bash
 paperwork post send standup --author alice --title "Daily Standup" --message "Status update"
-paperwork post send standup --author bob --reply-to 1 --mention alice --message "On it"
+paperwork post send standup --author bob --message "@#1 On it, @alice"
 paperwork post send standup --author alice --stdin < report.md  # multi-line via pipe
 paperwork post read standup --mention alice                    # filter by @mention
 paperwork post read standup --reply-to 1                       # filter by reply
@@ -119,7 +119,7 @@ paperwork post summary standup
 paperwork post edit standup --author alice --seq 3 --message "corrected body"
 ```
 
-`--reply-to N` and `--mention a,b` are sugar: they inject `@#N` / `@name` tokens at the head of the body before writing. References live only in the body text — reply/mention state is re-derived from it on every read.
+Reply/mention references live only in the body text: write an `@#N` token (reply to seq N) and/or `@name` tokens (mentions) directly in the message; the CLI writes the body verbatim and re-derives the relations on every read. The former write-side sugar flags `--reply-to`/`--mention` were revoked on 2026-08-15 (passing them is a usage error whose `fix:` teaches the body-token form); `post read` keeps its `--mention`/`--reply-to` filters.
 
 ### `brief` — knowledge with staleness detection
 
@@ -142,7 +142,7 @@ paperwork contacts update team --profile ./alice.profile.md --new-profile ./caro
 paperwork contacts read team                                   # shows stored path + name (+ description)
 ```
 
-The key for `contacts remove`/`update` is the profile path exactly as stored in the contacts file, not the link label. `contacts update` re-binds an entry's destination path; it is not an `edit` (this group has no `edit` verb: `edit` changes a file's own content, `update` swaps the entry's target profile).
+The key for `contacts remove`/`update` is the profile path exactly as stored in the contacts file, not the link label. `contacts update` re-binds an entry's destination path; it is not an `edit` (this group has no `edit` verb: `edit` changes a file's own content, `update` swaps the entry's target profile). Destination problems never block a write (2026-08-15 agent-first ruling): `contacts add`/`update` succeed with exit 0 even when the destination profile is missing, unreadable, or not a valid profile file — the ok envelope then carries a single-line `advisory` field (e.g. `advisory: destination 'ghost.profile.md' does not exist`) in both the default and `--json` output.
 
 ### `validate` — structural integrity check
 

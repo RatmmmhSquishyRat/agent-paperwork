@@ -85,7 +85,7 @@ paperwork profile list agents
 
 ```bash
 paperwork post send standup --author alice --title "Daily Standup" --message "Parser module is 80% done."
-paperwork post send standup --author bob --reply-to 1 --mention alice --message "On it"
+paperwork post send standup --author bob --message "@#1 On it, @alice"
 paperwork post send standup.post.md --author alice --stdin < report.md
 paperwork post read standup.post.md --from 5 --to 20
 paperwork post read standup.post.md --mention alice --limit 20
@@ -95,8 +95,15 @@ paperwork post edit standup.post.md --author alice --seq 3 --message "corrected 
 
 The first `send` creates the thread (the `--title` flag sets the preamble H1;
 on an existing thread `--title` is silently ignored). There is no
-`post create` verb anymore. Replies auto-mention the original sender
-(`implicit-mention` field appears in the output only when triggered).
+`post create` verb anymore. Reply/mention references live in the message
+body itself: write an `@#N` token (reply to seq N) and/or `@name` tokens
+(mentions) directly in `--message`; the CLI writes the body verbatim and
+re-derives the relations on every read. Replying to someone's message
+auto-mentions the original sender (`implicit-mention` field appears in the
+output only when triggered). The former write-side sugar flags
+`--reply-to`/`--mention` are revoked (2026-08-15): passing them is a usage
+error (exit 2) whose `fix:` teaches the body-token form; `post read` keeps
+its `--mention`/`--reply-to` filters.
 `post read` always reports `showing: <displayed>/<total>` and, when non-empty,
 `window: #first-#last`.
 
@@ -130,6 +137,12 @@ contacts file, not the link label (`contacts read` lists the stored paths).
 `contacts update` re-binds an entry's destination path; it is not an `edit`
 (there is no `edit` verb in this group: `edit` means changing a file's own
 content, `update` means swapping the entry's target profile).
+Destination problems never block a write (2026-08-15 agent-first ruling):
+`contacts add`/`update` succeed with exit 0 even when the destination
+profile is missing, unreadable, or not a valid profile file; the ok
+envelope then carries a single-line `advisory` field (e.g.
+`advisory: destination 'ghost.profile.md' does not exist`) in both the
+default and `--json` output.
 
 ### validate — structural integrity check
 
