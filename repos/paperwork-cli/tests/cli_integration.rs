@@ -5318,3 +5318,272 @@ fn contacts_update_destination_advisory_nonblocking() {
         .code(0)
         .stdout(predicate::str::contains("advisory").not());
 }
+
+// ===========================================================================
+// Robustness blind-spot pins (audit-robustness-round2 B-x, fixwave F2)
+// ===========================================================================
+
+/// B-1: a UTF-8 BOM prefix is tolerated on the file read channel — read and
+/// validate behave exactly like the BOM-less equivalent (probe T-15 pinned).
+#[test]
+fn bom_prefixed_thread_is_tolerated_on_read_and_validate() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("bom.post.md");
+
+    cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "alice",
+            "--message",
+            "before bom",
+        ])
+        .assert()
+        .success();
+
+    // Prepend the UTF-8 BOM to the written file.
+    let mut bytes = std::fs::read(&path).unwrap();
+    let mut with_bom = b"\xEF\xBB\xBF".to_vec();
+    with_bom.append(&mut bytes);
+    std::fs::write(&path, &with_bom).unwrap();
+
+    // Read still resolves the message; validate passes.
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 messages"))
+        .stdout(predicate::str::contains("before bom"));
+    cmd()
+        .args(["validate", path.to_str().unwrap(), "--type", "post"])
+        .assert()
+        .code(0);
+}
+
+/// B-2 + R2-01: a UTF-16 LE file fast-fails as an io envelope whose fix
+/// points at the ENCODING (file-channel analogue of the stdin D6 ruling);
+/// category stays io, exit code stays 1 (probe E-02 pinned).
+#[test]
+fn utf16_file_read_fast_fails_with_encoding_pointing_fix() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("utf16.post.md");
+
+    // UTF-16 LE with BOM — decodable as UTF-16, invalid as UTF-8.
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "# T\n\n## #1 alice (ts)\n".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(&path, &bytes).unwrap();
+
+    let encoding_fix = "the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)";
+
+    // post read: io envelope, encoding-pointing fix, exit 1.
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error io:"))
+        .stderr(predicate::str::contains(encoding_fix));
+
+    // validate: same category + fix (probe T-11 double-envelope face).
+    cmd()
+        .args(["validate", path.to_str().unwrap(), "--type", "post"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error io:"))
+        .stderr(predicate::str::contains(encoding_fix));
+
+    // --json tier keeps category io and carries the same fix.
+    cmd()
+        .args(["post", "read", path.to_str().unwrap(), "--json"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("\"category\":\"io\""))
+        .stdout(predicate::str::contains("UTF-8 encoded"));
+
+    // Zero write: the fixture is byte-for-byte unchanged.
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+/// B-2 companion: arbitrary binary content (0xFF / NUL bytes) takes the same
+/// encoding-pointing io path (probe T-11).
+#[test]
+fn binary_file_read_fast_fails_with_encoding_pointing_fix() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("blob.post.md");
+    std::fs::write(&path, [0xFF, 0x00, 0xC0, 0x80, b'x']).unwrap();
+
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error io:"))
+        .stderr(predicate::str::contains(
+            "check that the file is UTF-8 encoded",
+        ));
+}
+
+/// B-5: Windows reserved device names (CON/NUL) are neutralized by suffix
+/// normalization — the PATH always gains the format suffix, so the write
+/// lands in a plain file and validate fast-fails on type inference without
+/// ever opening the device (probes P-07/P-08 pinned).
+#[test]
+fn reserved_device_names_are_sealed_by_suffix_normalization() {
+    let dir = TempDir::new().unwrap();
+
+    for name in ["CON", "NUL"] {
+        let bare = dir.path().join(name);
+        let suffixed = dir.path().join(format!("{name}.post.md"));
+
+        // send: lands in <NAME>.post.md, never the device.
+        cmd()
+            .timeout(std::time::Duration::from_secs(30))
+            .args([
+                "post",
+                "send",
+                bare.to_str().unwrap(),
+                "--author",
+                "alice",
+                "--message",
+                "device probe",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!("{name}.post.md")));
+        assert!(suffixed.is_file(), "{name}.post.md must be a plain file");
+
+        // read-back through the same bare PATH resolves to the suffixed file.
+        cmd()
+            .timeout(std::time::Duration::from_secs(30))
+            .args(["post", "read", bare.to_str().unwrap()])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("device probe"));
+    }
+
+    // validate with a bare reserved name fast-fails at type inference
+    // (format envelope) without opening the device.
+    cmd()
+        .timeout(std::time::Duration::from_secs(30))
+        .args(["validate", dir.path().join("CON").to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("unknown file type"));
+}
+
+/// B-6: large-thread regression — a 2500-message thread keeps send/read
+/// roundtrip integrity (probe T-13 pinned; guards the I-3 known tradeoff
+/// surface against silent cost/correctness drift).
+#[test]
+fn large_thread_2500_messages_send_read_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("big.post.md");
+
+    let mut content = String::from("# Big Thread\n\n");
+    for seq in 1..=2500u64 {
+        content.push_str(&thread_message(seq, "alice", "", None, &[], "bulk"));
+    }
+    std::fs::write(&path, content).unwrap();
+
+    // read: default window 20/2500.
+    cmd()
+        .args(["post", "read", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2500 messages"))
+        .stdout(predicate::str::contains("showing: 20/2500"));
+
+    // validate passes on the whole file.
+    cmd()
+        .args(["validate", path.to_str().unwrap(), "--type", "post"])
+        .assert()
+        .code(0);
+
+    // send appends seq 2501 through the full-file fence pre-check.
+    cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "bob",
+            "--message",
+            "tail message",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seq: 2501"));
+
+    // head and tail both read back intact.
+    cmd()
+        .args([
+            "post",
+            "read",
+            path.to_str().unwrap(),
+            "--from",
+            "1",
+            "--to",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#1 alice"));
+    cmd()
+        .args([
+            "post",
+            "read",
+            path.to_str().unwrap(),
+            "--from",
+            "2501",
+            "--to",
+            "2501",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#2501 bob"))
+        .stdout(predicate::str::contains("tail message"));
+}
+
+/// B-8: H1 leniency pin — the H1 title preamble is NOT mandatory on the
+/// read side nor for validate: a thread without H1 and one with two H1
+/// lines both read/validate cleanly (probes T-05/T-06 pinned; behaviour
+/// frozen as-is, spec/design note 2026-08-15, bdd S-READ-10).
+#[test]
+fn h1_leniency_missing_and_duplicate_h1_read_cleanly() {
+    let dir = TempDir::new().unwrap();
+
+    // Missing H1: message headers only.
+    let no_h1 = dir.path().join("no-h1.post.md");
+    std::fs::write(&no_h1, thread_message(1, "alice", "", None, &[], "body")).unwrap();
+    cmd()
+        .args(["post", "read", no_h1.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 messages"));
+    cmd()
+        .args(["validate", no_h1.to_str().unwrap(), "--type", "post"])
+        .assert()
+        .code(0);
+
+    // Duplicate H1: two title lines above one message.
+    let double_h1 = dir.path().join("double-h1.post.md");
+    std::fs::write(
+        &double_h1,
+        format!(
+            "# First Title\n\n# Second Title\n\n{}",
+            thread_message(1, "alice", "", None, &[], "body")
+        ),
+    )
+    .unwrap();
+    cmd()
+        .args(["post", "read", double_h1.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 messages"));
+    cmd()
+        .args(["validate", double_h1.to_str().unwrap(), "--type", "post"])
+        .assert()
+        .code(0);
+}

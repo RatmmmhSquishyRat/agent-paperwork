@@ -218,6 +218,7 @@ v0.5 design §7 遗留项裁决总表**整体沿用**，本轮不受影响：
 - **本轮新增登记（rework 裁定 F6 与 Pete N3）**：
   - send 元数据 flag（基线勘误后仅 `--title`）对既有线程静默忽略的可检测化：未来工作项为 ok 信封增补 `ignored` 字段（如 `ignored: title`），需解冻输出协议（JSON 只增不改不删约束下可 additive 实现），由发布轮或后续 UX 线另行裁决；本轮仅行为登记与教学（spec §3.1、bdd S-SEND-17）。原同批评估候选（ok 信封回显收件人名单使 send `--to` 数字串误用可检测）随 `--to` flag 删除而废止。
   - `--reply-to` 指向不存在 seq 静默跳过与 Q-02 的张力：**已随 2026-08-15 owner 裁决消解**——写侧 `--reply-to` 糖衣 flag 撤销（裁决 1，docs/dev/owner-rulings-2026-08-15.md 口径 A），reply 语义改由 agent 正文直书 `@#N` token；缺失 seq 的静默跳过语义冻结沿用（现由正文 token 驱动，spec §3.1/§10）；原 backlog 登记（`docs/researches/ux-open-items-backlog-2026-08-08.md` B-01）随裁决闭合保留为历史。
+  - **H1 宽容面语义裁定（2026-08-15 修复波 F2 注记，audit-robustness-round2 B-8）**：H1 标题 preamble 在读侧与 validate 侧非强制（缺 H1 / 双 H1 线程均宽容放行，exit 0）——设计立场：读宽容是解析器既有语义（消息边界由 `## #N` 头族独立判定，preamble 仅为可选元数据），写侧仍由首次 send 按 §3.1 写 H1，读写不对称属刻意保留；本条钉住现行行为不改行为，权威口径见 spec §3.3/§3.7 注记与 bdd S-READ-10。
 
 ---
 

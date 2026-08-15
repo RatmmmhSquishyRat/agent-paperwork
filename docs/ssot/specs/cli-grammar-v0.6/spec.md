@@ -128,6 +128,7 @@ paperwork post summary <PATH>
 - **读侧过滤器保留声明（2026-08-15 owner 裁决，显式写明）**：post read 的 `--mention <name>` / `--reply-to <seq>` 是**查询过滤器而非语义表达**，不在写侧撤销范围，冻结保留；其过滤判定基于读取时从正文 derive 的 `@name`/`@#N` token（derive 机制不变）。撤销与保留的边界口径见 §1.4/§10；解释口径由编排层拟定并显式声明，供 owner 复核推翻（docs/dev/owner-rulings-2026-08-15.md）。
 - `--from` 仅表 seq 起点；`--to` 仅表 seq 上限（u64 类型，非数字即 usage exit 2，显式信号）。基线勘误后 `--from/--to` 仅存于 post read，规则 3 唯一语义无例外（§1.4）。`--limit` 默认 20；`--mention` 与 read 的 `--reply-to` 均**无短形式**（短形式全表见 §4）。
 - 输出增补（恒显 `showing: n/total` + `window: #first-#last`，U-11）沿用 v0.5 spec §3.1，不变。
+- **H1 宽容面语义裁定（2026-08-15 修复波 F2 注记，audit-robustness-round2 B-8 / T-05/T-06）**：H1 标题 preamble 在读侧**非强制**——缺 H1（直接以消息头开始）与双 H1（两个标题行）的线程均按宽容语义正常读取（exit 0，消息解析不受影响）；本注记钉住现行行为、不改行为，测试钉住见 cli_integration `h1_leniency_missing_and_duplicate_h1_read_cleanly`，bdd 登记 S-READ-10。写侧不受本条影响（首写仍按 §3.1 写 H1 preamble）。
 - 缺 PATH -> usage exit 2；文件不存在 -> not-found exit 1。
 
 ### 3.4 profile 组
@@ -191,6 +192,7 @@ paperwork validate <PATH> [--type post|profile|brief|contacts]
 ```
 
 - `--type` 语义沿用 v0.5 spec §3.5（给出时覆盖后缀推断；未知后缀且未给 `--type` -> format exit 1；`--type` 非法值 -> usage exit 2）。
+- H1 宽容面（§3.3 注记）对 validate 同样适用：缺 H1 / 双 H1 的 post 线程 validate 放行（exit 0）；validate 的结构检查面（消息边界、seq 单调、fence 闭合）不受 H1 存在性影响（audit-robustness-round2 B-8）。
 
 ### 3.8 别名与隐藏别名（不变）
 

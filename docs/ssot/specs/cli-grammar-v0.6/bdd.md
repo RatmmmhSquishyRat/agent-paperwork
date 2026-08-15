@@ -252,6 +252,12 @@
 - **When** 执行 `paperwork post read standup.post.md --author alice`（把 send 的 --author 习惯带进 read）
 - **Then** exit 2；`error usage:`（read 无 `--author` flag，按发送者过滤请用 `--mention`）；fix 文案点名 `--mention` 替代路径；无文件写入。
 
+### S-READ-10 H1 宽容面：缺 H1 / 双 H1 线程读与 validate 均放行（2026-08-15 修复波 F2 登记，audit-robustness-round2 B-8 / T-05/T-06）
+
+- **Given** 两个 post 线程夹具：其一缺 H1 标题（直接以 `## #1` 消息头开始），其二含两个 H1 标题行；两者消息结构均合法
+- **When** 分别对两者执行 `paperwork post read <PATH>` 与 `paperwork validate <PATH> --type post`
+- **Then** 全部 exit 0；read 的消息计数与正文解析不受 H1 存在性影响；validate 的结构检查面（消息边界、seq 单调、fence 闭合）照常执行；无文件写入。语义裁定注记见 spec §3.3/§3.7；测试钉住 cli_integration `h1_leniency_missing_and_duplicate_h1_read_cleanly`（钉住现行行为，不改行为）。
+
 ### S-SUM-01 summary 行为不变
 
 - **When** 执行 `paperwork post summary standup.post.md`
