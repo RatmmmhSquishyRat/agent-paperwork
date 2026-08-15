@@ -56,3 +56,40 @@
 - **任务 #51（发布后登记）**：发布终态登记、台账联动与轮次收口（以任务书为准）。
 
 （登记完。任务 #49 执行 agent，2026-08-16。）
+
+---
+
+## 六、发布执行证据（任务 #50，2026-08-16 追加，append-only）
+
+未改动第一至五节。以下全部为实测记录：
+
+### 6.1 前置门禁
+
+- CI run **31898321976**（准备提交 ea74948）终局 **success**：fmt ✓ + test（windows/ubuntu/macos）✓ + smoke（三平台）✓，无失败 job。
+
+### 6.2 tag 与 GitHub Release
+
+- tag **v0.6.0** 打在 **ea74948**（master = origin/master，工作区干净），推送成功；未打任何其他 tag。
+- Release workflow run **31898532108** 终局 **success**（约 3 分钟）：test 47s → build 五平台矩阵全绿（x86_64-linux-gnu 36s / x86_64-linux-musl 54s / x86_64-apple-darwin 46s / aarch64-apple-darwin 36s / x86_64-pc-windows-msvc 1m30s）→ release job 12s。
+- GitHub Release **v0.6.0** 已发布（published 2026-08-15T17:33:37Z，作者 github-actions[bot]）；资产齐五平台：paperwork-v0.6.0-{aarch64-apple-darwin.tar.gz, x86_64-apple-darwin.tar.gz, x86_64-pc-windows-msvc.zip, x86_64-unknown-linux-gnu.tar.gz, x86_64-unknown-linux-musl.tar.gz}；release notes 由 awk 从 CHANGELOG [0.6.0] 段抽取，首段与晋升段一致。
+
+### 6.3 crates.io 发布
+
+- 凭证：`~/.cargo/credentials.toml` 在案（token 不回显）；publish.ps1 退出码 0。
+- 顺序实测：paperwork-core 0.6.0 打包（25 文件，385.5KiB）→ verify 编译通过 → uploaded → 索引轮询确认可见 → paperwork-cli 0.6.0 打包（17 文件，407.5KiB）→ verify 从 crates.io 下载 paperwork-core 0.6.0 编译通过（依赖解析实证）→ uploaded。两 crate 均见 `Published ... at registry crates-io`。
+- 核验：`cargo search paperwork-core --limit 1` = "0.6.0"；`cargo search paperwork-cli --limit 1` = "0.6.0"。（crates.io REST API 直连返回 403（无 User-Agent 拦截），改以 cargo 索引口径核验，同为权威面。）
+
+### 6.4 安装面与冒烟
+
+- `cargo install paperwork-cli --version 0.6.0 --locked` 成功：release 编译 17.39s，替换旧 paperwork-cli 0.4.0 二进制为 0.6.0。
+- 冒烟（临时目录 %TEMP%\paperwork-v060-smoke，装出的二进制）：
+  - `paperwork --version` → `paperwork 0.6.0`；
+  - `paperwork profile create alice --name alice --model gpt-4o --description "release smoke"` → `ok profile.create alice.profile.md`；
+  - `paperwork post send standup --author alice --title "Release Smoke" --message "0.6.0 release smoke test"` → `ok post.send #1 -> standup.post.md`（正文直书，首次 send 建线程）；
+  - `paperwork post read standup` → `ok post.read 1 messages`，showing 1/1，window #1-#1，正文逐字回显。
+
+### 6.5 纪律自查
+
+- wip 存档分支零触碰；除 v0.6.0 外未打任何 tag；CHANGELOG [0.6.0] 发布段内容未改动；S-01（crates.io 与仓库版本语义错配）随本次发布实质闭合，台账 LED-15 闭合刷新归任务 #51 台账联动轮。
+
+（执行证据追加完。任务 #50 执行 agent，2026-08-16。）
