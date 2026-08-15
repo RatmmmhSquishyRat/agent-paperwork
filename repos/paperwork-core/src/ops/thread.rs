@@ -36,7 +36,8 @@ use crate::format::thread::{
 use crate::{Message, ThreadMeta};
 
 use super::thread_scan::{
-    contains_legacy_headers, first_message_header_offset, read_last_seq_locked,
+    contains_legacy_headers, first_message_header_offset, last_message_header_offset,
+    read_last_seq_locked,
 };
 
 // Historical re-export surface (T5 split): every `ops::thread::*` path the
@@ -269,9 +270,19 @@ pub fn thread_send(
 /// the new body is subject to the 64KB limit (R8) — on overflow the file
 /// stays unchanged.
 ///
-/// Crash-window note (spec §5.7): the in-lock truncate + rewrite can lose
-/// the whole file on power loss / process kill; accepted (fs2 lock excludes
-/// concurrent writers).
+/// Write shape (NEW-8 incremental rewrite): the edit target is ALWAYS the
+/// final message, so when the on-disk prefix (verbatim preamble + earlier
+/// messages) is byte-identical to its canonical re-serialization, the file
+/// is truncated at the last message header and only the re-serialized final
+/// message is appended — the earlier messages are never re-serialized nor
+/// re-written. Non-canonical prefixes (hand-edited CRLF files,
+/// whitespace-lenient headers, ...) take the historical full-rewrite
+/// fallback; both paths are byte-identical (differential corpus pinned in
+/// `ops_tests.rs`).
+///
+/// Crash-window note (spec §5.7): the in-lock truncate (+ append / rewrite)
+/// can lose content on power loss / process kill; accepted (fs2 lock
+/// excludes concurrent writers).
 pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Result<()> {
     if !path.exists() {
         return Err(PaperworkError::NotFound {
@@ -442,34 +453,81 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
     // (R5 / invariant I9): everything before the first fence-aware message
     // header line, no re-serialization.
     let preamble_end = first_message_header_offset(&content).unwrap_or(0);
-    let mut new_content: Vec<u8> = content.as_bytes()[..preamble_end].to_vec();
-    new_content.extend_from_slice(serialize_messages(&messages).as_bytes());
 
-    // Rewrite entire file (truncate + write within the lock)
-    file.set_len(0).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file permissions",
-            String::new(),
-        )
-    })?;
-    file.seek(SeekFrom::Start(0)).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check file handle validity",
-            String::new(),
-        )
-    })?;
-    file.write_all(&new_content).map_err(|e| {
-        PaperworkError::io_ctx(
-            path.to_path_buf(),
-            e,
-            "check disk space and file permissions",
-            String::new(),
-        )
-    })?;
+    // NEW-8 incremental rewrite: the canonical serialization of the earlier
+    // messages doubles as the equivalence probe — when the on-disk region
+    // between the preamble and the last header matches it byte-for-byte,
+    // that region can stay on disk untouched.
+    let prefix_serialized = serialize_messages(&messages[..messages.len() - 1]);
+    let incremental_offset = last_message_header_offset(&content).filter(|&last_header_start| {
+        preamble_end <= last_header_start
+            && content.as_bytes().get(preamble_end..last_header_start)
+                == Some(prefix_serialized.as_bytes())
+    });
+
+    match incremental_offset {
+        Some(offset) => {
+            // Truncate at the last message header and append the
+            // re-serialized final message.
+            file.set_len(offset as u64).map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check file permissions",
+                    String::new(),
+                )
+            })?;
+            file.seek(SeekFrom::Start(offset as u64)).map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check file handle validity",
+                    String::new(),
+                )
+            })?;
+            file.write_all(edited_serialized.as_bytes()).map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check disk space and file permissions",
+                    String::new(),
+                )
+            })?;
+        }
+        None => {
+            // Fallback for non-canonical on-disk prefixes: the historical
+            // full rewrite (verbatim preamble + re-serialized message list).
+            let mut new_content: Vec<u8> = content.as_bytes()[..preamble_end].to_vec();
+            new_content.extend_from_slice(prefix_serialized.as_bytes());
+            new_content.extend_from_slice(edited_serialized.as_bytes());
+
+            // Rewrite entire file (truncate + write within the lock).
+            file.set_len(0).map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check file permissions",
+                    String::new(),
+                )
+            })?;
+            file.seek(SeekFrom::Start(0)).map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check file handle validity",
+                    String::new(),
+                )
+            })?;
+            file.write_all(&new_content).map_err(|e| {
+                PaperworkError::io_ctx(
+                    path.to_path_buf(),
+                    e,
+                    "check disk space and file permissions",
+                    String::new(),
+                )
+            })?;
+        }
+    }
 
     file.unlock().map_err(|e| {
         PaperworkError::io_ctx(
