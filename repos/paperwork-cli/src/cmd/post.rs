@@ -232,19 +232,20 @@ pub fn run(ctx: &Context, args: PostArgs) -> Result<()> {
 
             // Reply carries an implicit @: auto-add the original sender to
             // the mention list (boundaries unchanged: self-reply, already
-            // listed, and missing seq never trigger).
+            // listed, and missing seq never trigger). NEW-12: the lookup is
+            // a bounded tail scan (`find_message_sender`, spec §5.5) instead
+            // of a whole-file `thread_read` — the send path tail-scans the
+            // same file again inside its lock, so the double read is gone.
+            // Missing file / missing seq stay silent here (no implicit
+            // mention) and surface later exactly like before.
             let mut implicit_mention: Option<String> = None;
             if let Some(reply_seq) = reply_to {
-                if let Ok(msgs) = paperwork_core::ops::thread::thread_read(
-                    &path,
-                    Some(reply_seq),
-                    Some(reply_seq),
-                ) {
-                    if let Some(original) = msgs.first() {
-                        if !mentions.contains(&original.sender) && original.sender != author {
-                            mentions.push(original.sender.clone());
-                            implicit_mention = Some(original.sender.clone());
-                        }
+                if let Ok(Some(original_sender)) =
+                    paperwork_core::ops::thread::find_message_sender(&path, reply_seq)
+                {
+                    if !mentions.contains(&original_sender) && original_sender != author {
+                        mentions.push(original_sender.clone());
+                        implicit_mention = Some(original_sender);
                     }
                 }
             }

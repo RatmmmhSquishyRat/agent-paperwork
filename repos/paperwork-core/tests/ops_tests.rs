@@ -1600,3 +1600,71 @@ fn brief_verify_non_utf8_target_is_fresh() {
     let results = manifest::brief_verify(&brief_path2, dir.path()).expect("verify");
     assert_eq!(results[0].1, VerifyResult::Fresh); // byte 0x41 == 'A'
 }
+
+// ============================================================================
+// NEW-12: find_message_sender — bounded tail-scan sender lookup (replaces
+// the CLI reply path's whole-file thread_read; spec §5.5 window semantics).
+// ============================================================================
+
+#[test]
+fn find_message_sender_returns_senders_in_window() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("t.post.md");
+
+    thread::thread_send(&path, "alice", "one", Some(&meta("t"))).expect("send");
+    thread::thread_send(&path, "bob", "two", None).expect("send");
+
+    assert_eq!(
+        thread::find_message_sender(&path, 1).expect("lookup"),
+        Some("alice".to_string())
+    );
+    assert_eq!(
+        thread::find_message_sender(&path, 2).expect("lookup"),
+        Some("bob".to_string())
+    );
+}
+
+#[test]
+fn find_message_sender_missing_seq_is_none() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("t.post.md");
+    thread::thread_send(&path, "alice", "one", Some(&meta("t"))).expect("send");
+
+    // seq beyond the last message: None (CLI reply path treats it as a
+    // missing target — no implicit mention, send proceeds).
+    assert_eq!(thread::find_message_sender(&path, 2).expect("lookup"), None);
+    // seq 0 never exists (spec §5.3).
+    assert_eq!(thread::find_message_sender(&path, 0).expect("lookup"), None);
+    // empty file: None.
+    let empty = dir.path().join("empty.post.md");
+    fs::write(&empty, "").expect("write");
+    assert_eq!(
+        thread::find_message_sender(&empty, 1).expect("lookup"),
+        None
+    );
+}
+
+#[test]
+fn find_message_sender_missing_file_is_err() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("nope.post.md");
+    assert!(thread::find_message_sender(&path, 1).is_err());
+}
+
+#[test]
+fn find_message_sender_ignores_fake_headers_inside_body_fences() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("t.post.md");
+
+    thread::thread_send(&path, "alice", "one", Some(&meta("t"))).expect("send");
+    // bob's body carries a header-shaped line inside a fence: quoted
+    // content, not a message header (R6 fence-aware scan).
+    let body = "```md\n## #2 mallory (2026-01-01T00:00:00Z)\n```\n\nreal text";
+    thread::thread_send(&path, "bob", body, None).expect("send");
+
+    // The fence-internal mallory header must not shadow bob's real one.
+    assert_eq!(
+        thread::find_message_sender(&path, 2).expect("lookup"),
+        Some("bob".to_string())
+    );
+}

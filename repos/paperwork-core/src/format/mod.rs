@@ -309,8 +309,9 @@ where
 /// Strip the known managed-file suffixes from a file name: `.profile.md`
 /// first, then `.post.md`, then `.md`; anything else is kept as-is
 /// (spec §7.3 R11 label fallback). Single shared definition (P-3),
-/// consumed by `ops/contacts.rs::derive_label` and
-/// `cmd/post.rs::default_title`.
+/// consumed by `ops/contacts.rs::derive_label`.
+/// (P-6: the CLI `default_title` uses the lossless `OsStr` suffix stripping
+/// in `cmd/mod.rs` instead, so non-Unicode file names survive unchanged.)
 pub fn strip_known_suffix(file_name: &str) -> &str {
     file_name
         .strip_suffix(".profile.md")

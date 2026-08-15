@@ -393,6 +393,49 @@ fn char_post_send_reply_to_implicit_mention() {
     );
 }
 
+// NEW-12 (ported from wip, v0.6 grammar): reply-to pointing at a missing
+// seq keeps the historical envelope — the send succeeds, the `@#N` token is
+// injected, and NO implicit mention appears (the bounded tail-scan lookup
+// returns None exactly like the old whole-file read returned an empty
+// filter).
+#[test]
+fn char_post_send_reply_to_missing_seq_envelope_unchanged() {
+    let dir = TempDir::new().unwrap();
+    run(
+        &dir,
+        &[
+            "post",
+            "send",
+            "chat",
+            "--author",
+            "alice",
+            "--message",
+            "start",
+        ],
+    );
+    let r = run(
+        &dir,
+        &[
+            "post",
+            "send",
+            "chat",
+            "--author",
+            "bob",
+            "--reply-to",
+            "5",
+            "--message",
+            "ping",
+        ],
+    );
+    assert_eq!(r.code, 0);
+    gold("post_send_reply_missing_seq_stdout", &r.stdout);
+    gold("post_send_reply_missing_seq_stderr", &r.stderr);
+    gold(
+        "post_send_reply_missing_seq_file",
+        &mask_ts(&read_file(&dir, "chat.post.md")),
+    );
+}
+
 #[test]
 fn char_post_send_mention_flag_injection() {
     let dir = TempDir::new().unwrap();
@@ -1636,6 +1679,9 @@ static FROZEN: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         ("post_send_mention_stdout", "ok post.send #1 -> chat.post.md\nseq: 1\npath: chat.post.md\nsender: alice\n"),
         ("post_send_plain_stdout", ""),
         ("post_send_quiet_stdout", "seq: 1\npath: chat.post.md\nsender: alice\n"),
+        ("post_send_reply_missing_seq_file", "# chat\n\n## #1 alice (TS)\n\n```md\nstart\n```\n\n## #2 bob (TS)\n\n```md\n@#5\n\nping\n```\n\n"),
+        ("post_send_reply_missing_seq_stderr", ""),
+        ("post_send_reply_missing_seq_stdout", "ok post.send #2 -> chat.post.md\nseq: 2\npath: chat.post.md\nsender: bob\n"),
         ("post_send_seq2_stdout", "ok post.send #2 -> chat.post.md\nseq: 2\npath: chat.post.md\nsender: bob\n"),
         ("post_send_stdin_file", "# chat\n\n## #1 alice (TS)\n\n```md\nline one\nline two\n\n```\n\n"),
         ("post_send_stdin_stdout", "ok post.send #1 -> chat.post.md\nseq: 1\npath: chat.post.md\nsender: alice\n"),
