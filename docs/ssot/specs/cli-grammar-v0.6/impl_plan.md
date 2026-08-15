@@ -1,7 +1,7 @@
 # CLI 文法 v0.6: Impl Plan（实施计划）
 
 - 日期：2026-08-09
-- 版本：v0.6（本轮不发布）
+- 版本：v0.6（本轮不发布）（2026-08-16 状态刷新：owner 批准发布，v0.6 文法随 0.6.0 发布，见 docs/dev/release-v0.6.0-2026-08-16.md）
 - 文档性质：实施计划（分层步骤 + 依赖 + 门禁）
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令，最高优先级）

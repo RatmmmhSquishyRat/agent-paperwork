@@ -1,7 +1,7 @@
 # CLI 文法 v0.6: Spec（行为规范）
 
 - 日期：2026-08-09
-- 版本：v0.6（本轮不发布，见 §7）
+- 版本：v0.6（本轮不发布，见 §7）（2026-08-16 状态刷新：owner 批准发布，v0.6 文法随 0.6.0 发布；§7 第 4 款不发布约束已被解除，见 docs/dev/release-v0.6.0-2026-08-16.md）
 - 本轮增量（2026-08-09，v0.7 feedback 轮）：contacts remove/update 新增动词、brief read 新增 `--entry-title`、写路径锁统一（additive 扩展，见 §7 第 5 条）；rework 补录：SOTA C6 动词白名单扩容登记（`update` 经 owner CRUD 指令授权纳入，v0.7_feedbacks §2.5）、update/edit 语义分工（§3.6）、锁阻塞 agent 可见行为契约（§3.9）
 - 文档性质：行为规范（命令契约 + 输出协议），实现与测试的唯一验收基准
 - 增量修订（2026-08-15，owner 四项裁决轮，任务 #35 文档落盘，实施归任务 #36）：撤销 post send 写侧糖衣 flag `--reply-to`/`--mention`（写命令传入落 usage exit 2，reply/mention 语义由 agent 正文直书 `@#N`/`@name` 表达）；post read 读侧过滤器 `--mention`/`--reply-to` 保留声明；contacts add/update 新增非阻塞 destination advisory 校验契约（ok 信封 `advisory` 字段，只增不改协议）。裁决原文逐字与解释口径（编排层拟定，供 owner 复核推翻）见 docs/dev/owner-rulings-2026-08-15.md
@@ -270,7 +270,7 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 1. v0.5 spec §6 冻结条款**逐条继续有效**：ok/error 信封结构、七类 error category、command 标识（`post.send` 等全部不变，且随 format-v2 删除 `post.create`）、全局 flag `--json/--plain/-q/-V`、JSON 既有 key 只增不改不删、纯 ASCII 输出契约。
 2. **core API 与文件格式零变更**：`paperwork-core` 公开函数签名、返回类型、错误类型不变；四类托管文件 Markdown 结构不变（format-v2 已确立的 v2 格式为基线）。
 3. 本次破坏面**仅限命令参数文法**（位置 NAME/BODY/主载荷 -> 具名 flag、互斥错误层级），其余一切对外接口冻结。
-4. **版本与发布**：本轮不 bump 版本、不打 tag、不 publish、不写 CHANGELOG 发布段（owner 显式约束，v0.6_feedbacks §一 (3)）；发布时机与版本号由 owner 在功能稳定后另行裁定。
+4. **版本与发布**：本轮不 bump 版本、不打 tag、不 publish、不写 CHANGELOG 发布段（owner 显式约束，v0.6_feedbacks §一 (3)）；发布时机与版本号由 owner 在功能稳定后另行裁定。（2026-08-16 刷新：owner 明示「当前属于小里程碑，可以发布 0.6」，本款不发布约束解除，随 0.6.0 发布；发布登记见 docs/dev/release-v0.6.0-2026-08-16.md。）
 5. **本轮 additive 扩展登记（v0.7 feedback 轮，2026-08-09）**：本轮为上述冻结条款之下的 additive 扩展——组集合 {profile, post, brief, contacts, validate} 不变；动词集合仅新增 `contacts remove` / `contacts update`（command id `contacts.remove` / `contacts.update`）；flag 表仅新增 `--new-profile` 与 brief read 的可选 `--entry-title`；短形式集合 {-a, -m, -q} 不变；JSON key 与信封字段只增不改不删（新增字段 `contacts` / `removed` / `updated`，`updated` 值格式逐字钉住见 §3.6）；core API 仅新增函数（`contacts_remove` / `contacts_update`），既有函数签名不变、行为面仅增加并发安全性（§3.9）；文件格式零触碰（format-v2 spec L12「profile/brief/contacts 三格式语义不变」继续成立）；本条第 4 款不发布约束对本轮延续有效。**SOTA C6 白名单扩容登记（rework 补录）**：`update` 不在 SOTA C6 既定动词白名单内（`docs/researches/agent-cli-ux-industry-sota-2026-08-08.md` L196，既定 10 动词），随本轮 additive 扩容纳入，授权依据 owner 指令 (1)（v0.7_feedbacks §一 (1)，裁定记录 v0.7_feedbacks §2.5）；白名单测试口径见 tdd §8.3 与 bdd S-SHORT-02。
 6. **2026-08-15 owner 裁决修订面登记（任务 #35 落盘，任务 #36 实施）**：在上述冻结条款之下——撤销面：post send 的 `--reply-to`/`--mention` 两个可选糖衣 flag（写命令传入落 usage exit 2）；新增面：ok 信封 `advisory` 字段（仅 contacts add/update 触发时，JSON 只增不改不删）；读侧豁免：post read `--reply-to`/`--mention` 过滤器、implicit-mention 派生、showing/window 均不受影响；短形式集合 {-a, -m, -q} 不变；core API 与文件格式零变更；不发布约束（本条第 4 款）对本轮延续有效。裁决原文与解释口径见 docs/dev/owner-rulings-2026-08-15.md。
 

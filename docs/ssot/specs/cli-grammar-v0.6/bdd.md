@@ -1,7 +1,7 @@
 # CLI 文法 v0.6: BDD（行为场景）
 
 - 日期：2026-08-09
-- 版本：v0.6（本轮不发布）
+- 版本：v0.6（本轮不发布）（2026-08-16 状态刷新：owner 批准发布，v0.6 文法随 0.6.0 发布，见 docs/dev/release-v0.6.0-2026-08-16.md）
 - 文档性质：行为规范的行为化表述（Given/When/Then），覆盖全部命令的正常路径与错误路径
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令）

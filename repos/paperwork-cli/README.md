@@ -6,6 +6,8 @@ Installs the `paperwork` binary. See the [repository](https://github.com/Ratmmmh
 
 ## Install
 
+`paperwork-cli 0.6.0` is the release documented in this repository (v0.6 named-flag grammar + v2 file formats); it becomes installable from crates.io as soon as the publication step of the release round lands.
+
 ```bash
 cargo install paperwork-cli
 ```

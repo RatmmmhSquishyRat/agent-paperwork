@@ -21,10 +21,10 @@ No server. No database. No daemon. No login. No workspace. Every command takes a
 cargo install paperwork-cli
 ```
 
-> **Version notice:** the published `paperwork-cli 0.5.0` on crates.io ships the
-> old v0.5 positional grammar and old file formats; the examples below follow
-> the unreleased v0.6 named-flag grammar on master. Install from source until
-> the next release — see [Install](#install).
+> **Version notice:** this document describes the v0.6 named-flag grammar and
+> the v2 file formats, released as `paperwork-cli 0.6.0`. The previously
+> published 0.5.0 carried the old positional grammar and old formats and is
+> superseded — see [Install](#install).
 
 Then, from any directory:
 
@@ -69,14 +69,7 @@ the error's `fix:` and `example:` fields without reading docs.
 
 ## Install
 
-> **Version notice (2026-08-15):** the `paperwork-cli 0.5.0` currently
-> published on crates.io carries the **v0.5 positional grammar and the old file
-> formats** — every example in this document follows the v0.6 named-flag
-> grammar and the v2 file formats, which are on master and **not yet
-> released**. Install **from source** (below) until the release round aligns
-> crates.io with this document.
-
-**From [crates.io](https://crates.io/crates/paperwork-cli)** (the published 0.5.0 — v0.5 grammar, old formats):
+**From [crates.io](https://crates.io/crates/paperwork-cli)** — `paperwork-cli 0.6.0` is the release documented here (v0.6 named-flag grammar + v2 file formats); it becomes installable from crates.io as soon as the publication step of the release round lands, and stays the recommended channel afterwards:
 
 ```bash
 cargo install paperwork-cli

@@ -1,7 +1,7 @@
 # CLI 文法 v0.6: Design（设计方案）
 
 - 日期：2026-08-09
-- 版本：v0.6（本轮不发布）
+- 版本：v0.6（本轮不发布）（2026-08-16 状态刷新：owner 批准发布，v0.6 文法随 0.6.0 发布，见 docs/dev/release-v0.6.0-2026-08-16.md）
 - 文档性质：设计方案（动线与参数布局论证 + 方案对比 + owner 裁决依据 + 否决记录）
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令，最高优先级）

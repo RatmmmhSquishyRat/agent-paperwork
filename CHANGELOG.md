@@ -5,13 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Internal — backport of residual v0.5-perfection increments (task #52, Plan-C selective backport)
+## [0.6.0] - 2026-08-16
 
-- Internal backport of residual v0.5-perfection increments: the net deltas of the archived wip branch `wip/v0.5-perfection-snapshot-2026-08-15` that master had not already absorbed were backfilled selectively (no branch merge). Adopted items: the Ivy G1–G5 CLI-surface gap tests (16 tests, rewritten to the v0.6 named grammar); the per-spec suffix chains `strip_title_suffix` (spec §5.7) / `strip_label_suffix` (spec §7.3 R11) replacing the over-stripping `strip_known_suffix` superset; the CI Docs gate `RUSTDOCFLAGS=-D warnings`; the `JsonBuilder` key-order documentation + pinning unit test; the `find_message_sender` doc wording fix (tail-scan window is spec-mandated for SEQ resolution only); the CI smoke scripts corrected to the v0.6 body-token form (incidental); two wip-only documents archived (`docs/reviews/v0.5-debt-closure-ledger-2026-08-15.md`, `docs/dev/format-v2/test-matrix-2026-08-15.md`). Skipped items (master rulings): F1 (already absorbed stronger by D3/C-1), F7 (gap vanished), F9 (LockedFile RAII rejected). No output-byte changes; decision record: `docs/dev/v05-wip-backport-2026-08-15.md`. Version discipline unchanged: crate version stays 0.5.0.
-
-### Removed — write-side sugar flags (2026-08-15 owner ruling, task #36 O1)
-
-- **Breaking for callers passing the sugar flags:** `post send` and `post edit` no longer accept `--reply-to` / `--mention`. Passing either flag is now a usage error (exit 2) whose `fix:` teaches the migration path: reply/mention semantics live in the message body itself — write an `@#N` token (reply to seq N) and/or `@name` tokens (mentions) directly in `--message`; the CLI writes the body verbatim and the read-side derive mechanism recovers the relations (implicit-mention derivation and its v0.5 boundaries are unchanged, now driven by the body token). `post read` keeps its `--reply-to` / `--mention` filters untouched.
+0.6.0 is the first release carrying the v2 file formats (the 0.5.0 working-line "Format Renewal" below), the v0.6 named-flag CLI grammar, and contacts CRUD — all on master since before this release and never published. The previously published `paperwork-cli 0.5.0` shipped the old positional grammar and old file formats and is fully superseded (see the superseded note inside the [0.5.0] section). Version-discipline notes inside the entries below ("crate version stays 0.5.0") reflect the pre-release discipline; the owner-sanctioned 0.6.0 bump (task #49, 2026-08-16) lifted them. Entries are regrouped under Keep a Changelog categories; their text is unchanged from the former [Unreleased] section.
 
 ### Added — contacts destination advisory (2026-08-15 owner ruling, task #36 O2)
 
@@ -27,18 +23,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `brief verify` distinguishes a missing entry target (stays `Stale` per the spec three-state contract) from a genuine read failure (permission denied etc.), which now surfaces as an `io` error envelope instead of collapsing into `Stale`.
 - New core API `create_profile_full`: one-shot creation of a complete profile (including scopes) in a single atomic write.
 
-### Removed — Rust API (P-4 batch, SAM-5)
+### Added — write-side guardrails (fix-wave batch: D2/D3/D4/D6 + review C-1)
 
-- **Breaking for direct Rust consumers only (CLI output unchanged):** the dead `PaperworkError::Io(std::io::Error)` variant is removed from the public error enum. Every IO failure now surfaces as `PaperworkError::IoContext` with an explicit path, fix hint, and example — the bare variant had no reachable construction site left after the io-error envelope unification. Crate consumers matching `PaperworkError::Io` must migrate to the `IoContext` arm; `category()` still reports `"io"` for both historical shapes.
+- `post send` / `post edit` run a fence-balance precheck on the target thread and fast-fail with a `format` envelope plus zero write when a code fence is left unclosed (previously: exit 0, the new message was silently swallowed into the open fence on send, or the tail was erased on the edit rewrite). The envelope's `fix` line points at `paperwork validate` and states the file was left untouched.
+- Preamble prose (profile / brief description) additionally refuses heading-shaped lines (`#` / `##` / `###`-starting lines): preamble prose is serialized bare before the structural headings, so an embedded heading would truncate or forge structure on the next parse (complements the attribute-shaped-line refusal in the P-2 batch above).
+- Profile scope globs (`--scope-read` / `--scope-write` / `--scope-owns`) are validated as single-line fields: a value carrying a line break (which would forge additional scope entries) is refused with a `validation` envelope before anything touches disk. `profile create` is now a single atomic write — a validation failure leaves no partial profile file.
+- `brief add` refuses notes carrying heading-shaped lines (`#` / `##` / `###`) outside a code fence, notes opening a fence that is never closed, and entry files named `Entries`. These shapes serialize bare into the entry section and would either trip the legacy-residue parse guard (permanently locking the whole brief out of `brief read` / `add` / `remove` / `verify`) or silently split the entry; the write side now fast-fails `validation` with zero write. Heading-shaped lines INSIDE a note fence stay legal and roundtrip intact (the parser now keeps note-fence closing lines as note content). Clarification of the P-2 bullet above: the residue guard's trigger surface is ANY fence-outside `### ` line or `## Entries` heading — not only half-migrated v0.4 files; notes with such lines were previously accepted (exit 0) but always produced a permanently unreadable brief, so this tightening converts silent corruption into a fast-fail refusal.
+
+### Changed — CLI (fix-wave batch, D6)
+
+- Non-UTF-8 `--stdin` input now surfaces as `error validation:` (`stdin is not valid UTF-8`, fix pointing at re-encoding or `--message`) instead of a generic io envelope whose fix hint mentioned file permissions; exit code stays 1. The envelope STRUCTURAL surface (status token, command id, field names, `code` / `exit_code`) remains pure ASCII; user-data values may carry legal UTF-8.
+
+### Changed — CLI (audit fixwave round2, R2-01)
+
+- File-read channels now point their `fix:` hint at encoding when a managed file fails UTF-8 decoding (`InvalidData`: binary or UTF-16 content). Twelve sites share the new wording (verbatim: `the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)`, shared constant `FILE_NOT_UTF8_FIX`): core read paths (post read/summary/edit content read, fence/legacy scans, lock read-modify-write, contacts/profile/manifest/brief reads) plus the CLI's foreign-thread precheck and `validate`. Previously these surfaced a generic io envelope whose fix hint mentioned permissions/readability/integrity. Category stays `io`, exit code stays 1, envelope structure unchanged; all other io failures keep their previous fix wording. This is the file-channel analogue of the stdin-channel D6 entry above; the category asymmetry (stdin=validation vs file=io) is a deliberate dual ruling, pinned in the cli-grammar-v0.6 spec §5 item 7.
 
 ### Changed — CLI internals (P-6 batch, output bytes unchanged)
 
 - All command-side `--json` payloads are now assembled through a single `JsonBuilder` construction path (was: ad-hoc `serde_json::Map` inserts in nine call sites). Key set and key order are byte-identical to before (frozen by the char_tests snapshots).
 - Path suffix resolution (`ensure_suffix`) is now lossless for non-Unicode path components: suffix append/replace operates on the native OS string instead of a `to_string_lossy()` roundtrip, which could replace invalid bytes with U+FFFD and silently redirect a write to a different file name (NEW-3).
-
-### Fixed — CLI (P-6 batch, NEW-4)
-
-- `contacts read` enrichment now resolves each entry's profile path the same way the write side does: tried as given (CWD-relative) first, then relative to the contacts file's own directory. Entries whose profile lives next to the contacts file (but not next to the CWD) are enriched with name/description instead of degrading to `(unreadable)`.
 
 ### Changed — core internals (P-7 batch, output bytes unchanged)
 
@@ -54,20 +57,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - The CI test step now runs `cargo test --locked` (dependency set pinned by the committed lockfile), and `cargo doc --no-deps` gained its own gate; the rustdoc warnings that gate surfaced (private intra-doc links, unclosed `<verb>` tag in doc comments) are fixed.
 
-### Added — write-side guardrails (fix-wave batch: D2/D3/D4/D6 + review C-1)
+### Removed — write-side sugar flags (2026-08-15 owner ruling, task #36 O1)
 
-- `post send` / `post edit` run a fence-balance precheck on the target thread and fast-fail with a `format` envelope plus zero write when a code fence is left unclosed (previously: exit 0, the new message was silently swallowed into the open fence on send, or the tail was erased on the edit rewrite). The envelope's `fix` line points at `paperwork validate` and states the file was left untouched.
-- Preamble prose (profile / brief description) additionally refuses heading-shaped lines (`#` / `##` / `###`-starting lines): preamble prose is serialized bare before the structural headings, so an embedded heading would truncate or forge structure on the next parse (complements the attribute-shaped-line refusal in the P-2 batch above).
-- Profile scope globs (`--scope-read` / `--scope-write` / `--scope-owns`) are validated as single-line fields: a value carrying a line break (which would forge additional scope entries) is refused with a `validation` envelope before anything touches disk. `profile create` is now a single atomic write — a validation failure leaves no partial profile file.
-- `brief add` refuses notes carrying heading-shaped lines (`#` / `##` / `###`) outside a code fence, notes opening a fence that is never closed, and entry files named `Entries`. These shapes serialize bare into the entry section and would either trip the legacy-residue parse guard (permanently locking the whole brief out of `brief read` / `add` / `remove` / `verify`) or silently split the entry; the write side now fast-fails `validation` with zero write. Heading-shaped lines INSIDE a note fence stay legal and roundtrip intact (the parser now keeps note-fence closing lines as note content). Clarification of the P-2 bullet above: the residue guard's trigger surface is ANY fence-outside `### ` line or `## Entries` heading — not only half-migrated v0.4 files; notes with such lines were previously accepted (exit 0) but always produced a permanently unreadable brief, so this tightening converts silent corruption into a fast-fail refusal.
+- **Breaking for callers passing the sugar flags:** `post send` and `post edit` no longer accept `--reply-to` / `--mention`. Passing either flag is now a usage error (exit 2) whose `fix:` teaches the migration path: reply/mention semantics live in the message body itself — write an `@#N` token (reply to seq N) and/or `@name` tokens (mentions) directly in `--message`; the CLI writes the body verbatim and the read-side derive mechanism recovers the relations (implicit-mention derivation and its v0.5 boundaries are unchanged, now driven by the body token). `post read` keeps its `--reply-to` / `--mention` filters untouched.
 
-### Changed — CLI (fix-wave batch, D6)
+### Removed — Rust API (P-4 batch, SAM-5)
 
-- Non-UTF-8 `--stdin` input now surfaces as `error validation:` (`stdin is not valid UTF-8`, fix pointing at re-encoding or `--message`) instead of a generic io envelope whose fix hint mentioned file permissions; exit code stays 1. The envelope STRUCTURAL surface (status token, command id, field names, `code` / `exit_code`) remains pure ASCII; user-data values may carry legal UTF-8.
+- **Breaking for direct Rust consumers only (CLI output unchanged):** the dead `PaperworkError::Io(std::io::Error)` variant is removed from the public error enum. Every IO failure now surfaces as `PaperworkError::IoContext` with an explicit path, fix hint, and example — the bare variant had no reachable construction site left after the io-error envelope unification. Crate consumers matching `PaperworkError::Io` must migrate to the `IoContext` arm; `category()` still reports `"io"` for both historical shapes.
 
-### Changed — CLI (audit fixwave round2, R2-01)
+### Fixed — CLI (P-6 batch, NEW-4)
 
-- File-read channels now point their `fix:` hint at encoding when a managed file fails UTF-8 decoding (`InvalidData`: binary or UTF-16 content). Twelve sites share the new wording (verbatim: `the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)`, shared constant `FILE_NOT_UTF8_FIX`): core read paths (post read/summary/edit content read, fence/legacy scans, lock read-modify-write, contacts/profile/manifest/brief reads) plus the CLI's foreign-thread precheck and `validate`. Previously these surfaced a generic io envelope whose fix hint mentioned permissions/readability/integrity. Category stays `io`, exit code stays 1, envelope structure unchanged; all other io failures keep their previous fix wording. This is the file-channel analogue of the stdin-channel D6 entry above; the category asymmetry (stdin=validation vs file=io) is a deliberate dual ruling, pinned in the cli-grammar-v0.6 spec §5 item 7.
+- `contacts read` enrichment now resolves each entry's profile path the same way the write side does: tried as given (CWD-relative) first, then relative to the contacts file's own directory. Entries whose profile lives next to the contacts file (but not next to the CWD) are enriched with name/description instead of degrading to `(unreadable)`.
+
+### Internal — backport of residual v0.5-perfection increments (task #52, Plan-C selective backport)
+
+- Internal backport of residual v0.5-perfection increments: the net deltas of the archived wip branch `wip/v0.5-perfection-snapshot-2026-08-15` that master had not already absorbed were backfilled selectively (no branch merge). Adopted items: the Ivy G1–G5 CLI-surface gap tests (16 tests, rewritten to the v0.6 named grammar); the per-spec suffix chains `strip_title_suffix` (spec §5.7) / `strip_label_suffix` (spec §7.3 R11) replacing the over-stripping `strip_known_suffix` superset; the CI Docs gate `RUSTDOCFLAGS=-D warnings`; the `JsonBuilder` key-order documentation + pinning unit test; the `find_message_sender` doc wording fix (tail-scan window is spec-mandated for SEQ resolution only); the CI smoke scripts corrected to the v0.6 body-token form (incidental); two wip-only documents archived (`docs/reviews/v0.5-debt-closure-ledger-2026-08-15.md`, `docs/dev/format-v2/test-matrix-2026-08-15.md`). Skipped items (master rulings): F1 (already absorbed stronger by D3/C-1), F7 (gap vanished), F9 (LockedFile RAII rejected). No output-byte changes; decision record: `docs/dev/v05-wip-backport-2026-08-15.md`. Version discipline unchanged: crate version stays 0.5.0.
 
 ## [0.5.0] - 2026-08-09
 
@@ -272,7 +276,7 @@ Compile-level breaks for library consumers (IDE plugins, agent harnesses, other 
 The published 0.5.0 shipped the old (pre-format-v2) file formats together with a
 positional-argument CLI grammar redesign. This subsection records that released
 grammar as-is. **It is already superseded by the v0.6 named-flag grammar redesign
-(in progress, not yet released): on the v0.6 working line every required value
+(released as 0.6.0 on 2026-08-16): on the v0.6 working line every required value
 below is a named flag again, and `post create` no longer exists (thread creation
 is folded into the first `post send`). Do not migrate against this table on a
 v0.6 build — use the named-flag grammar shown by `paperwork <command> --help`.**
