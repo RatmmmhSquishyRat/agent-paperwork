@@ -47,6 +47,7 @@
 - 职责：全量门禁回归 + 现场探针（复现脚本对每个缺陷呈修复后预期形态）。
 - 进条件：实施工单全部终态。
 - 出条件：`cargo test --workspace --locked` 全绿、`cargo clippy --workspace --all-targets -- -D warnings` 零警告、`cargo fmt --all --check` 通过；复现证据链脚本在案。
+- 检查项追加（2026-08-15，任务 #39；触发事件：裁决批 O1 标志撤销漏改 ci.yml 内嵌 smoke，线上两 run smoke×3 失败）：**CI 内嵌脚本面**——凡 CLI 标志增删（尤其裁决类 breaking 变更），验证必查 `.github/workflows/*.yml`（内嵌 smoke）与 `SKILL.md`、`README.md`、`_e2e/*` 的全仓 grep 扫查并逐个命中点处置；内嵌 smoke 非 cargo 测试目标，`cargo test` 拦不住（规则号 FR-1，权威登记点 open-items-ledger 第十五节；事件全记录见 fix-ledger 第九节与 ci-failure-diagnosis-2026-08-15.md）。
 - 纪律：测试计数本身是证据（本轮基线 419），门禁报告必须附数字而非「全部通过」字样。
 
 ### 7. 三维评审

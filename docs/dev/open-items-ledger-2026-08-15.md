@@ -454,3 +454,25 @@
 - 汇总表口径随本节改读：台账仍开放项维持第十三节口径（文档轮 3：LED-06/07/08；事实登记 1：LED-15），其余全部闭合。
 
 （第十四节完。追加：任务 #37 修复轮执行 agent；2026-08-15。）
+
+---
+
+## 十五、CI smoke 失败事件登记与闭合（任务 #39，2026-08-15，append-only，未改动第一至十四节）
+
+追加依据：任务 #38 诊断报告 docs/dev/ci-failure-diagnosis-2026-08-15.md（Lucas，已结案）；全记录账目见 fix-ledger 第九节。本节登记事件事实、闭合状态与防复发流程规则（供后续批次引用）。
+
+### 事件登记（LED-17）
+
+- 来源：CI 线上失败——run 31877484785（HEAD `46c637c`）与 31877562381（HEAD `669342e`）smoke job ubuntu/macos/windows ×3 全挂（fmt/test/clippy/docs 全绿）。
+- 根因：裁决批 O1（`9821933`）撤销写侧糖标志 `--reply-to`/`--mention` 时漏改 ci.yml 内嵌 smoke（unix L77 + windows 对应行仍调旧形态）；smoke 非 cargo 测试目标，本地 426 全绿门禁覆盖不到。
+- 严重度：重要（线上连续两 run 红，但不影响仓库代码正确性；测试面与冻结面在失败 run 中亦全绿）。
+- 修复：任务 #52 回填批 `f94b65f` 顺带修正（body-token 形态），run 31879040813（HEAD `3ef5dc5`）全绿实证；本地按 ci.yml 命令复跑 444 测试 + 全门禁 + 双档 smoke 全 PASS。
+- 状态：**已闭合**（修复在 origin/master 在场，账目登记本节与 fix-ledger 第九节闭合销账）；不新立待办、无代码动作；本事件不改变第十四节登记的裁决链终态口径（失败属 CI 脚本同步面遗漏，非裁决实施面缺陷）。
+
+### 防复发流程规则（登记为后续批次强制项，规则号 FR-1）
+
+- **FR-1（CLI 标志增删同步扫查规则）**：凡 CLI 标志增删（尤其裁决类 breaking 变更），验证清单必须包含对以下面的全仓 grep 扫查并逐个命中点处置：`.github/workflows/*.yml`（内嵌 smoke 是本事件漏点）、`SKILL.md`、`README.md`（含 repos/ 下子 README）、`_e2e/*`。
+- 引用方式：后续批次的验证/终局门禁报告引用本节 FR-1 即可，不需重复登记；workflow-and-todo 验证阶段检查项已同步追加。
+- 备查面：ci.yml unix/windows smoke 双份内嵌的结构性重复可考虑抽脚本，但当前形态已被 owner 既往接受，稳定期不主动改。
+
+（第十五节完。追加：任务 #39 执行 agent；2026-08-15。全记录与证据链见 docs/dev/ci-failure-diagnosis-2026-08-15.md 与 fix-ledger 第九节。）

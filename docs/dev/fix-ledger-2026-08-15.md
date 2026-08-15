@@ -199,3 +199,27 @@ D1 无新提交（历史闭环 669befa，NEW-1 护栏批）。
 - 更正：owner 从未指示发布 0.6。本台账第一节 S-01 条目中「含发布轮一次性闭合建议：bump 0.6.0 + CHANGELOG + crates.io + tag」与第六节 I-4 裁定理由中「发布轮 release notes 提一句」改读为：发布时机待 owner 指示，本工作流无发布计划；相关事项仅作事实登记，不构成 bump 建议或发布轮计划。
 - S-01 的事实登记面（crates.io 0.5.0 与仓库版本语义错配）本身成立，不受本更正影响。
 - 权威口径见 docs/dev/open-items-ledger-2026-08-15.md 第十二节。
+
+---
+
+## 九、CI smoke 失败事件全记录（任务 #39，2026-08-15，append-only，未改动第一至八节）
+
+追加依据：任务 #38 诊断报告 docs/dev/ci-failure-diagnosis-2026-08-15.md（Lucas，状态已结案：根因确认 + 已被后续提交修复）。本节为事件账目登记，纯文档，无代码动作。
+
+### CI-F1 ci.yml 内嵌 smoke 调用已撤销糖标志，smoke×3 平台失败 — 已闭合（由回填批 f94b65f 修复）
+
+- **失败 run**：31877484785（HEAD `46c637c`，三维评审修复轮）与 31877562381（HEAD `669342e`，台账第十四节提交）；两 run 结构完全一致：fmt ✔ / test×3 ✔（含 clippy、docs）/ **smoke ubuntu/macos/windows ×3 ✘**。
+- **根因（Verified，因果闭环）**：裁决批 O1（`9821933`）撤销写侧糖标志 `--reply-to`/`--mention` 时，漏改 `.github/workflows/ci.yml` 内嵌 smoke 脚本（unix 块第 77 行 + windows 块对应行仍调 `post send standup --author bob --reply-to 1 --mention alice --message "Reply"`）；CLI 以 usage 错误（exit 2）拒绝，`grep "^ok post.send"` / `Assert-Contains` 断言失败，step exit 1。`9821933..669342e` 逐提交核验 8/8 版 ci.yml 均含该调用；O2–O5 与三维评审轮均未补（本地 426 全绿未拦住的原因：smoke 内嵌于 ci.yml，非 cargo 测试目标，`cargo test` 永不执行）。
+- **批次归属**：引入者 = 裁决批自身（O1 漏改）；修复者 = 任务 #52 回填批 `f94b65f`（commit message 明示 "Incidental: ci.yml smoke ... corrected to the v0.6 body-token form"，smoke 两处改 `--message "@#1 Reply @alice"` 形态，并将 docs gate 加固为 RUSTDOCFLAGS -D warnings）；回填批与失败无因果关联（其 Ivy 16 项测试在失败 run 的 test job 中亦全绿）。
+- **闭合证据**：run 31879040813（HEAD `3ef5dc5`）**全绿**；本地按 ci.yml 实际命令逐项复跑（444 测试 + fmt/clippy/docs gate + windows pwsh 与 Git Bash 双档 smoke）全部 PASS，与线上一致；历史失败点静态（`git show 669342e:.github/workflows/ci.yml`）+ 动态（现行二进制复现逐字同一 usage 错误）双闭环。
+- **终态**：已闭合，无新代码改动需求；release.yml 未触发（仅 tag 触发），无改动需求。
+
+### 防复发措施（流程规则，登记为后续批次强制项）
+
+- 凡 CLI 标志增删（尤其裁决类 breaking 变更），验证清单必须包含对以下面的全仓 grep 扫查，逐个命中点处置：`.github/workflows/*.yml`（内嵌 smoke 是本次漏点）、`SKILL.md`、`README.md`（含 repos/ 下子 README）、`_e2e/*`。
+- 该规则同步登记于 open-items-ledger 第十五节（供后续批次引用）与 workflow-and-todo 验证阶段检查项。
+- ci.yml unix/windows smoke 双份内嵌的结构性重复面登记备查：可考虑抽脚本由 workflow 调用，但当前内嵌形态已被 owner 既往接受，**稳定期不主动改**（诊断报告 §7.2 第 2 条口径）。
+
+### 销账统计（本节）
+
+- 缺陷条目：1（CI-F1）；终态：已闭合（由 f94b65f 修复，run 31879040813 全绿实证）；防复发规则：已登记（3 处落点）；悬置：0。
