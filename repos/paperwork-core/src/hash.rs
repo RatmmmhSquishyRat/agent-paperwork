@@ -26,7 +26,7 @@ pub fn hash_bytes(data: &[u8]) -> String {
 /// Returns lowercase hex string.
 ///
 /// NEW-7 streaming digest: the file is read through a `BufReader` in
-/// [`HASH_CHUNK_SIZE`] chunks and fed to the hasher incrementally, so the
+/// `HASH_CHUNK_SIZE` chunks and fed to the hasher incrementally, so the
 /// peak memory stays constant regardless of file size (the historical
 /// `fs::read` loaded the whole file). The digest — and therefore the hex
 /// output — is bit-identical to the one-shot form.

@@ -38,10 +38,13 @@ jobs:
         run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Docs
+        run: cargo doc --no-deps --workspace
 
   smoke:
     strategy:

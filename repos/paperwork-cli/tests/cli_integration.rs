@@ -3345,6 +3345,28 @@ fn send_exact_two_extra_positionals_is_usage() {
 }
 
 #[test]
+fn edit_v05_grammar_positional_is_usage() {
+    // S-EDIT-08: the v0.5 positional grammar (PATH NAME SEQ BODY) lands in
+    // the usage envelope — v0.6 keeps only the PATH positional slot.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    std::fs::write(&path, thread_message(1, "alice", "all", None, &[], "hi")).unwrap();
+
+    cmd()
+        .args([
+            "post",
+            "edit",
+            path.to_str().unwrap(),
+            "alice",
+            "1",
+            "edited",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("error usage:"));
+}
+
+#[test]
 fn canonical_send_example_matches_spec_52() {
     // Ray m3: the post.send canonical example is the spec section 5.2
     // literal, verbatim.

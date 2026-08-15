@@ -17,7 +17,7 @@ pub struct ProfileArgs {
     command: ProfileCommand,
 }
 
-/// Command identifier for the output protocol (profile.<verb>).
+/// Command identifier for the output protocol (`profile.<verb>`).
 pub fn command_id(args: &ProfileArgs) -> &'static str {
     match &args.command {
         ProfileCommand::Create { .. } => "profile.create",

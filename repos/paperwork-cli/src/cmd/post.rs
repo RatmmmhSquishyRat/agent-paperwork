@@ -32,7 +32,7 @@ pub struct PostArgs {
     command: PostCommand,
 }
 
-/// Command identifier for the output protocol (post.<verb>).
+/// Command identifier for the output protocol (`post.<verb>`).
 pub fn command_id(args: &PostArgs) -> &'static str {
     match &args.command {
         PostCommand::Send { .. } => "post.send",

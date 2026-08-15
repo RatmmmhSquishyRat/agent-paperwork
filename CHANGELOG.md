@@ -28,6 +28,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - `contacts read` enrichment now resolves each entry's profile path the same way the write side does: tried as given (CWD-relative) first, then relative to the contacts file's own directory. Entries whose profile lives next to the contacts file (but not next to the CWD) are enriched with name/description instead of degrading to `(unreadable)`.
 
+### Changed — core internals (P-7 batch, output bytes unchanged)
+
+- `ops/thread.rs` is split into `thread.rs` (write side), `thread_read.rs` (read side), and `thread_scan.rs` (byte-level scans); the public re-export surface (`paperwork_core::ops::thread::*`) is unchanged (T5).
+- `post send --reply-to` resolves the original sender via a bounded tail scan (`find_message_sender`) instead of a whole-file re-read, removing the double read on the send path; a missing seq stays silent exactly like before (NEW-12).
+- `post edit` rewrites only from the last message header when the on-disk region already matches the canonical serialization, falling back to a full rewrite otherwise; both paths produce byte-identical files (NEW-8).
+- `hash_file` now streams the file in 64KB chunks instead of loading it whole; the SHA-256 digest is bit-identical (NEW-7), and hex encoding runs in a single pass (NEW-11).
+- The last inline mention dedup loop (`post send --mention`) moved onto the shared order-preserving `dedup_preserve_order` helper, matching `thread_summary` participants and `derive_mentions` (NEW-10).
+
+### Changed — CI (P-8 batch)
+
+- The CI test step now runs `cargo test --locked` (dependency set pinned by the committed lockfile), and `cargo doc --no-deps` gained its own gate; the rustdoc warnings that gate surfaced (private intra-doc links, unclosed `<verb>` tag in doc comments) are fixed.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal

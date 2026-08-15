@@ -1,6 +1,6 @@
 //! Thread write operations: send and edit — all path-explicit (T5 split:
-//! the read side lives in [`super::thread_read`], the byte-level scans in
-//! [`super::thread_scan`]; the historical re-export surface below keeps
+//! the read side lives in `super::thread_read`, the byte-level scans in
+//! `super::thread_scan`; the historical re-export surface below keeps
 //! every `ops::thread::*` path unchanged).
 //!
 //! Used for Post threads (append-only group conversations).
@@ -11,7 +11,7 @@
 //! exclusive lock excludes concurrent writers for the whole read-modify-write
 //! window, and every exit path releases it explicitly (P-1: the master
 //! `locked_read_modify_write` stance, manual lock/unlock, stays the SSOT).
-//! The lock-free readers in [`super::thread_read`] tolerate the
+//! The lock-free readers in `super::thread_read` tolerate the
 //! writer-exclusion stance because a torn read merely fails parsing like any
 //! malformed file.
 //!

@@ -18,7 +18,7 @@ pub struct BriefArgs {
     command: BriefCommand,
 }
 
-/// Command identifier for the output protocol (brief.<verb>).
+/// Command identifier for the output protocol (`brief.<verb>`).
 pub fn command_id(args: &BriefArgs) -> &'static str {
     match &args.command {
         BriefCommand::Create { .. } => "brief.create",

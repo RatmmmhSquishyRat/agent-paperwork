@@ -18,7 +18,7 @@ pub struct ContactsArgs {
     command: ContactsCommand,
 }
 
-/// Command identifier for the output protocol (contacts.<verb>).
+/// Command identifier for the output protocol (`contacts.<verb>`).
 pub fn command_id(args: &ContactsArgs) -> &'static str {
     match &args.command {
         ContactsCommand::Create { .. } => "contacts.create",
