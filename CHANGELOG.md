@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed — write-side sugar flags (2026-08-15 owner ruling, task #36 O1)
+
+- **Breaking for callers passing the sugar flags:** `post send` and `post edit` no longer accept `--reply-to` / `--mention`. Passing either flag is now a usage error (exit 2) whose `fix:` teaches the migration path: reply/mention semantics live in the message body itself — write an `@#N` token (reply to seq N) and/or `@name` tokens (mentions) directly in `--message`; the CLI writes the body verbatim and the read-side derive mechanism recovers the relations (implicit-mention derivation and its v0.5 boundaries are unchanged, now driven by the body token). `post read` keeps its `--reply-to` / `--mention` filters untouched.
+
+### Added — contacts destination advisory (2026-08-15 owner ruling, task #36 O2)
+
+- `contacts add` / `contacts update` now run a cheap, non-blocking advisory probe on the destination after the write succeeds: when the destination profile does not exist, is not readable, or is not a valid profile file, the write still completes with exit 0 and the ok envelope gains a single-line pure-ASCII `advisory` field (`destination '<P>' does not exist` / `is not readable` / `is not a valid profile file`), carried under the same key in the default and `--json` output. Destination problems never change the exit code and introduce no new failure path; valid destinations produce no field (output protocol is add-only). Version discipline unchanged: no bump, no tag, no publish (spec §7 rules 4/6); crate version stays 0.5.0.
+
 ### Added — write-side injection guardrails (P-2 batch)
 
 - All create ops (`profile create`, `brief create`, `contacts create`) now create files atomically (`create_new`): two racing creators can no longer both succeed — exactly one wins, every loser receives the `already-exists` envelope, and the winner's bytes always survive.
