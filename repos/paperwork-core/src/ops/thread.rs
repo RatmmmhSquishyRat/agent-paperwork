@@ -355,7 +355,7 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
         )
     })?;
     file.read_to_string(&mut content).map_err(|e| {
-        PaperworkError::io_ctx(
+        PaperworkError::io_ctx_file_read(
             path.to_path_buf(),
             e,
             "check file permissions",

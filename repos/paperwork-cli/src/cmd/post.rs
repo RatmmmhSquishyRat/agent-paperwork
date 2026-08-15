@@ -508,14 +508,23 @@ fn reject_foreign_thread(path: &std::path::Path) -> Result<()> {
         // same process.
         let mut raw = String::new();
         let mut reader = &file;
-        reader
-            .read_to_string(&mut raw)
-            .map_err(|e| paperwork_core::PaperworkError::IoContext {
+        reader.read_to_string(&mut raw).map_err(|e| {
+            // R2-01: an InvalidData failure means the file bytes are not
+            // valid UTF-8 (binary / UTF-16) — point the fix at the encoding,
+            // file-channel analogue of the stdin-channel D6 ruling; category
+            // stays `io` and exit code stays 1 (audit-robustness-round2).
+            let fix = if e.kind() == std::io::ErrorKind::InvalidData {
+                paperwork_core::error::FILE_NOT_UTF8_FIX.to_string()
+            } else {
+                "check that the file is readable".to_string()
+            };
+            paperwork_core::PaperworkError::IoContext {
                 path: path.to_path_buf(),
                 source: e,
-                fix: "check that the file is readable".to_string(),
+                fix,
                 example: String::new(),
-            })?;
+            }
+        })?;
         file.unlock().ok();
 
         let pre_existing = paperwork_core::format::thread::parse_messages(&raw)?;

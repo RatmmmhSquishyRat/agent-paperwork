@@ -29,7 +29,7 @@ pub fn thread_meta(path: &Path) -> Result<ThreadMeta> {
     }
 
     let content = fs::read_to_string(path)
-        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
+        .map_err(|e| PaperworkError::io_ctx_file_read(path, e, "check file permissions", ""))?;
 
     Ok(parse_preamble(&content))
 }
@@ -52,7 +52,7 @@ pub fn thread_read(path: &Path, from: Option<u64>, to: Option<u64>) -> Result<Ve
     }
 
     let content = fs::read_to_string(path)
-        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
+        .map_err(|e| PaperworkError::io_ctx_file_read(path, e, "check file permissions", ""))?;
 
     let messages = parse_messages(&content)?;
 
@@ -82,7 +82,7 @@ pub fn thread_summary(path: &Path) -> Result<ThreadSummary> {
     }
 
     let content = fs::read_to_string(path)
-        .map_err(|e| PaperworkError::io_ctx(path, e, "check file permissions", ""))?;
+        .map_err(|e| PaperworkError::io_ctx_file_read(path, e, "check file permissions", ""))?;
 
     // Title from the preamble in the SAME pass (review M8): callers no
     // longer need a second full-file `thread_meta` walk.

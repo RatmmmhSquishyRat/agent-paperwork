@@ -6,6 +6,13 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Fix hint for file-content read channels whose underlying io failure is a
+/// UTF-8 decode failure (`InvalidData`: binary or UTF-16 content). Shared
+/// verbatim by the core [`PaperworkError::io_ctx_file_read`] constructor and
+/// the CLI-side file-read sites (R2-01, file-channel analogue of the
+/// stdin-channel D6 ruling). Pure ASCII (envelope structure contract, LED-16).
+pub const FILE_NOT_UTF8_FIX: &str = "the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)";
+
 /// Unified error type for all paperwork operations.
 #[derive(Debug, Error)]
 pub enum PaperworkError {
@@ -95,6 +102,34 @@ impl PaperworkError {
         }
     }
 
+    /// File-content read channel constructor (R2-01, audit-robustness-round2).
+    ///
+    /// Same io envelope as [`Self::io_ctx`] (category `io`, exit 1 — both
+    /// unchanged), but the fix hint is encoding-aware: an `InvalidData`
+    /// failure means the file bytes are not valid UTF-8 (binary or UTF-16
+    /// content), so the fix points at the encoding instead of the caller's
+    /// generic permissions/existence wording — the file-channel analogue of
+    /// the stdin-channel D6 ruling (cmd/post.rs resolve_body). Wording is
+    /// pure ASCII (envelope structure contract, LED-16).
+    pub(crate) fn io_ctx_file_read(
+        path: impl Into<PathBuf>,
+        source: std::io::Error,
+        default_fix: impl Into<String>,
+        example: impl Into<String>,
+    ) -> Self {
+        let fix = if source.kind() == std::io::ErrorKind::InvalidData {
+            FILE_NOT_UTF8_FIX.to_string()
+        } else {
+            default_fix.into()
+        };
+        PaperworkError::IoContext {
+            path: path.into(),
+            source,
+            fix,
+            example: example.into(),
+        }
+    }
+
     /// Return the error category string for the error envelope.
     pub fn category(&self) -> &'static str {
         match self {
@@ -176,5 +211,34 @@ mod tests {
         );
         assert_eq!(err.fix(), "check that the file exists and is readable");
         assert_eq!(err.example(), "paperwork validate standup.post.md");
+    }
+
+    // R2-01: the file-read channel constructor keeps the io category but
+    // swaps the fix hint to the encoding wording on InvalidData (binary /
+    // UTF-16 content), and passes the caller wording through otherwise.
+    #[test]
+    fn test_io_ctx_file_read_encoding_hint() {
+        let err = PaperworkError::io_ctx_file_read(
+            std::path::Path::new("blob.post.md"),
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ),
+            "check file permissions",
+            "",
+        );
+        assert_eq!(err.category(), "io");
+        assert_eq!(
+            err.fix(),
+            "the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)"
+        );
+
+        let err = PaperworkError::io_ctx_file_read(
+            std::path::Path::new("blob.post.md"),
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied"),
+            "check file permissions",
+            "",
+        );
+        assert_eq!(err.fix(), "check file permissions");
     }
 }

@@ -80,10 +80,19 @@ pub fn run(ctx: &Context, args: ValidateArgs) -> Result<()> {
     };
 
     let content = std::fs::read_to_string(&args.path).map_err(|e| {
+        // R2-01: InvalidData means the bytes are not valid UTF-8 (binary /
+        // UTF-16) — point the fix at the encoding instead of existence /
+        // readability (file-channel analogue of the stdin D6 ruling);
+        // category stays `io`, exit code stays 1.
+        let fix = if e.kind() == std::io::ErrorKind::InvalidData {
+            paperwork_core::error::FILE_NOT_UTF8_FIX.to_string()
+        } else {
+            "check that the file exists and is readable".to_string()
+        };
         paperwork_core::PaperworkError::IoContext {
             path: args.path.clone(),
             source: e,
-            fix: "check that the file exists and is readable".to_string(),
+            fix,
             example: format!("paperwork validate {}", path_str),
         }
     })?;

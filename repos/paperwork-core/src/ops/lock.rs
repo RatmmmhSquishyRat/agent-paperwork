@@ -83,7 +83,7 @@ where
     }
     if let Err(e) = file.read_to_string(&mut content) {
         file.unlock().ok();
-        return Err(PaperworkError::io_ctx(
+        return Err(PaperworkError::io_ctx_file_read(
             path.to_path_buf(),
             e,
             "check file permissions",

@@ -259,7 +259,7 @@ pub fn brief_read(path: &Path) -> Result<Manifest> {
     }
 
     let content = fs::read_to_string(path).map_err(|e| {
-        PaperworkError::io_ctx(
+        PaperworkError::io_ctx_file_read(
             path.to_path_buf(),
             e,
             "check file permissions",

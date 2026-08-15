@@ -154,7 +154,7 @@ pub(super) fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> 
     let mut content = String::new();
     file_ref
         .read_to_string(&mut content)
-        .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
+        .map_err(|e| PaperworkError::io_ctx_file_read(path, e, "check file integrity", ""))?;
     let content = normalize_line_endings(&content);
     let mut found = false;
     for_each_outside_fence(&content, |_i, line| {
@@ -187,7 +187,7 @@ pub(super) fn unclosed_fence_issues_locked(file: &File, path: &Path) -> Result<V
     let mut content = String::new();
     file_ref
         .read_to_string(&mut content)
-        .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
+        .map_err(|e| PaperworkError::io_ctx_file_read(path, e, "check file integrity", ""))?;
     let content = normalize_line_endings(&content);
     Ok(validate_markdown(&content))
 }
