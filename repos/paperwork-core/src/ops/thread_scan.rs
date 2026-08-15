@@ -27,6 +27,7 @@ use crate::error::{PaperworkError, Result};
 use crate::format::thread::{header_seq, LEGACY_HEADER_RE_FMT, MESSAGE_HEADER_RE};
 use crate::format::{
     fence_close_matches, fence_open_len, for_each_outside_fence, normalize_line_endings,
+    validate_markdown,
 };
 
 /// Size of reverse-scan buffer for finding last seq (64KB + 256B, spec §5.5).
@@ -164,6 +165,31 @@ pub(super) fn contains_legacy_headers(file: &File, path: &Path) -> Result<bool> 
         true
     });
     Ok(found)
+}
+
+/// Fence-balance precheck over the whole file (read through the locked
+/// handle) — the D2 write-path guard.
+///
+/// An unclosed code fence swallows everything appended after it: a
+/// `thread_send` against such a file silently loses the new message into
+/// the open fence body, and a later `thread_edit` full-rewrite drops it
+/// for good (exit 0 data loss, audit D2). Write paths therefore fast-fail
+/// with the same issue wording `validate` reports (`Parse` envelope,
+/// category `format`) instead of writing into a structurally broken file.
+///
+/// Returns the `validate_markdown` issue list (empty = balanced). Runs
+/// inside the caller's lock, like every scan in this module.
+pub(super) fn unclosed_fence_issues_locked(file: &File, path: &Path) -> Result<Vec<String>> {
+    let mut file_ref = file;
+    file_ref
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file handle validity", ""))?;
+    let mut content = String::new();
+    file_ref
+        .read_to_string(&mut content)
+        .map_err(|e| PaperworkError::io_ctx(path, e, "check file integrity", ""))?;
+    let content = normalize_line_endings(&content);
+    Ok(validate_markdown(&content))
 }
 
 /// Read the spec §5.5 reverse tail-scan buffer through a locked handle:

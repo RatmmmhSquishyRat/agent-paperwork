@@ -33,11 +33,12 @@ use crate::format::thread::{
     derive_message_refs, parse_messages, serialize_message, serialize_messages, serialize_preamble,
     validate_sender,
 };
+use crate::format::validate_markdown;
 use crate::{Message, ThreadMeta};
 
 use super::thread_scan::{
     contains_legacy_headers, find_message_sender_locked, first_message_header_offset,
-    last_message_header_offset, read_last_seq_locked,
+    last_message_header_offset, read_last_seq_locked, unclosed_fence_issues_locked,
 };
 
 // Historical re-export surface (T5 split): every `ops::thread::*` path the
@@ -49,6 +50,18 @@ pub use super::thread_read::{thread_meta, thread_read, thread_summary};
 /// Applies to a single serialized message only — the preamble is exempt
 /// (spec §5.7).
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
+/// Fence-balance write refusal (D2): shared envelope builder for the
+/// send/edit prechecks. Wording mirrors the `validate` fence check
+/// (`format` category / `Parse` envelope); both write paths refuse
+/// BEFORE any byte is written, so the broken file stays untouched.
+fn fence_balance_error(issues: Vec<String>, path: &Path) -> PaperworkError {
+    PaperworkError::Parse {
+        message: issues.join("; "),
+        fix: "close every code fence with a backtick-only line at least as long as the opening fence; the file was left untouched".to_string(),
+        example: format!("paperwork validate {} --type post", path.display()),
+    }
+}
 
 // P-3/T5: the historical `SEQ_RE` tail-scan prefilter and the ops-side
 // `LEGACY_HEADER_RE` twin were deleted here. `header_seq` (the parse-side
@@ -157,6 +170,19 @@ pub fn thread_send(
             fix: "this file is in the v0.4 legacy format; v0.5 is not forward compatible - migrate it by hand per the CHANGELOG migration guide before writing".to_string(),
             example: "see CHANGELOG.md, [0.5.0] 'Migration guide (manual)', step 1 (post)".to_string(),
         });
+    }
+
+    // Fence-balance precheck (D2): appending into a file whose last code
+    // fence is still open would silently swallow the new message into the
+    // fence body (and a later edit rewrite would erase it). Fast-fail
+    // before any write; empty files are exempt (first write creates the
+    // whole structure).
+    if !file_empty {
+        let issues = unclosed_fence_issues_locked(&file, path)?;
+        if !issues.is_empty() {
+            file.unlock().ok();
+            return Err(fence_balance_error(issues, path));
+        }
     }
 
     let new_seq = last_seq
@@ -336,6 +362,16 @@ pub fn thread_edit(path: &Path, seq: u64, sender: &str, new_body: &str) -> Resul
             String::new(),
         )
     })?;
+
+    // Fence-balance precheck (D2): editing a file whose last code fence is
+    // still open would rewrite the thread without the fence-swallowed tail
+    // (silent data loss). Fast-fail before any mutation; same envelope as
+    // the send path and the `validate` fence check.
+    let fence_issues = validate_markdown(&content);
+    if !fence_issues.is_empty() {
+        file.unlock().ok();
+        return Err(fence_balance_error(fence_issues, path));
+    }
 
     let mut messages = parse_messages(&content)?;
 

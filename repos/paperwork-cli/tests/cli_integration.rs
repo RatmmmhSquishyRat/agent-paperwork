@@ -212,6 +212,53 @@ fn profile_create_scope_glob_injection_refused_zero_write() {
 }
 
 #[test]
+fn post_send_and_edit_refuse_unclosed_fence_thread() {
+    // D2: a thread whose last code fence is unclosed swallows appended
+    // content — send must fast-fail with a format envelope (was: exit 0
+    // silent message loss) and edit must fast-fail (was: exit 0 tail
+    // erasure). Zero write in both cases.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.post.md");
+    let broken = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nbody\n";
+    std::fs::write(&path, broken).unwrap();
+
+    cmd()
+        .args([
+            "post",
+            "send",
+            path.to_str().unwrap(),
+            "--author",
+            "bob",
+            "--message",
+            "second",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error format:"))
+        .stderr(predicate::str::contains("unclosed code fence"));
+
+    cmd()
+        .args([
+            "post",
+            "edit",
+            path.to_str().unwrap(),
+            "--author",
+            "alice",
+            "--seq",
+            "1",
+            "--message",
+            "corrected",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("error format:"))
+        .stderr(predicate::str::contains("unclosed code fence"));
+
+    // zero write: the file content is byte-for-byte unchanged
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+}
+
+#[test]
 fn profile_edit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("edit.md");

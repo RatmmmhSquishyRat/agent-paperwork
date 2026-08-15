@@ -845,3 +845,65 @@ fn edit_profile_scope_globs_reject_newline_injection() {
     let p = profile::show_profile(&path).expect("read");
     assert_eq!(p.scope_read, vec!["src/**"]);
 }
+
+// ============================================================================
+// D2: fence-balance precheck on the thread write paths. An unclosed code
+// fence swallows appended content — send must fast-fail (no silent message
+// loss) and edit must fast-fail (no tail erasure).
+// ============================================================================
+
+/// A thread whose last message body fence was never closed (the audit D2
+/// shape, hand-written to disk).
+fn unclosed_fence_thread() -> String {
+    "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nbody with unclosed fence\n".to_string()
+}
+
+#[test]
+fn thread_send_refuses_unclosed_fence_thread() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("t.post.md");
+    fs::write(&path, unclosed_fence_thread()).expect("write");
+    let before = fs::read_to_string(&path).expect("read");
+
+    // Negative: the send fast-fails with a format-category envelope.
+    let err = thread::thread_send(&path, "bob", "second", Some(&meta("t")))
+        .expect_err("send into an unclosed-fence thread must be refused");
+    assert_eq!(err.category(), "format");
+    assert!(err.to_string().contains("unclosed code fence"));
+
+    // Zero write: the file content is byte-for-byte unchanged.
+    assert_eq!(fs::read_to_string(&path).expect("read"), before);
+
+    // Positive: once the fence is closed by hand, the send succeeds.
+    fs::write(&path, format!("{}```\n", before)).expect("close fence");
+    let seq = thread::thread_send(&path, "bob", "second", Some(&meta("t")))
+        .expect("send after closing the fence");
+    assert_eq!(seq, 2);
+}
+
+#[test]
+fn thread_edit_refuses_unclosed_fence_thread() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("t.post.md");
+    // The unclosed fence swallows everything after it, so the only message
+    // the parser sees is #1 — editing it must still refuse on fence
+    // balance BEFORE rewriting (a rewrite would erase the swallowed tail).
+    fs::write(&path, unclosed_fence_thread()).expect("write");
+    let before = fs::read_to_string(&path).expect("read");
+
+    let err = thread::thread_edit(&path, 1, "alice", "corrected")
+        .expect_err("edit of an unclosed-fence thread must be refused");
+    assert_eq!(err.category(), "format");
+    assert!(err.to_string().contains("unclosed code fence"));
+
+    // Zero write: the file content is byte-for-byte unchanged.
+    assert_eq!(fs::read_to_string(&path).expect("read"), before);
+
+    // Positive: after closing the fence the same edit succeeds and the
+    // previously-swallowed tail survives the rewrite.
+    let closed = "# t\n\n## #1 alice (2026-01-15T10:30:00Z)\n\n```md\nbody\n```\n";
+    fs::write(&path, closed).expect("close fence");
+    thread::thread_edit(&path, 1, "alice", "corrected").expect("edit after closing the fence");
+    let after = fs::read_to_string(&path).expect("read");
+    assert!(after.contains("corrected"));
+}
