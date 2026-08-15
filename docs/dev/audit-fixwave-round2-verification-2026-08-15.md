@@ -129,3 +129,14 @@ category 维持 io、exit code 维持 1、信封结构未变——「只增不�
 1. **唯一阻塞项**：error.rs L11 intra-doc link 指向私项，docs gate 线下复现 + 线上三平台同失败。修复面极小（文档注释一行：链接改反引号代码形式或移除链接），不改任何行为面，预计修复后 test×3 转绿、smoke 恢复执行。
 2. **过程建议**（登记不改码）：修复波终局门禁清单应与 ci.yml job/step 对齐（test/clippy/fmt/**docs gate** 四项缺一不可）；与此前任务 #39 CI 内嵌脚本教训同类，建议并入 workflow-and-todo 验证门禁条目。
 3. 其余五大项（修复项实测、冻结面、文档面、卫生、版本纪律）全部 PASS，451 全绿独立复现——修复波主体工作质量成立，仅差 docs gate 单点闭环。
+
+---
+
+## 闭合注记（2026-08-15 追加，任务 #47 收口轮；append-only，正文不回改）
+
+- **唯一阻塞项已闭合**：error.rs L11 公有文档指向 pub(crate) 私项的 intra-doc link 已由提交 **86776db** 修复（改为反引号代码形式纯文本表述，语义不变），并随 **fe1899c** 登记（执行日志第七节）。
+- **修复后四门禁实测全绿**（FR-2 四件套）：test 451 全绿 / clippy -D warnings 零警告 / fmt --check 通过 / `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` exit 0 零警告。
+- **线上 CI 全绿**：run **31884670287**（HEAD fe1899c）7 个 job 全 success（fmt + test×ubuntu/macos/windows + smoke×3，含独立 Docs gate；影响面评审 §6 逐 job 实测取证在案）。
+- **放行改判：本修复波复验通过（原「不放行」结论随阻塞项闭合改判为放行）**。闭环链登记：台账第十七节（86776db 销账 + FR-2 联动）；防复发规则 FR-2（终局门禁四件套）已固化于执行日志第七节并并入 workflow-and-todo §5.4 门禁清单。
+
+（闭合注记完。追加：任务 #47 执行 agent，2026-08-15。）

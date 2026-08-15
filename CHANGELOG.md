@@ -65,6 +65,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - Non-UTF-8 `--stdin` input now surfaces as `error validation:` (`stdin is not valid UTF-8`, fix pointing at re-encoding or `--message`) instead of a generic io envelope whose fix hint mentioned file permissions; exit code stays 1. The envelope STRUCTURAL surface (status token, command id, field names, `code` / `exit_code`) remains pure ASCII; user-data values may carry legal UTF-8.
 
+### Changed — CLI (audit fixwave round2, R2-01)
+
+- File-read channels now point their `fix:` hint at encoding when a managed file fails UTF-8 decoding (`InvalidData`: binary or UTF-16 content). Twelve sites share the new wording (verbatim: `the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)`, shared constant `FILE_NOT_UTF8_FIX`): core read paths (post read/summary/edit content read, fence/legacy scans, lock read-modify-write, contacts/profile/manifest/brief reads) plus the CLI's foreign-thread precheck and `validate`. Previously these surfaced a generic io envelope whose fix hint mentioned permissions/readability/integrity. Category stays `io`, exit code stays 1, envelope structure unchanged; all other io failures keep their previous fix wording. This is the file-channel analogue of the stdin-channel D6 entry above; the category asymmetry (stdin=validation vs file=io) is a deliberate dual ruling, pinned in the cli-grammar-v0.6 spec §5 item 7.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed (Breaking) — Format Renewal

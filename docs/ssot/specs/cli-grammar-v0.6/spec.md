@@ -242,6 +242,7 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 4. **纯 ASCII 输出契约（口径收窄，任务 #34 文档轮修订；行为面零变更）**：信封结构面（status 行 / category / `fix:` / `example:` 字段）全部 stdout/stderr 字节保持 ASCII，本版不变，`ascii_output_contract_guard` 级别集成测试防线保留；全量字节流恒为合法 UTF-8，消费端须按 UTF-8 解码；已知 locale 依赖面：io 类信封的 `message` 字段可内嵌 OS 本地化文本（字节为合法 UTF-8，依据 docs/dev/io-encoding-rootcause-2026-08-15.md §6 钉住结论；是否进一步代码硬化去本地化文本由修复波评估，审计建议不做）。
 5. **VALUE_TAKING_FLAGS 对应表口径（2026-08-15 owner 裁决配套声明）**：写侧 `--reply-to`/`--mention` 撤销后，main.rs `VALUE_TAKING_FLAGS` 常量中该两项**保留**（post read 侧仍是带值 flag，usage 路径 `--json` 探针的值跳过逻辑依赖其在列）；常量其余项不变，计数口径（audit-grammar-matrix §6）随任务 #36 实施重盘。
 6. **advisory 信封字段形态（2026-08-15 owner 裁决新增）**：contacts add/update 成功（exit 0）且 destination advisory 校验触发时，ok 信封字段区增补 `advisory: <单行提示>`（Default 档与 `--json` 档同名 key；仅触发时出现；文案模板纯 ASCII，destination 原文插值回显，整行 ASCII 仅当路径为 ASCII——Ray S-1 口径收窄；字段契约全文见 §3.6「destination advisory 校验契约」）。
+7. **编码失败 category 不对称对照记录（2026-08-15 审计修复波 round2 三维评审 Evan S-1 注记）**：非 UTF-8 输入的双通道处置为**有意的双重裁决而非缺陷**——stdin 通道（`--stdin`）解码失败落 **validation** 信封（D6 裁决，`stdin is not valid UTF-8`）；文件通道解码失败（`InvalidData`）落 **io** 信封（R2-01 裁决，fix 指向编码，逐字 `the file is not valid UTF-8; check that the file is UTF-8 encoded (binary and UTF-16 files are not supported)`，常量 `FILE_NOT_UTF8_FIX`）；两通道 exit 均 1，信封结构不变。本不对称经双重裁决钉住（D6↔R2-01 互引），**未来任何「一致性重构」不得误平该差异**，如需统一须另行裁决；行为锚：cli_integration `utf16_file_read_fast_fails_with_encoding_pointing_fix`（io 面）与既有 stdin D6 测试（validation 面）。
 
 ---
 

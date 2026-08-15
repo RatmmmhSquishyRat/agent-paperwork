@@ -203,7 +203,7 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 
 ## 8. 本轮增量测试计划（contacts CRUD additive 轮，2026-08-09）
 
-- 基线：cli-grammar-v0.6 分支（worktree agent-paperwork-wt-v06grammar）的 v0.6 实施完成态；本轮断言对象为 spec §2 本轮新增行、§3.5/§3.6/§3.9 契约与 bdd S-BRIEF-07~09、S-CONTACTS-06~11、§12 锁场景。
+- 基线：cli-grammar-v0.6 分支（worktree agent-paperwork-wt-v06grammar）的 v0.6 实施完成态；本轮断言对象为 spec §2 本轮新增行、§3.5/§3.6/§3.9 契约与 bdd S-BRIEF-07~09、S-CONTACTS-06~11、§12 锁场景。（**分支已合并删除标注，2026-08-15 任务 #47 / Evan S-2**：cli-grammar-v0.6 分支已于 2026-08-15 删除（本地 + origin，INV-05），实施成果已全量合入 master；本句为历史基线叙述，勿按分支名 checkout。）
 - 原则：**新增行为用新用例钉住，既有行为用既有用例冻结回归**；§3 输出协议保留清单与 §5 ops_tests 零改动防线对本轮继续有效。
 
 ### 8.1 core 独立测试文件：`repos/paperwork-core/tests/ops_contacts_crud_tests.rs`（新建）

@@ -130,3 +130,19 @@ B-8 语义裁定注记（不改行为，仅钉住）：
 - 教训登记：修复波终局门禁遗漏 docs gate 导致本地全绿但线上 CI 红，复验轮拦截后紧急修复；后续批次引用本节 FR-2 即可。
 
 （修复轮二登记完。追加：任务 #46 阻塞闭环执行 agent，2026-08-15。修复提交 86776db，本节随 docs 登记提交入库。）
+
+---
+
+## 八、收口轮更正与补记（2026-08-15 追加，任务 #47 三维评审发现闭环；append-only，未改动第一至七节）
+
+### S2-02 提交链引用更正（Adam 重要-2）
+
+- 本日志第三节 F3 表 S2-02 行「勾选任务 #36 裁决批（提交链 9821933→f94b65f，444 全绿承载）」表述有误，更正为：任务 #36 裁决批实施链为**六提交 9821933/14f3b57/77f19e2/6a36639/72c85ac/b9b059c**（链端 b9b059c，台账第十四节 SSOT 记录在案，审计 S2-02 出处 B 原文亦为「9821933..b9b059c」）。
+- f94b65f 为任务 #52 Plan-C 回填批提交（commit message "fix: backport residual Ultra Review increments (Plan-C, wip …)"），其 ci.yml smoke 修正归属在 fix-ledger CI-F1 与 ci-failure-diagnosis 中均已明确记为「修复者 = 任务 #52 回填批，与裁决批无因果关联」。
+- 同步更正落点：spec README 勾选项（就地更正）、workflow-and-todo §5.4（追加注记）、台账第十七节勘误登记。
+
+### 三维评审 9 项发现处置指针
+
+- 9 项发现（Adam 重要-1/重要-2/低-3/低-4、Kevin W-1/S-1/S-2、Evan S-1/S-2/S-3）处置与销账详见台账第十七节与本轮提交；B-3 以新测试钉住闭合（cli_integration `emoji_and_combining_chars_roundtrip_without_normalization`，基线 451→452），B-4/B-7 登记为开放盲区项（LED-24/25）；复验报告文末已追加闭合注记（放行改判）。
+
+（第八节完。追加：任务 #47 执行 agent，2026-08-15。）

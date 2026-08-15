@@ -156,9 +156,14 @@
 
 ### 5.3 测试基线口径刷新
 
-- §一 6.验证与 §九 终局门禁中「本轮基线 419」为任务 #30 时点口径；任务 #45 F2 后现行基线为 **451**（分布：cli doc 7 + cli char_tests 33 + cli_integration 154 + ivy_gap 16 + t6_cli 4 + core unit 103 + core char_tests 12 + guard_tests 33 + ops_contacts_crud 18 + ops_tests 71 + 0，以 `cargo test --workspace --locked` 实测为准）。
+- §一 6.验证与 §九 终局门禁中「本轮基线 419」为任务 #30 时点口径；任务 #45 F2 后现行基线为 **451**（分布：cli doc 7 + cli char_tests 33 + cli_integration 154 + ivy_gap 16 + t6_cli 4 + core unit 103 + core char_tests 12 + guard_tests 33 + ops_contacts_crud 18 + ops_tests 71 + 0，以 `cargo test --workspace --locked` 实测为准）。（基线再刷新：任务 #47 收口轮后为 **452**，cli_integration 154→155，B-3 unicode roundtrip 新测试。）
 
-（第五节完。追加：任务 #45 执行 agent，2026-08-15。未改动第一至四节。）
+### 5.4 勘误与门禁补强（2026-08-15 追加，任务 #47 收口轮，append-only）
+
+- **§5.1 提交链更正（Adam 重要-2）**：5.1 中 LED-09~12 行的「实施链 9821933/f94b65f 等」表述有误——任务 #36 裁决批真实链为六提交 9821933/14f3b57/77f19e2/6a36639/72c85ac/**b9b059c**（链端 b9b059c，台账第十四节 SSOT）；f94b65f 为任务 #52 Plan-C 回填批提交，其 ci.yml smoke 修正归属 fix-ledger CI-F1 已有定论，与裁决批无因果关联。执行日志同口径更正见其第八节。
+- **FR-2 并入门禁清单（Adam 低-4）**：§一 6.验证与 §九 终局门禁的门禁清单自本节起刷新为 **FR-2 四件套**（权威定义：audit-fixwave-round2-execution-log 第七节）：① `cargo test --workspace --locked`；② `cargo clippy --workspace --all-targets --locked -- -D warnings`；③ `cargo fmt --all --check`；④ `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace`（docs gate，与 ci.yml Docs step 对齐；复跑时须注意增量缓存伪绿，必要时 `cargo clean -p` 强制重文档化）。四项全绿方可放行推送；缺任一项视为门禁不成立。
+
+（第五节完。追加：任务 #45 执行 agent，2026-08-15；5.4 追加：任务 #47 执行 agent，2026-08-15。未改动第一至四节。）
 
 ---
 

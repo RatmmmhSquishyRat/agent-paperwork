@@ -104,7 +104,7 @@
 ## 本轮增量实施步骤（contacts CRUD + 写路径锁统一 + brief 选择性详情；v0.7 feedback 轮，2026-08-09）
 
 - **前置门槛**：本目录 spec（§2 本轮新增行 / §3.5 / §3.6 / §3.9 / §7 第 5 条 / §9）、bdd（S-BRIEF-07~09、S-CONTACTS-06~11、§12、S-SHORT-02 更新）、tdd（§8）经对抗评审闭合后方可开始步骤 R1（实现流程原则.md，口径同文首前置门槛）。
-- **基线**：cli-grammar-v0.6 分支（worktree agent-paperwork-wt-v06grammar）的 v0.6 实施完成态；R1~R6 均在该分支执行；**继续禁止触碰主工作区 repos/**（口径同上全局门禁）。
+- **基线**：cli-grammar-v0.6 分支（worktree agent-paperwork-wt-v06grammar）的 v0.6 实施完成态；R1~R6 均在该分支执行；**继续禁止触碰主工作区 repos/**（口径同上全局门禁）。（**分支已合并删除标注，2026-08-15 任务 #47 / Evan S-2**：cli-grammar-v0.6 分支已于 2026-08-15 删除（本地 + origin，INV-05，--merged 核验零独有内容），实施成果已全量合入 master；本句为历史基线叙述，勿按分支名 checkout。）
 - **交付边界**：本轮同样**不含**版本 bump、CHANGELOG 发布段、tag、publish 任何步骤（spec §7 第 4/5 条，v0.7_feedbacks §四）。
 
 ### 步骤 R1 core 锁 helper（锁模板抽取）

@@ -62,5 +62,5 @@
 - [x] 基线合并（cli-ux-v0.5 + format-v2，编排层执行，impl_plan 步骤 (0)；随 cli-grammar-v0.6 分支三方合并入 master @ 3829fd9）
 - [x] 按 impl_plan 步骤 (1) 至 (7) 实现（含 v0.7 轮 R1~R6 增量；实现已合入 master @ 3829fd9，288 测试基线；验证与三维评审完成，任务 #19/#20，2026-08-15 按既成事实勾选）
 - [x] owner 四项裁决落盘与 spec 增量修订（2026-08-15，任务 #35：裁决记录 docs/dev/owner-rulings-2026-08-15.md；spec/bdd/tdd/impl_plan 修订；台账第十三节与 backlog 第九节联动；撤销写侧 --reply-to/--mention + contacts advisory 契约 + 读侧过滤器保留声明）
-- [x] owner 裁决批实施（任务 #36：impl_plan「2026-08-15 owner 裁决实施批次」O1~O5；含 SKILL.md/README 示例差异同步与黄金快照重冻，tdd §9）（已完成：2026-08-15，提交链 9821933（O1 实施）→f94b65f（ci.yml 内嵌 smoke 回填修正，run 31879040813 全绿实证）；验证承载 444 全绿 + ci.yml 内嵌 smoke 双档 PASS；勾选销账：任务 #45 F3 / S2-02）
+- [x] owner 裁决批实施（任务 #36：impl_plan「2026-08-15 owner 裁决实施批次」O1~O5；含 SKILL.md/README 示例差异同步与黄金快照重冻，tdd §9）（已完成：2026-08-15，提交链 9821933/14f3b57/77f19e2/6a36639/72c85ac/b9b059c（任务 #36 裁决批六提交，链端 b9b059c，台账第十四节 SSOT）；ci.yml 内嵌 smoke 修正属任务 #52 回填批 f94b65f（run 31879040813 全绿实证，归属 fix-ledger CI-F1 已有定论，与裁决批无因果关联）；验证承载 444 全绿 + ci.yml 内嵌 smoke 双档 PASS；勾选销账：任务 #45 F3 / S2-02；链引用勘误：任务 #47 / Adam 重要-2）
 - [ ] 发布（不在本轮：owner 于功能稳定后另行裁定，owner 裁定延后，v0.6_feedbacks §一(3)）
