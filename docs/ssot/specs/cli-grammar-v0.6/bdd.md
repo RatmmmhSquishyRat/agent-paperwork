@@ -8,6 +8,7 @@
   - `docs/ssot/adr/feedbacks/v0.7_feedbacks.md`（本轮 owner 指令：contacts CRUD + 锁统一 + 渐进阅读；本轮新增场景 S-BRIEF-07~09、S-CONTACTS-06~11、§12 锁行为场景的依据）
   - `docs/researches/cli-grammar-v06-reassessment-2026-08-09.md`（混淆面矩阵与错误等级标注）
   - `docs/dev/adr-v1.md`（ADR-011）、`docs/ssot/adr/feedbacks/v0_feedbacks.md`
+  - `docs/dev/owner-rulings-2026-08-15.md`（2026-08-15 owner 四项裁决：写侧糖衣 flag 撤销与读侧过滤器保留；S-SEND-04/20 改写、S-SEND-22/23、S-EDIT-10、S-CONTACTS-16/17 与 S-CONTACTS-14 追加、S-SHORT-02 枚举收窄的依据）
 - 契约基准：本目录 `spec.md`（签名、信封、退出码语义均以 spec 为准）；信封结构沿用 v0.5 spec §4（继承冻结）
 
 约定：`<exit N>` 表示进程退出码；「信封」指 v0.5 spec §4 定义的 envelope（v0.6 零变更）；示例路径均为相对示例，行为与 cwd 无关（无状态）。v0.5 bdd 中未列于本文的场景（并发 seq 无间隙、--json/--plain/-q 三档、--help/-V 穿透、别名、ensure_suffix 三级解析）行为冻结，按 v0.5 bdd 对应场景回归，仅命令示例换 v0.6 文法。**编号约定（rework 补录，Nora ISSUE-m5）**：本文场景编号为 v0.6 独立编号，与 v0.5 bdd 存在同名异义撞号（如 S-SEND-09/10/12、S-EDIT-02/03 等）；凡引用 v0.5 场景一律带 v0.5 前缀；跨文档引用未带前缀的 S-xxx 一律指本文（v0.6）编号。
@@ -34,11 +35,11 @@
 - **When** 执行 `paperwork post send quick-chat --author alice --message "Hey"`
 - **Then** exit 0；`quick-chat.post.md` 被创建且首条消息即该消息（#1，ensure_suffix 第(3)级落点，行为沿用 v0.5）。
 
-### S-SEND-04 reply-to 隐式 mention 显式化（冻结回归）
+### S-SEND-04 正文 @#N reply 语义的 implicit-mention 显式化（2026-08-15 owner 裁决改写：原依赖写侧 `--reply-to` 糖衣 flag，改为正文直书形态）
 
 - **Given** 线程中 #2 为 alice 所发
-- **When** 执行 `paperwork post send standup.post.md --author bob --message "Sure" --reply-to 2`
-- **Then** exit 0；字段区含 `implicit-mention: alice`（单数字段、仅触发时出现、三种不触发边界均沿用 v0.5 bdd S-SEND-10b/S-SEND-11）；`--json` 模式含同名 key。
+- **When** 执行 `paperwork post send standup.post.md --author bob --message "@#2 Sure"`（reply 语义由 agent 正文直书 `@#N` token 表达，spec §3.1 撤销声明）
+- **Then** exit 0；字段区含 `implicit-mention: alice`（单数字段、仅触发时出现、三种不触发边界均沿用 v0.5 bdd S-SEND-10b/S-SEND-11；derive 机制自正文 `@#N` token 派生，冻结不变）；`--json` 模式含同名 key。
 
 ### S-SEND-05 缺 --author（usage）
 
@@ -121,17 +122,35 @@
 - **When** 执行 `paperwork post send --author alice --message "hi"`（v0.6 文法集内缺唯一位置参数）
 - **Then** exit 2；`error usage:`；example 为 v0.6 完整形态；无文件写入。
 
-### S-SEND-20 --reply-to/--mention 糖衣 flag token 注入（基线勘误后新增，format-v2 D2/OQ-4 行为补齐）
+### S-SEND-20 正文 @#N/@name 语义往返（2026-08-15 owner 裁决改写：原为写侧糖衣 flag token 注入场景，改为正文直书 + 读侧 derive 往返）
 
 - **Given** `newtopic.post.md` 不存在
-- **When** 首次执行 `paperwork post send newtopic.post.md --author alice --message "first"`，再执行 `paperwork post send newtopic.post.md --author bob --message "agreed" --reply-to 1 --mention carol`
-- **Then** 两次均 exit 0；第二条消息落盘正文首行为 `@#1 @carol`，空行后接原正文（引用状态仅存于正文文本，D2）；`post read --reply-to 1` 与 `--mention carol` 过滤均命中第二条（读取时派生）；preamble 无 `- participants:` 行（D1）；全文件无 `--to`/`--participants` 属性行残留。
+- **When** 首次执行 `paperwork post send newtopic.post.md --author alice --message "first"`，再执行 `paperwork post send newtopic.post.md --author bob --message "@#1 @carol agreed"`（reply/mention 语义由 agent 正文直书，spec §3.1）
+- **Then** 两次均 exit 0；第二条消息落盘正文逐字含 `@#1 @carol`（正文即语义载体，无任何注入变换）；`post read --reply-to 1` 与 `--mention carol` 过滤均命中第二条（读取时 derive，机制不变，读侧过滤器保留声明 spec §3.3/§10）；preamble 无 `- participants:` 行（D1）；全文件无 `--to`/`--participants` 属性行残留。
+- **撤销声明**：写侧糖衣 flag `--reply-to`/`--mention` 已撤销，传入落 usage exit 2（见 S-SEND-22/S-SEND-23/S-EDIT-10；backlog B-01/U-04 问题面消解）。
 
 ### S-SEND-21 首次 send 建线程 preamble 仅 H1 标题（基线勘误后新增，format-v2 D1/OQ-1 行为补齐）
 
 - **Given** `daily.post.md` 不存在
 - **When** 执行 `paperwork post send daily.post.md --author alice --message "hi" --title "Daily Standup"`
 - **Then** exit 0；落盘文件以 `# Daily Standup` H1 行起始，其后直接是 `## #1 alice (...)` 消息头（无占位创建消息、无属性行）；缺 `--title` 时标题取路径剥 `.post.md` 后缀（spec §3.1 糖衣表）。
+
+### S-SEND-22 写侧已撤销 flag `--reply-to` 落入 usage（2026-08-15 owner 裁决新增）
+
+- **Given** 存在线程文件
+- **When** 执行 `paperwork post send standup.post.md --author bob --message "Sure" --reply-to 2`
+- **Then** exit 2；`error usage:`（`--reply-to` 在 send 中不存在，按未知 flag 路径）；fix/example 引导 reply 语义在正文直书 `@#2`（如 `paperwork post send standup.post.md --author bob --message "@#2 Sure"`，静态规范示例口径，spec §3.1）；无文件写入。
+
+### S-SEND-23 写侧已撤销 flag `--mention` 落入 usage（2026-08-15 owner 裁决新增）
+
+- **Given** 存在线程文件
+- **When** 执行 `paperwork post send standup.post.md --author alice --message "hi" --mention carol`
+- **Then** exit 2；`error usage:`；fix/example 引导 mention 语义在正文直书 `@carol`；无文件写入。
+
+### S-EDIT-10 写命令传入已撤销 flag（usage，2026-08-15 owner 裁决新增；「写命令」外延防线）
+
+- **When** 执行 `paperwork post edit standup.post.md --author bob --seq 3 --message "x" --reply-to 2`（edit 本无该 flag，撤销口径按写命令外延声明，spec §2）
+- **Then** exit 2；`error usage:`（未知 flag）；example 为 edit 完整必填形态规范示例；无文件写入。
 
 ## 2. post edit
 
@@ -401,7 +420,7 @@
 - **Given** contacts 文件含条目 alice；`carol` 文件不存在（忘写 `.profile.md` 后缀的路径笔误形态）
 - **When** 执行 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol`
 - **Then** exit 0；条目落为 `[carol](carol)`（label 回退文件名主干）；`updated` 字段回显 `alice.profile.md -> carol`（原值）；下一轮 `contacts read` 该条目显示 `(unreadable)` 类容错形态。
-- **agent 自救指引**：fix/example 与文档面引导写入前先 `paperwork contacts read <PATH>` 核对既有条目、或 `paperwork validate carol.profile.md` 确认目标 profile 合法；候选增强「写前 destination 存在性校验/回显」登记 backlog B-02，本轮不实现。
+- **agent 自救指引**：fix/example 与文档面引导写入前先 `paperwork contacts read <PATH>` 核对既有条目、或 `paperwork validate carol.profile.md` 确认目标 profile 合法；候选增强「写前 destination 存在性校验/回显」登记 backlog B-02，~~本轮不实现~~，2026-08-15 owner 裁决落地为非阻塞 advisory 校验（本场景 exit 0 静默写入语义不变，其上叠加 `advisory` 信封字段，见 S-CONTACTS-16/17；spec §3.6「destination advisory 校验契约」）。
 
 ### S-CONTACTS-15 add/update 空键护栏（评审轮新增，F1；Kim M-1 + QA BUG-1）
 
@@ -409,6 +428,20 @@
 - **When** 分别执行 `paperwork contacts add team.contacts.md --profile ""`、`paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile ""`（或全空白值）
 - **Then** 两者均 exit 1；stderr 首行 `error validation:`；message 逐字分别为 `profile path (--profile) is empty` 与 `new profile path (--new-profile) is empty`；fix 逐字分别为 `provide a non-empty --profile value` 与 `provide a non-empty --new-profile value`；example 为各动词规范示例（S-CONTACTS-10 同源逐字形态，纯 ASCII，镜像 post send `--message`/`--author` 空值判定先例）；两次均无文件写入；护栏先于文件存在性判定（目标文件不存在亦落 validation）；库直调（core `contacts_add`/`contacts_update`）同受护栏。
 - **行为变更登记**：护栏前 add 空键写入不可解析 bullet `- []()`（下次解析静默消失，validate 判结构损坏，属静默数据损坏）；update 空 `--new-profile` 把既有条目替换成该退化 bullet。护栏后既有条目不可经空键破坏；非空但不可读的路径仍依 S-CONTACTS-14 / add 静默回退判例（护栏仅针对「无键」，不改变「不可读路径」行为面）。
+
+### S-CONTACTS-16 add destination advisory 非阻塞校验（2026-08-15 owner 裁决新增；spec §3.6 advisory 契约）
+
+- **Given** contacts 文件 `team.contacts.md` 存在；`ghost.profile.md` 不存在
+- **When** 执行 `paperwork contacts add team.contacts.md --profile ghost.profile.md`
+- **Then** exit 0（destination 问题不阻塞写入，永不因 destination 问题 exit≠0）；条目照常落盘，label 依 R11 回退文件名主干（`[ghost](ghost.profile.md)`）；ok 信封字段区含 `advisory`（值提示 destination 不存在，建议文案 `destination 'ghost.profile.md' does not exist`，纯 ASCII，实施定稿以任务 #36 重冻为准）；`--json` 模式含同名 key `advisory`（只增不改协议）。
+- **And 不触发形态**：destination 为存在且合法的 profile 文件时（如 S-CONTACTS-02 的 alice.profile.md），信封**不含** `advisory` 字段（仅触发时出现，避免噪音）；S-CONTACTS-02 既有断言面冻结不变。
+- **And 格式非法触发形态**：destination 存在但非合法 profile（内容损坏）时仍 exit 0 照常写入，`advisory` 提示格式非法（建议文案 `destination '<P>' is not a valid profile file`）。
+
+### S-CONTACTS-17 update destination advisory 触发形态（2026-08-15 owner 裁决新增；与 S-CONTACTS-14 叠加）
+
+- **Given** contacts 文件含条目 [alice]；`carol` 文件不存在（忘后缀笔误形态，同 S-CONTACTS-14 Given）
+- **When** 执行 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol`
+- **Then** exit 0；行为面与 S-CONTACTS-14 逐条一致（条目落为 `[carol](carol)`、`updated` 回显 `alice.profile.md -> carol`）；叠加断言：ok 信封含 `advisory` 字段（destination 不存在提示）；`--json` 模式同时含 `updated` 与 `advisory` 两 key；其余条目字节不变。
 
 ## 7. validate（冻结回归，示例换 v0.6 文法）
 
@@ -474,7 +507,7 @@ ensure_suffix 三级解析行为逐条沿用 v0.5 bdd S-PATH-01~08（原路径�
 ### S-SHORT-02 命名政策白名单断言（冻结，SOTA C6；本轮 additive 同步更新）
 
 - **When** 检查 `--help` 输出
-- **Then** 组集合精确等于 {profile,post,brief,contacts,validate}（隐藏别名不出现）；contacts 组动词集合精确等于 {create,add,remove,update,read}（本轮 additive：remove/update 新增，既有三动词不变；**断言面落点（rework 补录，Daniel M-3）**：现状 cli_integration 组级动词断言仅 post 组存在（`post_group_help_lists_verbs` 先例），contacts 组动词集合断言为本轮**新建**，仿该先例体例并含反向断言（不出现清单外动词），`update` 已随本轮经 owner CRUD 指令授权扩容纳入 SOTA C6 白名单，v0.7_feedbacks §2.5）；全 CLI flag 名集合与 spec §4 全表一致；短形式集合精确等于 {-a, -m, -q}（rework 裁定 F3，本轮不变）；spec §4「其余全部 flag」行枚举的全量清单逐一断言无短形式：`--seq`、`--stdin`、`--title`、`--to`、`--from`、`--entry`、`--entry-title`、`--profile`、`--new-profile`、`--name`、`--model`、`--description`、`--owner`、`--note`、`--regex`、`--scope-read/--scope-write/--scope-owns`（--scope-* 三 flag）、`--full`、`--limit`、`--base-dir`、`--type`、`--json`、`--plain`，另含 post send/read 两侧 `--reply-to` 与 post read `--mention`（均无短形式；**总数不写死，以下枚举为准**（分项口径：spec §4 全表逐 flag 负向断言 + post 侧 `--reply-to`/`--mention` 补充项；任务 #34 勘误：原「共 26 项」计数口径含糊（枚举实为逐 flag 断言 + 2 项 post 侧补充 + 1 项总括表述），改为枚举口径）；基线勘误删除 `--participants`，其余与 spec §4 枚举逐字对齐并保留原清单 --name；本轮 additive 新增 `--new-profile` 一项；rework 修订：原「共 25 项」为 stale 计数，Mark M-3/Ryan m-1/Daniel m-1 定案后以本枚举为准；**断言面落点（Daniel M-3）**：现状仅 6 个一次性负向探针（`-s/-l/-n/-t/-e/-p`），26 项逐 flag 负向清单为本轮**新建/扩展**，非「追加」；后续短形式增删以本枚举为唯一对账口径，不再维护硬编码总数）（F3 收窄后本白名单断言重获完整防线意义）。
+- **Then** 组集合精确等于 {profile,post,brief,contacts,validate}（隐藏别名不出现）；contacts 组动词集合精确等于 {create,add,remove,update,read}（本轮 additive：remove/update 新增，既有三动词不变；**断言面落点（rework 补录，Daniel M-3）**：现状 cli_integration 组级动词断言仅 post 组存在（`post_group_help_lists_verbs` 先例），contacts 组动词集合断言为本轮**新建**，仿该先例体例并含反向断言（不出现清单外动词），`update` 已随本轮经 owner CRUD 指令授权扩容纳入 SOTA C6 白名单，v0.7_feedbacks §2.5）；全 CLI flag 名集合与 spec §4 全表一致；短形式集合精确等于 {-a, -m, -q}（rework 裁定 F3，本轮不变）；spec §4「其余全部 flag」行枚举的全量清单逐一断言无短形式：`--seq`、`--stdin`、`--title`、`--to`、`--from`、`--entry`、`--entry-title`、`--profile`、`--new-profile`、`--name`、`--model`、`--description`、`--owner`、`--note`、`--regex`、`--scope-read/--scope-write/--scope-owns`（--scope-* 三 flag）、`--full`、`--limit`、`--base-dir`、`--type`、`--json`、`--plain`，另含 post read `--reply-to` 与 post read `--mention`（均无短形式；**2026-08-15 owner 裁决后口径收窄：写侧 send `--reply-to`/`--mention` 已撤销，post 侧补充项仅剩 read 侧两项，send 侧探针移除**（原「post send/read 两侧 --reply-to」表述废止）；**总数不写死，以下枚举为准**（分项口径：spec §4 全表逐 flag 负向断言 + post read 侧 `--reply-to`/`--mention` 两项补充；任务 #34 勘误：原「共 26 项」计数口径含糊，改为枚举口径；2026-08-15 裁决后枚举净减两项，原 26 项口径作废，以现行枚举逐项断言为准）；基线勘误删除 `--participants`，其余与 spec §4 枚举逐字对齐并保留原清单 --name；本轮 additive 新增 `--new-profile` 一项；rework 修订：原「共 25 项」为 stale 计数，Mark M-3/Ryan m-1/Daniel m-1 定案后以本枚举为准；**断言面落点（Daniel M-3）**：现状仅 6 个一次性负向探针（`-s/-l/-n/-t/-e/-p`），逐 flag 负向清单为本轮**新建/扩展**，非「追加」；后续短形式增删以本枚举为唯一对账口径，不再维护硬编码总数）（F3 收窄后本白名单断言重获完整防线意义）。
 
 ## 12. 横切场景：写路径锁（本轮新增，spec §3.9）
 

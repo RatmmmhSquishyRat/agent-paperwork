@@ -50,7 +50,7 @@
   - **`allow_hyphen_values` 属性（rework 裁定 F4，硬性指令）**：send 与 edit 两处 `--message` 均设 `allow_hyphen_values = true`（否则 `-` 开头正文值被 clap 拒收，S-SEND-10 不成立）；**其余 flag 不设**：`--author` 复核结论为不需要（署名值为纯名字字符串，`-` 开头名字不在语料预期内，且设后会把误写的裸 flag 静默吞为署名值，反而削弱 S-SEND-11 教学防线）；`--seq`（u64 类型自防）、其余 flag 同理不设；
   - **example 字符串刷新为 v0.6 文法**：各 cmd 文件内全部 example（空正文、无正文、not-found、format 教学、validate 未知后缀分支等）逐处核对刷新；resolve_body 的 send/edit 示例区分机制沿用 v0.5（edit 错误给 edit 示例）；
   - **v0.5 混淆面教学条款拆除**：「若已给出正文请检查是否遗漏 NAME 槽位」提示与 `--` 边界教学文案删除（混淆面结构性消亡，spec §5 第 3 条）；裸 `-xxx` 残留的 usage fix 改为引导 `--message` 形态；
-  - 各子命令 after_help 示例换 v0.6 文法（design.md §2.1 文案为准；send/edit 不再需要 `--` 边界示例，改示范 `-` 开头 flag 值直传）；**after_help 教学要求（rework 裁定 F6，基线勘误后缩减，见 design §11）**：send after_help 需明示 `--title` 为建线程元数据载荷，仅首次写入生效，对既有线程静默忽略（行为登记，本轮不改运行时行为）；并注明 `--reply-to/--mention` 为糖衣 flag（值以 `@#N`/`@name` token 注入正文，D2/OQ-4）。原「`--to alice,bob` 收件人名单示范与三 flag 区分教学」随 `--to/--participants` 删除而废止。
+  - 各子命令 after_help 示例换 v0.6 文法（design.md §2.1 文案为准；send/edit 不再需要 `--` 边界示例，改示范 `-` 开头 flag 值直传）；**after_help 教学要求（rework 裁定 F6，基线勘误后缩减，见 design §11）**：send after_help 需明示 `--title` 为建线程元数据载荷，仅首次写入生效，对既有线程静默忽略（行为登记，本轮不改运行时行为）；并注明 `--reply-to/--mention` 为糖衣 flag（值以 `@#N`/`@name` token 注入正文，D2/OQ-4）。原「`--to alice,bob` 收件人名单示范与三 flag 区分教学」随 `--to/--participants` 删除而废止。（**2026-08-15 口径刷新**：本条 after_help 教学要求中的糖衣 flag 注记已随 owner 裁决废止，换正文直书教学，见文末「2026-08-15 owner 裁决实施批次」步骤 O1。）
 - **依赖**：步骤(1)（core example 与 cli example 文法约定须一致，以 spec §2 全表为准）。**验证**：cargo build + clippy 全绿（cli_integration 此步必然红，属门禁允许范围）。
 
 ## 步骤(3) main.rs usage 信封静态规范示例换 v0.6
@@ -151,3 +151,53 @@ R1(锁 helper) -> R2(contacts 三写路径) / R3(brief/profile 补锁) -> R4(CLI
 
 - R2 与 R3 分属不同文件，理论上可并行；单 impl agent 顺序执行按编号推进即可。
 - QA Review Book 由独立验证 agent 实测（口径同步骤(7)，不得由 impl agent 自评）：本轮新增面冒烟 = contacts remove/update 全路径、brief 选择性详情、多进程并发写不丢失、旧命令冻结回归。
+
+---
+
+## 2026-08-15 owner 裁决实施批次（O1~O5，供任务 #36 执行）
+
+- **前置门槛**：本目录 spec（§1.4/§2/§3.1/§3.3/§3.6/§4/§5/§7 第 6 条/§10）、bdd（S-SEND-04/20 改写、S-SEND-22/23、S-EDIT-10、S-CONTACTS-14 追加、S-CONTACTS-16/17、S-SHORT-02 收窄）、tdd（§9）已由任务 #35 落盘（2026-08-15）；裁决原文与解释口径见 docs/dev/owner-rulings-2026-08-15.md。
+- **基线**：master（v0.6 实现已在场，写侧糖衣 flag 与 contacts 静默面均为现行代码态）；O1~O5 直接在 master 工作区执行（历史「禁止触碰主工作区 repos/」约束属分支实施期口径，本批不适用）。
+- **交付边界**：本批同样不含版本 bump、CHANGELOG 发布段、tag、publish（spec §7 第 4/6 条）；提交与推送节奏由编排层统一安排。
+
+### 步骤 O1 写侧糖衣 flag 撤销（CLI 层）
+
+- **文件**：`repos/paperwork-cli/src/cmd/post.rs`（send 臂）、`repos/paperwork-cli/src/main.rs`（canonical_example/usage_fix 文案面）
+- **内容**：删除 send 的 `--reply-to`/`--mention` clap 定义与糖衣注入/mention 清洗/`--reply-to 0` 拒绝/implicit-mention 由 flag 派生等全部管道（传入后由 clap 未知 flag 路径自然落 usage exit 2）；implicit-mention 派生改为读取时/正文 token 驱动（derive 机制冻结，spec §3.1）；send after_help 中含糖衣 flag 的示例行删除，补正文直书 `@#N`/`@name` 教学；**VALUE_TAKING_FLAGS 中 `--reply-to`/`--mention` 两项保留**（post read 侧仍是带值 flag，spec §4/§5 第 5 条）；**读侧 read 的 `--mention`/`--reply-to` 过滤器一字不动**（读侧保留声明，spec §3.3）；usage 信封对该两 flag 的 fix/example 引导正文直书形态（bdd S-SEND-22/23 文案口径，实施定稿后回冻 bdd）。
+- **门禁**：cargo build + clippy 全绿（cli_integration 此步允许红，由 O3 恢复）。
+
+### 步骤 O2 contacts destination advisory 校验（CLI 层）
+
+- **文件**：`repos/paperwork-cli/src/cmd/contacts.rs`（如需 output.rs 配套）
+- **内容**：add/update 写入成功后对 destination（add `--profile` / update `--new-profile`）做三项只读探测（存在性 -> 可读性 -> profile parse 合法性），任一异常仍在 ok 信封增补 `advisory` 字段（字段名钉住，值文案建议形态见 spec §3.6，本步定稿后回冻 bdd/spec 文案）；Default 与 `--json` 档同名 key；不引入任何新 flag；空键护栏/锁行为/exit 码语义不动；新文案纯 ASCII。
+- **门禁**：同 O1。
+
+### 步骤 O3 测试落地（硬门禁）
+
+- **文件**：`repos/paperwork-cli/tests/cli_integration.rs`（如需 core 层配套测试另落独立文件，ops_tests.rs 延续字节级零改动，tdd §9.4）
+- **内容**：按 tdd §9.1 盘点改写既有用例；按 tdd §9.2 新增用例（S-SEND-22/23、S-EDIT-10、改写后 S-SEND-04/20、S-CONTACTS-16/17、白名单收窄、ASCII 延伸）；按 tdd §9.3 一次性重冻黄金快照（重冻 diff 在 review 中逐处点名）；read 侧过滤用例原样冻结回归。
+- **门禁**：`cargo test`（workspace 全量）+ clippy 全绿，后续步骤不得带红推进（本批主验证点）。
+
+### 步骤 O4 文档面同步（含 SKILL.md/README 差异点名项）
+
+- **文件**：仓库根 `SKILL.md`、根 `README.md`、`repos/paperwork-cli/README.md`
+- **内容**：SKILL.md 速查表中写侧糖衣 flag 示例（现行 L88 `paperwork post send standup --author bob --reply-to 1 --mention alice --message "On it"` 等）与相关说明句换正文直书形态；README 命令示例同步；**本步即任务 #35 点名的 SKILL.md/README 与 SSOT 差异同步点**（任务 #35 仅落 spec 不回改该面，差异由本步消除）；**不写 CHANGELOG 发布段**。
+- **依赖**：O3 全绿后执行。
+
+### 步骤 O5 QA Review Book（独立验证，非 impl agent 自评）
+
+- **文件**：`docs/reviews/v0.6-owner-rulings-review-{实施完成日期}.md`
+- **内容**：独立 agent 实测：撤销面（send/edit 传入该两 flag 落 usage exit 2 + 迁移教学文案）、正文 @语义往返（写入 -> read 过滤命中 -> implicit-mention 派生）、读侧过滤器冻结回归（--mention/--reply-to 过滤、无短形式）、advisory 面（触发/不触发/三形态 + JSON key + 永不 exit≠0）、黄金快照重冻 diff 核验、ASCII 契约抽测。
+- **依赖**：O4 后执行；不得由 impl agent 自评（MainAgent工作编排.md）。
+
+### 本批依赖图
+
+```
+O1(写侧撤销) / O2(advisory) -> O3(测试+重冻, 硬门禁) -> O4(文档同步) -> O5(QA)
+```
+
+### 自查遗留差异点名（任务 #35 自查登记，留给本批与后续治理同步）
+
+- **design.md 残留旧口径**：design.md L47（逐 tool 签名示意含 `[--reply-to N] [--mention a,b]`）与 L266（基线勘误记录中 format-v2 send 形态描述）为历史论证/基线记录文本，任务 #35 按 SSOT 冻结纪律不重写；其口径已被 spec §1.4/§2/§3.1/§10 的 2026-08-15 修订覆盖，冲突处以 spec 为准；是否顺带回改由本批 O4 或后续文档轮裁定。
+- **SKILL.md/README 差异**：见步骤 O4（任务 #35 不回改，由本批消除）。
+- **audit-grammar-matrix-2026-08-15.md §6 计数口径**：VALUE_TAKING_FLAGS 「25 项 = 23 长 flag + 2 短形式」与负向探针「26 项」口径随撤销变更（长 flag 23 -> 21、探针 26 -> 24，常量项数不变仍 25），重盘归本批 O3/O5；审计文档属历史记录，不追加注记，以 spec §4/§5 第 5 条口径为准。

@@ -388,3 +388,34 @@
 - 事实登记面不受影响：crates.io 0.5.0 为旧文法形态、仓库 master 为 v0.6 具名文法 + contacts CRUD、Cargo.toml 仍 0.5.0 未发布——以上事实陈述维持原样。
 
 （第十二节完。追加：owner 边界更正任务执行 agent；2026-08-15。检索口径：docs/ 范围 grep「发布轮」「bump」「wt-v05perfection」「快照分支」全量排查；docs/reviews/ 未发现「待 owner 裁定移除 worktree」类表述，按规则不追加注记。）
+
+---
+
+## 十三、owner 四项裁决闭合（任务 #35，2026-08-15，append-only，未改动第一至十二节）
+
+追加依据：owner 于 2026-08-15 对台账 LED-09/LED-10/LED-11/LED-12（backlog B-01/B-02/U-04/U-13）一次性下达四项裁决。裁决原文逐字保留于权威记录点 docs/dev/owner-rulings-2026-08-15.md（含编排层拟定的解释口径声明，供 owner 复核推翻）；spec 增量修订落 docs/ssot/specs/cli-grammar-v0.6/（spec/bdd/tdd/impl_plan/README 五份）；backlog 联动注记落 ux-open-items-backlog-2026-08-08.md 第九节。实施承载：任务 #36（impl_plan「2026-08-15 owner 裁决实施批次」O1~O5）。
+
+### LED-09（B-01，--reply-to 指向不存在 seq 静默跳过）— 状态刷新：已闭合（裁决=撤销写侧参数后问题消解）
+- 裁决：owner 裁决 1「reply, mention 等等语义都在 markdown 消息本身中负责表达, cli 部分不应该给出这种参数用法」——撤销 post send 写侧糖衣 flag `--reply-to`/`--mention`（传入落 usage exit 2），reply/mention 语义由 agent 正文直书 `@#N`/`@name` 表达；读侧 derive 机制不变。
+- 闭合口径：「指向不存在 seq 静默跳过」的问题面随 flag 撤销**结构性消解**（正文直书 token 不存在「指向不存在 seq」的参数面）；B-01 候选方向（ok 信封 reply-dropped 字段）一并废弃；与 KL-4「ignored 字段同批评估」的挂接同步解除。
+- 去向：spec §3.1/§10；bdd S-SEND-20~23；裁决记录 §三。
+
+### LED-10（B-02，contacts destination 写前校验候选）— 状态刷新：已闭合（裁决=非阻塞 advisory 校验）
+- 裁决：owner 裁决 2「contact 可以加入路径和格式上面的 validation, 但是不阻塞 agent 编辑即可…」——contacts add/update 增加非阻塞 advisory 校验：destination 不存在/不可读/格式非法仍照常写入 exit 0，ok 信封增补 `advisory` 提示字段（只增不改协议），永不因 destination 问题 exit≠0。
+- 闭合口径：字段契约钉住见 spec §3.6「destination advisory 校验契约」与 §5 第 6 条；S-CONTACTS-14 静默面契约维持（exit 0 语义不变），其上叠加 advisory 提示。
+- 去向：spec §3.6/§5；bdd S-CONTACTS-16/17；裁决记录 §三。
+
+### LED-11（U-04，--mention 与正文 @冗余）— 状态刷新：已闭合（裁决=同 B-01，方向消解销账）
+- 裁决：owner 裁决 3「和第一个问题一样处理, cli 这边不要这种语义参数」——写侧 `--mention` 随裁决 1 同批撤销；「写侧显式 flag vs 正文自动提取」的冗余张力随 flag 撤销消解（读取时 derive 机制本就覆盖正文 @ 提取），方向消解销账。
+- 去向：spec §1.4/§3.1；裁决记录 §四。
+
+### LED-12（U-13，shell completions）— 状态刷新：已闭合（裁决=钉住结案）
+- 裁决：owner 裁决 4「不需要, 这个 cli 主要是 agent 自己使用, 按照 agent 的使用习惯去做 qol/UX」——completions 正式钉住为已知限制结案（由「开放-延后」转为「已闭合-接受」，不补 KL 表，以本节与裁决记录为登记点）；同时确立长期方向「UX/QoL 以 agent 使用习惯为准」。
+- 去向：裁决记录 §二 口径 D。
+
+### 汇总表口径刷新（不改写第六节原文，按本节改读）
+
+- 第六节汇总表 LED-09/10/11/12 四行及第十一节终局统计「owner 决策 4」，随本节闭合改读为「已闭合（owner 四项裁决，2026-08-15）」；仍开放项收窄为文档轮 3（LED-06/07/08）与事实登记 1（LED-15）。
+- 第十二节更正二的口径对本节继续有效：本节的实施/发布动作均不隐含任何发布计划；任务 #36 实施批次不含 bump/tag/publish。
+
+（第十三节完。追加：任务 #35 执行 agent；2026-08-15。裁决原文逐字、解释口径声明与影响面全文见 docs/dev/owner-rulings-2026-08-15.md。）

@@ -15,6 +15,8 @@
 | U-02 | ux-review §2 (P0) | PAPERWORK_AGENT 环境变量回退, 免去每条命令重复身份参数 | 未实现: 全仓库无 env::var 引用 | 需裁决: 与"显式优于隐式"有张力, 建议与 U-01 一并裁决 |
 | U-03 | ux-review §3 (P1) | post create 与 send 自动创建双轨; 系统消息占 #1 致 off-by-one | 未实现: create 仍注入 [Thread created:...] 为 #1 | 本次必须解决: 统一线程创建语义 (v0.2/v0.3/v0.4 连续三版遗留) |
 | U-04 | ux-review §4 (P1) | --mention 与正文 @alice 冗余; 提议从正文自动提取 | 未实现: send 不解析正文 @ | 本次裁决: 建议自动提取, --mention 降级为补充 |
+
+> U-04 注记（2026-08-15 owner 裁决，append-only）：owner 裁决「和第一个问题一样处理, cli 这边不要这种语义参数」——写侧 `--mention` 随 B-01 同批撤销（post send 传入落 usage exit 2），reply/mention 语义由 agent 在正文直书 `@name`/`@#N` 表达，读取时 derive 机制不变；本条「自动提取 vs 显式 flag」的冗余张力随 flag 撤销方向消解销账。读侧 post read `--mention` 为查询过滤器，不在撤销范围。权威口径：docs/dev/owner-rulings-2026-08-15.md；台账闭合：open-items-ledger 第十三节 LED-11。
 | U-05 | ux-review §5 | 内容优先/路径可省略 | 未实现 | 建议裁决拒绝: 与本次"路径前置必填位置参数"方向直接冲突 |
 | U-06 | ux-review §6 (P2) | profile create 中 --name 与路径名冗余 | 未实现: --name 仍必填 | 本次解决: 并入"名字位置参数化"设计 |
 | U-07 | ux-review §7 (P1) | brief add --entry / contacts add --profile 主载荷应为位置参数 | 未实现: 两者仍是 flag | 本次必须解决: 位置参数化 |
@@ -24,6 +26,8 @@
 | U-11 | ux-review §11 (P2) | read 无限量时输出不提示截断; 建议 20/50 + seq 区间 | 部分: 超限时有 showing: n/total, 但无 seq 区间, 未超限时无提示 | 本次补全: 恒显示 n/total 与窗口区间 |
 | U-12 | ux-review §12 | help 中全局 flag 噪音 | 无需动作 (clap 惯例) | 已裁决接受, 结案 |
 | U-13 | ux-review §13 (P3) | shell completions | 未实现 | 延后: 仅人类用户受益 |
+
+> U-13 注记（2026-08-15 owner 裁决，append-only）：owner 裁决「不需要, 这个 cli 主要是 agent 自己使用, 按照 agent 的使用习惯去做 qol/UX」——completions 钉住结案（不再作延后悬置项），同时确立长期方向「UX/QoL 以 agent 使用习惯为准」。权威口径：docs/dev/owner-rulings-2026-08-15.md；台账闭合：open-items-ledger 第十三节 LED-12。
 | U-14 | ux-review §14 (P1) | 通用后缀自动解析: 先试原路径, 再补类型后缀 | 部分/变形: ensure_suffix 无条件改写路径(不试原路径), 传 standup.md 会被改写为 standup.post.md | 本次解决: 改为"原路径优先, 再补后缀" (见 N-02) |
 | U-15 | ux-review §15 (P3) | validate --type 覆盖 flag | 未实现: 未知后缀直接报 format 错误 | 裁决: 边缘场景, 建议延后或本次顺带 |
 
@@ -111,6 +115,16 @@
 
 - B-01（低，冻结行为登记，Pete N3）：`post send/edit --reply-to` 指向不存在 seq 时「静默跳过」（reply 关系丢失且无信号，消息照常落盘）。属 v0.5 冻结行为（spec v0.6 §3.1 错误映射沿用），与 Q-02 失败自愈存在张力。本轮不改；供发布轮或后续 UX 线裁决（候选方向：ok 信封增补 reply-dropped 字段，需解冻输出协议，与 F6 的 ignored 字段同批评估）。
 - B-02（低，静默面候选增强，contacts CRUD 轮 rework 补录 2026-08-09，Ryan M-3 ④）：contacts add/update 对目标 profile 路径**写前存在性校验/回显**。现状（冻结）：add/update 对目标 profile 不做任何可读性校验，不存在/不可读时静默写入 + label 依 R11 回退文件名主干（format-v2 spec §7.3，与 add 既有行为一致）；agent 路径笔误（忘后缀/传名字当路径）时 exit 0 且 destination 不可用，需下一轮 contacts read 才见 `(unreadable)`。行为本身本轮不改（裁决维持现状，避免 add/remove/update 三动词行为分叉）；声明与钉住已落 spec §3.6「NEW 不存在时的行为契约」+ bdd S-CONTACTS-14；候选方向：写前 destination 存在性校验或 ok 信封增补 destination-unverified 回显字段（需评估与输出协议冻结的关系），供发布轮裁决。
+
+---
+
+## 九、owner 四项裁决注记（2026-08-15 追加，append-only，不改写第八节原文）
+
+追加依据：owner 2026-08-15 四项裁决（逐字原文与解释口径见 docs/dev/owner-rulings-2026-08-15.md）。
+
+- **B-01 裁决注记**：owner 裁决 1「reply, mention 等等语义都在 markdown 消息本身中负责表达, cli 部分不应该给出这种参数用法」——撤销 post send 写侧糖衣 flag `--reply-to`/`--mention`（写命令传入落 usage exit 2），reply/mention 语义由 agent 正文直书 `@#N`/`@name` 表达；「指向不存在 seq 静默跳过」问题面随撤销结构性消解，本条候选方向（ok 信封 reply-dropped 字段）一并废弃；**读侧 post read `--reply-to`/`--mention` 为查询过滤器而非语义表达，不在撤销范围（此解释口径显式声明，供 owner 复核）**。spec 修订：cli-grammar-v0.6/spec.md §1.4/§2/§3.1/§10；bdd S-SEND-20~23；台账闭合：open-items-ledger 第十三节 LED-09。
+- **B-02 裁决注记**：owner 裁决 2「contact 可以加入路径和格式上面的 validation, 但是不阻塞 agent 编辑即可, 也就是如果文件不存在或者错误, 也不需要阻塞编辑的 agents 添加这个 profile 文件」——contacts add/update 增加**非阻塞 advisory 校验**：destination 路径不存在/不可读/格式非法时仍照常写入 exit 0，ok 信封增补 `advisory` 提示字段（只增不改协议），永不因 destination 问题 exit≠0；本条两个候选方向中「写前校验」按非阻塞形态采纳、「destination-unverified 回显字段」由 `advisory` 字段契约承接（字段名钉住见 spec §3.6/§5）。spec 修订：cli-grammar-v0.6/spec.md §3.6/§5；bdd S-CONTACTS-16/17；台账闭合：open-items-ledger 第十三节 LED-10。
+- 联动销账：同批裁决另闭合 U-04（同 B-01 处理，见本节上方行后注记）与 U-13（钉住结案，见本节上方行后注记）；台账 LED-09/10/11/12 全部刷新为已闭合。
 
 ---
 (报告完)

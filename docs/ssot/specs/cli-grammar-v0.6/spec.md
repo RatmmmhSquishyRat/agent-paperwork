@@ -4,6 +4,7 @@
 - 版本：v0.6（本轮不发布，见 §7）
 - 本轮增量（2026-08-09，v0.7 feedback 轮）：contacts remove/update 新增动词、brief read 新增 `--entry-title`、写路径锁统一（additive 扩展，见 §7 第 5 条）；rework 补录：SOTA C6 动词白名单扩容登记（`update` 经 owner CRUD 指令授权纳入，v0.7_feedbacks §2.5）、update/edit 语义分工（§3.6）、锁阻塞 agent 可见行为契约（§3.9）
 - 文档性质：行为规范（命令契约 + 输出协议），实现与测试的唯一验收基准
+- 增量修订（2026-08-15，owner 四项裁决轮，任务 #35 文档落盘，实施归任务 #36）：撤销 post send 写侧糖衣 flag `--reply-to`/`--mention`（写命令传入落 usage exit 2，reply/mention 语义由 agent 正文直书 `@#N`/`@name` 表达）；post read 读侧过滤器 `--mention`/`--reply-to` 保留声明；contacts add/update 新增非阻塞 destination advisory 校验契约（ok 信封 `advisory` 字段，只增不改协议）。裁决原文逐字与解释口径（编排层拟定，供 owner 复核推翻）见 docs/dev/owner-rulings-2026-08-15.md
 - architectural basis：
   - `docs/ssot/adr/feedbacks/v0.6_feedbacks.md`（owner 指令，最高优先级；与 v0.5 文档冲突处以该文件为准）
   - `docs/ssot/adr/feedbacks/v0.7_feedbacks.md`（本轮 owner 指令：contacts 完整 CRUD + 写路径锁统一 + 渐进阅读补齐；本轮增量的最高优先级输入）
@@ -37,7 +38,7 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 
 同一命令内任何 flag 只有一种含义。基线勘误后（format-v2 owner 追裁 D1/D2 删除 send 的 `--to`/`--participants`），全 CLI flag 恢复唯一语义的干净表述：`--from`/`--to` 仅存于 post read，仅表 seq 起点/上限（u64）；`--author` 恒指署名身份（仅 post send / post edit）；`--message` 恒指写入正文（仅 post send / post edit）。
 
-裁定（规则 3 边界，沿用 v0.5 spec §1.3）：`--mention/--reply-to` 在 send 中为「设置」、在 read 中为「过滤」，视为同一语义对象的同构延伸，不构成双语义。
+裁定（规则 3 边界；2026-08-15 owner 裁决更新，原 v0.5 裁定废止 send 侧）：`--mention/--reply-to` 的**写侧语义（send「设置」）已撤销**——post send 传入该两 flag 落 usage exit 2（owner 裁决：「reply, mention 等等语义都在 markdown 消息本身中负责表达, cli 部分不应该给出这种参数用法」）；**read 侧「过滤」语义保留**——查询过滤属同一语义对象的只读延伸，不构成双语义。读侧保留口径显式声明于 §2/§3.3/§10（读侧过滤器是查询而非语义表达，不在撤销范围）。
 
 ---
 
@@ -47,9 +48,9 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 
 | 命令 | v0.6 签名 | 相对 v0.5 变更 / 本轮增量标注 |
 |---|---|---|
-| post send | `post send <PATH> --author <NAME> (--message <BODY> \| --stdin) [--reply-to N] [--mention a,b] [--title T]` | NAME/BODY 位置参数 -> `--author/-a`、`--message/-m` 具名必填（owner 裁决）；`--title` 为 format-v2 建线程载荷；`--reply-to`/`--mention` 为糖衣 flag，值以 `@#N`/`@name` token 注入正文（format-v2 D2，OQ-4） |
-| post edit | `post edit <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> \| --stdin)` | NAME、SEQ、NEW_BODY 位置参数 -> `--author/-a`、`--seq`、`--message/-m` 具名必填 |
-| post read | `post read <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--limit 20]` | 不变；`--mention` 无短形式（避免 -m 双义） |
+| post send | `post send <PATH> --author <NAME> (--message <BODY> \| --stdin) [--title T]` | NAME/BODY 位置参数 -> `--author/-a`、`--message/-m` 具名必填（owner 裁决）；`--title` 为 format-v2 建线程载荷；**2026-08-15 owner 裁决撤销：写侧糖衣 flag `--reply-to`/`--mention` 删除，传入落 usage exit 2；reply/mention 语义由 agent 正文直书 `@#N`/`@name` token 表达（读取时 derive 机制不变）** |
+| post edit | `post edit <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> \| --stdin)` | NAME、SEQ、NEW_BODY 位置参数 -> `--author/-a`、`--seq`、`--message/-m` 具名必填；edit 本就无 `--reply-to`/`--mention`（v0.6 既成事实），2026-08-15 撤销口径按「写命令」外延一并声明 |
+| post read | `post read <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--limit 20]` | 不变；`--mention` 无短形式（避免 -m 双义）；**2026-08-15 owner 裁决保留声明：读侧 `--mention`/`--reply-to` 是查询过滤器而非语义表达，不在写侧撤销范围，冻结保留（§3.3/§10）** |
 | post summary | `post summary <PATH>` | 不变 |
 | profile create | `profile create <PATH> --name <NAME> [--model] [--description] [--scope-read/write/owns]` | NAME 位置参数 -> `--name` 必填 flag（回到具名形态；v0.6_feedbacks §2.4 补记） |
 | profile show/edit/list | `<PATH>` / `<PATH> [--field..]` / `<DIR>` | 不变 |
@@ -67,6 +68,8 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 
 注：v0.5 的 `post create` 已被 format-v2 删除（建线程职责由 send 自动创建承担，`--title` 为建线程时的线程元数据载荷），v0.6 不恢复；format-v2 同批按 owner 追裁 D1/D2 删除了 send 的 `--to`/`--participants` flag，v0.6 同样不恢复。
 
+注（2026-08-15 owner 裁决）：post send 的写侧糖衣 flag `--reply-to`/`--mention` 撤销（format-v2 D2/OQ-4 的「糖衣注入」参数面废止）；reply/mention 语义改由 agent 在正文直接书写 `@#N`/`@name` token 表达，读取时 derive 机制不变（§3.1/§3.3）。撤销与读侧保留的边界口径见 §10。
+
 本轮增量（v0.7 feedback 轮）：contacts remove/update 两动词与 brief read `--entry-title` 为 additive 新增；不涉及任何既有动词/flag 的删除或改名（v0.7_feedbacks §四）。**SOTA C6 白名单扩容登记（rework 补录）**：`update` 不在 SOTA C6 既定动词白名单内（`docs/researches/agent-cli-ux-industry-sota-2026-08-08.md` L196，既定 10 动词），本轮经 owner CRUD 指令（v0.7_feedbacks §一 (1)）授权扩容纳入（裁定记录 v0.7_feedbacks §2.5）；`update` 与既有 `edit` 的语义分工见 §3.6（edit = 文件自身内容就地修改；contacts update = 条目 destination 换绑，contacts 组无 edit 动词）。
 
 ---
@@ -78,7 +81,7 @@ NAME、BODY、SEQ、TITLE、ENTRY、ENTRY-TITLE、PROFILE-PATH 等全部必填�
 ### 3.1 post send
 
 ```
-paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply-to N] [--mention a,b] [--title T]
+paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--title T]
 ```
 
 | 参数 | 形态 | 必填 | 说明 |
@@ -87,9 +90,9 @@ paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply
 | `--author/-a` | 具名 flag | 是 | 发送者名字（署名）；语义与校验沿用 v0.5 NAME（trim 后为空拒绝 validation；**单 token 校验：拒绝空格/制表符/换行与括号**，违规 validation exit 1——以实现 `validate_sender` 为准，spec format §5.6；初稿「可含空格」为文档与实现不一致，按实现收口，fix-ledger D7）；不与 profile/contacts 做存在性校验；不设 `allow_hyphen_values`（名字值无 `-` 开头合法形态，设置反扩大误解析面，F4 复核结论） |
 | `--message/-m` | 具名 flag | 与 `--stdin` 二选一 | 消息正文；flag 值直传，以 `-` 开头的正文无需 `--` 边界；clap 属性 `allow_hyphen_values = true`（rework 裁定 F4，impl_plan 步骤(2) 硬性指令） |
 | `--stdin` | 开关 flag | 与 `--message` 二选一 | 从 stdin 读正文（多行大片内容首选通道） |
-| `--reply-to` | 具名 flag | 否 | 回复锚点 seq；format-v2 D2 下为糖衣 flag：值以 `@#N` token 注入正文首行，读取时派生（OQ-4）；指向不存在 seq 静默跳过（沿用 v0.5，已登记 ux-open-items-backlog） |
-| `--mention` | 具名 flag | 否 | 提及名单（逗号分隔名字）；同为糖衣 flag：值以 `@name` token 注入正文（D2，OQ-4）；无短形式（§4） |
 | `--title` | 具名 flag | 否 | 建线程载荷：线程标题（preamble 仅 H1 标题，D1）；仅首次写入（自动建线程、锁内 size==0）时生效，对既有线程静默忽略（行为登记见下，OQ-1） |
+
+- **写侧糖衣 flag 撤销（2026-08-15 owner 裁决）**：`--reply-to`/`--mention` 从本命令签名撤销，send 传入该两 flag 一律落 **usage exit 2**（未知 flag 路径，usage 信封机制承担迁移教学）；原「值以 `@#N`/`@name` token 注入正文」的糖衣注入逻辑删除（format-v2 D2/OQ-4 参数面废止）。reply/mention 语义由 agent 在正文直接书写 `@#N`/`@name` token 表达；读取时 derive 机制不变（post read 从正文派生 reply/mention 关系，implicit-mention 输出字段派生逻辑冻结，§3.3）。原「`--reply-to` 指向不存在 seq 静默跳过」条款随撤销废止（backlog B-01 问题面消解，台账 LED-09 闭合）；原「`--reply-to 0` 拒绝（validation）」分支随 flag 撤销不可达。
 
 - **`--message` 与 `--stdin` 互斥语义**：二选一必填。同时给出 -> clap conflicts 层拒绝，**usage exit 2**（v0.5 时该冲突为 validation exit 1，本版提升为 usage 层，见 §5）；两者皆缺 -> usage exit 2（clap `required_unless_present` 组合在解析层判定 MissingRequiredArgument，命令层无需管道，rework 裁定 F2）；仅 `--stdin` 时正文从 stdin 读取；`--message` 值 trim 后为空 -> validation exit 1（空正文拒绝，行为沿用）。
 - **NAME/BODY 混淆面结构性归零**：两参数均不占位置槽，v0.5 spec §3.1 记载的混淆面（PATH+单字符串无法区分漏 NAME 与缺 body）不复存在；v0.5 的三重教学补偿条款随混淆面消亡而废止。
@@ -97,7 +100,7 @@ paperwork post send <PATH> --author <NAME> (--message <BODY> | --stdin) [--reply
 - **建线程元数据载荷行为登记（rework 裁定 F6，本轮不改运行时行为）**：`--title` 仅在线程首次写入（自动建线程）时生效；对既有线程附该 flag 时**静默忽略**（format-v2 冻结语义，exit 0 且无信号；改标题不在本版能力范围，OQ-1）。该静默面为已知行为登记而非缺陷（bdd S-SEND-17 钉住）；可检测化的未来工作项（ok 信封 ignored 字段增补）见 design.md §8。
 - 输出增补 `implicit-mention`（U-10）行为沿用 v0.5 spec §3.1，不变。
 
-错误映射：缺 `--author` / 缺 `--message` 且无 `--stdin` / 两者同给 / 未知 flag / 多余位置参数 -> usage exit 2；空正文 -> validation exit 1；异型文件 -> format exit 1；`--reply-to` 指向不存在 seq -> 静默跳过（沿用）。
+错误映射：缺 `--author` / 缺 `--message` 且无 `--stdin` / 两者同给 / 未知 flag / 多余位置参数 -> usage exit 2（**含写命令传入已撤销的 `--reply-to`/`--mention`，按未知 flag 落 usage**）；空正文 -> validation exit 1；异型文件 -> format exit 1。
 
 ### 3.2 post edit
 
@@ -115,13 +118,14 @@ paperwork post edit <PATH> --author <NAME> --seq <N> (--message <NEW_BODY> | --s
 - 三重编辑护栏（自己的、自己最新的、线程最后一条）行为不变，违规 not-allowed exit 1。
 - 错误映射：缺 `--author` / 缺 `--seq` / 缺正文通道 -> usage exit 2；护栏违规 -> not-allowed exit 1；异型文件 -> format exit 1（v0.5 已确立，不变）。
 
-### 3.3 post read / summary（不变）
+### 3.3 post read / summary（不变；读侧过滤器保留声明）
 
 ```
 paperwork post read <PATH> [--from N] [--to M] [--mention X] [--reply-to N] [--limit 20]
 paperwork post summary <PATH>
 ```
 
+- **读侧过滤器保留声明（2026-08-15 owner 裁决，显式写明）**：post read 的 `--mention <name>` / `--reply-to <seq>` 是**查询过滤器而非语义表达**，不在写侧撤销范围，冻结保留；其过滤判定基于读取时从正文 derive 的 `@name`/`@#N` token（derive 机制不变）。撤销与保留的边界口径见 §1.4/§10；解释口径由编排层拟定并显式声明，供 owner 复核推翻（docs/dev/owner-rulings-2026-08-15.md）。
 - `--from` 仅表 seq 起点；`--to` 仅表 seq 上限（u64 类型，非数字即 usage exit 2，显式信号）。基线勘误后 `--from/--to` 仅存于 post read，规则 3 唯一语义无例外（§1.4）。`--limit` 默认 20；`--mention` 与 read 的 `--reply-to` 均**无短形式**（短形式全表见 §4）。
 - 输出增补（恒显 `showing: n/total` + `window: #first-#last`，U-11）沿用 v0.5 spec §3.1，不变。
 - 缺 PATH -> usage exit 2；文件不存在 -> not-found exit 1。
@@ -170,7 +174,12 @@ paperwork contacts read <PATH>
 - **空键护栏（评审轮补录，F1；Kim M-1 + QA BUG-1）**：add 的 `--profile`、update 的 `--profile`/`--new-profile`，值为空或 trim 后全空白时一律 validation 错误 exit 1——message 逐字为 `profile path (--profile) is empty` / `new profile path (--new-profile) is empty`，fix 逐字为 `provide a non-empty --profile value` / `provide a non-empty --new-profile value`，example 为各动词规范示例（同 §5 第 2 条钉住形态）；镜像 post send `--message`/`--author` 空值判定先例（category validation，fix 教学 + canonical example，纯 ASCII）。护栏置于 core 函数入口（`contacts_add`/`contacts_update`），库直调同样覆盖；校验先于文件存在性的 not-found 判定（空键 + 文件不存在亦落 validation）。**行为变更登记**：护栏前 add 空键会把不可解析 bullet `- []()` 写入落盘（下次解析该 bullet 静默消失，validate 判结构损坏，属静默数据损坏）；update 空 `--new-profile` 更会把既有条目替换成该退化 bullet。空键是「无键」，不是「不可读的路径」——与不可读路径静默回退判例（上一条）不冲突。
 - **contacts remove（本轮新增）**：`--profile` 具名必填 flag；键 = profile 路径（字符串精确匹配，与 add 幂等判据同一口径）；命中删除该条目，exit 0，ok 信封首行 `ok contacts.remove <profile> -> <contacts路径>`，字段区含 `contacts`（contacts 路径）、`removed`（被删 profile 路径）；未命中 -> not-found exit 1（resource Contacts entry），fix 引导 `paperwork contacts read <PATH>` 核对条目清单，并补键口径教学句：`the key is the profile path as stored in the contacts file, not the label`（纯 ASCII，rework 补录 Ryan m-3）；缺 `--profile` -> usage exit 2，规范示例逐字为 `paperwork contacts remove team.contacts.md --profile alice.profile.md`（rework 补录 Ryan m-2）。
 - **contacts update（本轮新增）**：`--profile <OLD>` 与 `--new-profile <NEW>` 均具名必填；判定顺序：OLD 命中检查先于 NEW 已存在检查（OLD 未命中即 not-found，OLD==NEW 且 OLD 命中时落入 already-exists）；OLD 未命中 -> not-found exit 1（fix 同 remove 的键口径教学句 + `paperwork contacts read <PATH>` 引导）；NEW 已存在于条目清单 -> already-exists exit 1（fix 引导先 remove 或改用既有条目）；命中则原地替换 destination，label 依 R11 对 NEW 重派生（读 NEW 目标 profile H1，失败回退文件名主干，format-v2 spec §7.3），条目顺序保留；**不支持改 label**（无 label 类 flag；label 为 R11 派生数据，不可作键、不可手工覆盖）；ok 信封首行 `ok contacts.update <OLD> -> <NEW>`，字段区含 `contacts`、`updated`（OLD -> NEW）；缺任一必填 flag -> usage exit 2，规范示例逐字为 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md`（rework 补录 Ryan m-2）。
-- **NEW 不存在/不可读时的行为契约（rework 补录，Ryan M-3；裁决维持现状行为，显式声明并钉住，bdd S-CONTACTS-14）**：update 到不存在/不可读的 NEW 仍 **exit 0 静默写入**：destination 按用户所给原值落盘，label 依 R11 回退文件名主干（与 format-v2 R11 及 add 现状一致，不引入 add/remove/update 三动词行为分叉；本轮不改运行时）。该面为**已知静默面，非缺陷**（处置体例同 post send `--title` 静默忽略的 S-SEND-17 三件套：本条声明 + bdd 场景钉住 + backlog 登记）；agent 自救指引：写入前先 `paperwork contacts read <PATH>` 核对既有条目，或 `paperwork validate <NEW>` 确认目标 profile 合法。候选增强「写前 destination 存在性校验/回显」已登记 `docs/researches/ux-open-items-backlog-2026-08-08.md` B-02，供发布轮裁决，本轮不实现。
+- **NEW 不存在/不可读时的行为契约（rework 补录，Ryan M-3；裁决维持现状行为，显式声明并钉住，bdd S-CONTACTS-14）**：update 到不存在/不可读的 NEW 仍 **exit 0 静默写入**：destination 按用户所给原值落盘，label 依 R11 回退文件名主干（与 format-v2 R11 及 add 现状一致，不引入 add/remove/update 三动词行为分叉；本轮不改运行时）。该面为**已知静默面，非缺陷**（处置体例同 post send `--title` 静默忽略的 S-SEND-17 三件套：本条声明 + bdd 场景钉住 + backlog 登记）；agent 自救指引：写入前先 `paperwork contacts read <PATH>` 核对既有条目，或 `paperwork validate <NEW>` 确认目标 profile 合法。候选增强「写前 destination 存在性校验/回显」已登记 `docs/researches/ux-open-items-backlog-2026-08-08.md` B-02，~~供发布轮裁决~~，2026-08-15 owner 裁决落地为下条 advisory 校验契约（backlog B-02 已追加裁决注记，台账 LED-10 闭合）。
+- **destination advisory 校验契约（2026-08-15 owner 裁决新增，bdd S-CONTACTS-16/17；任务 #36 实施）**：contacts add/update 对 destination（add 的 `--profile`；update 的 `--new-profile`）执行**非阻塞 advisory 校验**（owner 裁决原文：「contact 可以加入路径和格式上面的 validation, 但是不阻塞 agent 编辑即可, 也就是如果文件不存在或者错误, 也不需要阻塞编辑的 agents 添加这个 profile 文件」）：
+  - **触发条件**（任一命中即触发）：① destination 路径不存在；② 存在但不可读（非文件/打开失败）；③ 可读但非合法 profile 格式（parse 失败）。校验在写入动作完成之后、ok 信封渲染之前执行，仅只读探测，不改变写入结果。
+  - **非阻塞保证**：触发时仍**照常写入、exit 0**；永不因 destination 问题 exit≠0；不引入任何新 flag、不阻塞 agent 编辑（label 依 R11 回退行为不变，上一条静默面契约维持，其上叠加 advisory 提示）。
+  - **advisory 字段契约**：ok 信封增补字段，字段名钉住为 `advisory`（值 = 单行纯 ASCII 提示文本，建议文案形态：`destination '<P>' does not exist` / `destination '<P>' is not readable` / `destination '<P>' is not a valid profile file`，实施时可微调，以任务 #36 定稿重冻为准）；**仅触发时出现**（destination 合法时字段不存在，避免噪音）；Default 与 `--json` 档同名出现（JSON 只增不改不删纪律之下的 additive 字段）。被否替代字段名登记：`destination_note`（编排层候选，裁定取 `advisory`，理由：语义更准确且为后续同类提示预留通用面）。
+  - **适用范围**：仅 contacts add/update 两写路径；contacts remove（键不命中为 not-found exit 1，无 advisory 面）、brief/profile 组不适用；与空键护栏（上一条 F1）不冲突：空键仍落 validation exit 1，advisory 仅覆盖「非空但异常」的 destination。
 - **`updated` 字段值格式契约（rework 补录，Ryan m-4 定案）**：编排层裁定维持箭头串形态（与 ok 首行 conclusion 同构，不新增分键），值格式逐字钉住为 `<OLD> -> <NEW>`（单空格分隔的三段拼接，如 `alice.profile.md -> carol.profile.md`）；机器解析侧可退回解析 conclusion，两载体携带同一信息。
 - **update 与 edit 的语义分工（rework 补录，Ryan M-1 ②）**：`edit` 恒为「对文件自身内容的就地修改」（post 消息正文、profile 字段）；`contacts update` 恒为「条目 destination 路径的换绑」（键控条目的身份替换），contacts 组无 `edit` 动词；两动词作用对象不同，不构成语义重叠。`--new-profile` 命名被否替代（`--to`/`--old-profile` 对称形态/`--replace-with`）见研究文档 §5.4 被否替代表（Ryan m-6）。
 - add/remove/update 三写路径一律 fs2 `lock_exclusive` 锁内读改写（§3.9 写路径锁统一）。
@@ -209,13 +218,15 @@ paperwork validate <PATH> [--type post|profile|brief|contacts]
 | `--author` | `-a` | 编排层裁定（全称首字母，全 CLI 唯一） |
 | `--message` | `-m` | 编排层裁定（git `commit -m` 行业惯例，短 flag 传正文的最强迁移直觉） |
 | 全局 `-q` | `-q` | 既有全局 flag（v0.5 已发布，冻结） |
-| post read `--mention` | 无 | 编排层裁定：避免 `-m` 在 post 组内双义 |
-| post read `--reply-to` | 无 | rework 补录（Quinn m-1）：read 过滤低频；与 send 的 `--reply-to` 同无短形式，保持对称 |
+| post read `--mention` | 无 | 编排层裁定：避免 `-m` 在 post 组内双义；2026-08-15 写侧 `--mention` 撤销后，read 过滤器为该 flag 唯一在场面 |
+| post read `--reply-to` | 无 | rework 补录（Quinn m-1）：read 过滤低频；2026-08-15 owner 裁决撤销写侧 `--reply-to` 后，read 过滤器为该 flag 唯一在场面（原「与 send 的 `--reply-to` 对称」依据废止），仍仅长形式 |
 | 其余全部 flag（`--seq/--stdin/--title/--from/--to/--entry/--entry-title/--profile/--new-profile/--model/--description/--owner/--note/--regex/--scope-*/--full/--limit/--base-dir/--type/--json/--plain` 等） | 无 | F3 收窄裁定：除 `-a/-m/-q` 外一律仅长形式，从根上消除跨命令短形式多义 |
 
 短形式与全称严格等价（clap 同一 Arg 的 short/long 两面），BDD 断言见 bdd.md S-SHORT-01。
 
 本轮增量（v0.7 feedback 轮）：新 flag `--new-profile`（contacts update）与 brief read 的可选 `--entry-title` 均仅长形式，短形式集合 {-a, -m, -q} 不变；`--entry-title` 同时出现于 brief remove（必填）与 brief read（可选），均指条目存储标题，属同一语义对象的同构延伸，不构成双语义（规则 3，§1.4 裁定先例）。
+
+2026-08-15 owner 裁决：写侧 `--reply-to`/`--mention` 撤销后，短形式集合 {-a, -m, -q} 不变（该两 flag 本就无短形式）；无短形式负向清单口径相应收窄为「post read `--reply-to` / `--mention` 两项」（send 侧 flag 不复存在，探针移除，bdd S-SHORT-02 枚举同步）。**VALUE_TAKING_FLAGS 对应表口径（main.rs usage 路径 `--json` 探针依赖）**：`--reply-to` / `--mention` 两项**保留在列**——post read 侧仍是带值 flag；撤销仅作用于写侧 clap 签名，若从该表移除会破坏 `post read x --mention "--json"` 类探针的值跳过逻辑（audit-grammar-matrix-2026-08-15 §6 一致性表的计数口径随实施批次同步重盘，任务 #36）。
 
 ---
 
@@ -227,6 +238,8 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 2. **usage 信封静态规范示例全部换 v0.6 文法，每命令一条**：机制（静态规范示例、不携带用户原参数值、`--help/-V` 穿透、argv 扫描感知 `--json`、顶层失败 command 填 `usage`）沿用 v0.5 spec §4.3，仅示例文案更新；每命令一条静态规范可执行示例（具体值、无占位符，v0.5 F2/F7 裁定延续，rework 裁定 F5），post send 规范示例为 `paperwork post send standup.post.md --author alice --message "Hello"`（采 `--message` 通道形态）；「二选一」等形态指引由 message/fix 文案承担，不在 example 中表达。**本轮新命令逐字钉住（rework 补录，Ryan m-2）**：contacts remove 规范示例 `paperwork contacts remove team.contacts.md --profile alice.profile.md`；contacts update 规范示例 `paperwork contacts update team.contacts.md --profile alice.profile.md --new-profile carol.profile.md`（与 §3.6 同一出处，实施与测试逐字断言以此为准）；not-found example 形态：remove/update 未命中均为 `paperwork contacts read <PATH>`（PATH 取用户所给实际值）。
 3. **validation fix 文案的 `--` 教学废止**：正文经 `--message` flag 值直传，以 `-` 开头的正文不再需要 `--` 边界（v0.5 spec §4.2 末条废止）；usage 信封涉及裸 `-xxx` 残留时的 `--` 教学改为引导 `--message` 形态。
 4. **纯 ASCII 输出契约（口径收窄，任务 #34 文档轮修订；行为面零变更）**：信封结构面（status 行 / category / `fix:` / `example:` 字段）全部 stdout/stderr 字节保持 ASCII，本版不变，`ascii_output_contract_guard` 级别集成测试防线保留；全量字节流恒为合法 UTF-8，消费端须按 UTF-8 解码；已知 locale 依赖面：io 类信封的 `message` 字段可内嵌 OS 本地化文本（字节为合法 UTF-8，依据 docs/dev/io-encoding-rootcause-2026-08-15.md §6 钉住结论；是否进一步代码硬化去本地化文本由修复波评估，审计建议不做）。
+5. **VALUE_TAKING_FLAGS 对应表口径（2026-08-15 owner 裁决配套声明）**：写侧 `--reply-to`/`--mention` 撤销后，main.rs `VALUE_TAKING_FLAGS` 常量中该两项**保留**（post read 侧仍是带值 flag，usage 路径 `--json` 探针的值跳过逻辑依赖其在列）；常量其余项不变，计数口径（audit-grammar-matrix §6）随任务 #36 实施重盘。
+6. **advisory 信封字段形态（2026-08-15 owner 裁决新增）**：contacts add/update 成功（exit 0）且 destination advisory 校验触发时，ok 信封字段区增补 `advisory: <单行提示>`（Default 档与 `--json` 档同名 key；仅触发时出现；纯 ASCII；字段契约全文见 §3.6「destination advisory 校验契约」）。
 
 ---
 
@@ -244,6 +257,8 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 | contacts remove/update 新增（本轮增量） | 完整 CRUD 补齐；键 = profile 路径；label 依 R11 重派生；锁内读改写 | 动词新增（additive） |
 | brief read `--entry-title`（本轮增量） | 选择性详情（渐进阅读第三档）；复用 remove 键语义 | flag 新增（additive） |
 | 写路径锁统一（本轮增量） | contacts add/remove/update、brief add/remove、profile edit 六写路径补锁（锁内读改写 + fast fail，§3.9） | 内部机制增强，对外契约不变 |
+| 写侧 `--reply-to`/`--mention` 撤销（2026-08-15 owner 裁决） | post send 传入该两 flag 落 usage exit 2；reply/mention 语义由正文直书 `@#N`/`@name`（读侧 derive 不变）；「指向不存在 seq 静默跳过」面消解 | 文法 breaking（flag 面撤销，任务 #36 实施） |
+| contacts destination advisory 校验（2026-08-15 owner 裁决） | add/update 非阻塞 advisory 校验：destination 异常仍 exit 0，ok 信封增补 `advisory` 字段（只增不改协议） | 输出协议 additive（任务 #36 实施） |
 
 ---
 
@@ -254,6 +269,7 @@ v0.5 spec §4（成功信封、错误信封七类 category、usage 信封机制�
 3. 本次破坏面**仅限命令参数文法**（位置 NAME/BODY/主载荷 -> 具名 flag、互斥错误层级），其余一切对外接口冻结。
 4. **版本与发布**：本轮不 bump 版本、不打 tag、不 publish、不写 CHANGELOG 发布段（owner 显式约束，v0.6_feedbacks §一 (3)）；发布时机与版本号由 owner 在功能稳定后另行裁定。
 5. **本轮 additive 扩展登记（v0.7 feedback 轮，2026-08-09）**：本轮为上述冻结条款之下的 additive 扩展——组集合 {profile, post, brief, contacts, validate} 不变；动词集合仅新增 `contacts remove` / `contacts update`（command id `contacts.remove` / `contacts.update`）；flag 表仅新增 `--new-profile` 与 brief read 的可选 `--entry-title`；短形式集合 {-a, -m, -q} 不变；JSON key 与信封字段只增不改不删（新增字段 `contacts` / `removed` / `updated`，`updated` 值格式逐字钉住见 §3.6）；core API 仅新增函数（`contacts_remove` / `contacts_update`），既有函数签名不变、行为面仅增加并发安全性（§3.9）；文件格式零触碰（format-v2 spec L12「profile/brief/contacts 三格式语义不变」继续成立）；本条第 4 款不发布约束对本轮延续有效。**SOTA C6 白名单扩容登记（rework 补录）**：`update` 不在 SOTA C6 既定动词白名单内（`docs/researches/agent-cli-ux-industry-sota-2026-08-08.md` L196，既定 10 动词），随本轮 additive 扩容纳入，授权依据 owner 指令 (1)（v0.7_feedbacks §一 (1)，裁定记录 v0.7_feedbacks §2.5）；白名单测试口径见 tdd §8.3 与 bdd S-SHORT-02。
+6. **2026-08-15 owner 裁决修订面登记（任务 #35 落盘，任务 #36 实施）**：在上述冻结条款之下——撤销面：post send 的 `--reply-to`/`--mention` 两个可选糖衣 flag（写命令传入落 usage exit 2）；新增面：ok 信封 `advisory` 字段（仅 contacts add/update 触发时，JSON 只增不改不删）；读侧豁免：post read `--reply-to`/`--mention` 过滤器、implicit-mention 派生、showing/window 均不受影响；短形式集合 {-a, -m, -q} 不变；core API 与文件格式零变更；不发布约束（本条第 4 款）对本轮延续有效。裁决原文与解释口径见 docs/dev/owner-rulings-2026-08-15.md。
 
 ---
 
@@ -278,3 +294,22 @@ owner 指令（v0.7_feedbacks §一 (2)）要求盘点全部 read 面的「先�
 | contacts | —（单文档粒度） | `contacts read` 直读 | `contacts read` 直读 | 已满足（富化输出，§3.6） |
 
 SSOT 依据：pillars session-log 原话「agent读取时候会先读到目录, 然后可以选择直接全量阅读, 或者根据路径自己手动选择性阅读」（`docs/ssot/pillars/paperwork-init-conversation/session-log-2026-07-29-agent-paperwork-user-only.md` L27）；SOTA summary-before-detail（`docs/researches/agent-cli-ux-industry-sota-2026-08-08.md` L63、L194 C4）。本登记后渐进阅读面结案；新缺口须 owner 新指令再开。
+
+---
+
+## 10. owner 裁决增量修订登记结案（2026-08-15，任务 #35 文档落盘，实施归任务 #36）
+
+owner 于 2026-08-15 对台账 LED-09/10/11/12（backlog B-01/B-02/U-04/U-13）下达四项裁决（逐字原文、解释口径与影响面全文见 docs/dev/owner-rulings-2026-08-15.md；台账闭合见 open-items-ledger 第十三节；backlog 联动见其第九节）。本 spec 的修订面登记如下：
+
+| 裁决 | 对象 | 修订去向 |
+|---|---|---|
+| 裁决 1 | B-01：撤销写侧语义糖参数 | §1.4 裁定更新；§2 签名表 post send 行；§2 注；§3.1 参数表/撤销声明/错误映射；§6 变更清单；§7 第 6 条；bdd S-SEND-20 改写与 S-SEND-22/23、S-EDIT-10 新增 |
+| 裁决 2 | B-02：contacts 非阻塞 advisory 校验 | §3.6「destination advisory 校验契约」（触发条件/非阻塞保证/字段契约/适用范围）；§5 第 6 条；§6 变更清单；§7 第 6 条；bdd S-CONTACTS-14 追加与 S-CONTACTS-16/17 新增 |
+| 裁决 3 | U-04：同 B-01 处理 | 随裁决 1 同批落地（写侧 `--mention` 撤销，方向消解销账） |
+| 裁决 4 | U-13：completions 钉住结案 | 不改 spec（completions 本就未在 flag/命令面）；确立长期方向「UX/QoL 以 agent 使用习惯为准」，登记于裁决记录 §二 口径 D |
+
+**读侧过滤器保留声明（本节的边界线，显式写明）**：post read 的 `--mention <name>` / `--reply-to <seq>` 是查询过滤而非语义表达，不在撤销范围；其无短形式钉住（§4）、过滤行为（§3.3、bdd S-READ-04/06/07）与 derive 机制全部冻结保留。解释口径由编排层拟定并显式声明，供 owner 后续复核推翻。
+
+**canonical_example 影响登记**：post send 规范示例 `paperwork post send standup.post.md --author alice --message "Hello"`（§5 第 2 条）本不含该两 flag，无需替换；但实现面 after_help 中含糖衣 flag 的示例行（post.rs send after_help 第二条示例）与 core/cli 内嵌旧形态 example/fix 文案，属任务 #36 实施批次的文案同步面（impl_plan O1/O4 点名）。
+
+**实施与重冻**：行为变更由任务 #36 按 impl_plan「2026-08-15 owner 裁决实施批次」（O1~O5）执行；测试映射与黄金快照重冻预告见 tdd §9；SKILL.md/README 示例差异留给实施批次同步（impl_plan O4 点名，本任务不回改）。

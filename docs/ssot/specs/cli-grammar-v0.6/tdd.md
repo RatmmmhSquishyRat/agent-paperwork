@@ -276,3 +276,50 @@ v0.6 再合法化 `--name/--seq/--title/--entry/--profile` 等 flag、位置槽�
 3. ASCII 审计：本轮新信封文案（contacts.remove/update 的 ok/usage/not-found/already-exists/io 各形态）纳入 stderr 逐字节 ASCII 断言（S-OUT-05 防线延伸）；
 4. 锁调用点位盘点：`rg -n "lock_exclusive" repos/paperwork-core/src` 输出含六写路径新锁点位，且无任何无锁 read-modify-write 残留（S-LOCK-03 不变量）；
 5. 明确不含发布步骤（不 bump、不 tag、不 publish、不写 CHANGELOG 发布段，口径同 spec §7 第 4/5 条）。
+
+---
+
+## 9. owner 裁决批测试计划（2026-08-15 裁决轮；文档落盘任务 #35，实施与测试落地归任务 #36）
+
+- 依据：docs/dev/owner-rulings-2026-08-15.md；spec §1.4/§2/§3.1/§3.3/§3.6/§4/§5/§7 第 6 条/§10；bdd S-SEND-04/20（改写）、S-SEND-22/23、S-EDIT-10、S-CONTACTS-14（追加）、S-CONTACTS-16/17、S-SHORT-02（枚举收窄）。
+- 原则沿用：新增行为用新用例钉住，既有行为用既有用例冻结回归；§3 输出协议保留清单对未撤销面继续有效。
+
+### 9.1 既有用例改写/失效盘点（实施首步执行，逐处勾销）
+
+盘点命令：
+
+```
+rg -n "reply[-_]to|--mention|mention" repos/paperwork-cli/tests/cli_integration.rs repos/paperwork-core/tests
+```
+
+| 类 | 处置 |
+|---|---|
+| send 侧 `--reply-to`/`--mention` 成功路径用例（糖衣注入断言：正文首行 `@#N`/`@name` 注入形态、implicit-mention 由 flag 触发形态、`--reply-to 0` validation 分支） | 改写为正文直书形态（断言语义保留：derive/implicit-mention 边界不变，触发方式改为正文 token，对应改写后 S-SEND-04/20）或翻转为 usage 断言（对应 S-SEND-22/23）；`--reply-to 0` 分支随 flag 撤销整体删除 |
+| send 侧 mention 名单清洗/校验分支用例（trim/空段/非法名字） | 随写侧 flag 撤销删除（正文内 `@name` 不做名字合法性校验，透传冻结） |
+| read 侧 `--mention`/`--reply-to` 过滤用例（S-READ-04/06/07 等） | 原样冻结回归，一字不改（读侧保留声明，spec §3.3） |
+| contacts add/update 成功路径用例（destination 不存在/非法形态，含 S-CONTACTS-14 对应用例） | 保留 exit 0/条目/label 断言，叠加 `advisory` 字段断言（S-CONTACTS-16/17）；destination 合法路径补反向断言「无 advisory 字段」 |
+| post.rs send after_help / core-cli example 中含糖衣 flag 的文案断言 | 随 impl_plan O1 文案同步改写 |
+
+### 9.2 新增用例映射表
+
+| 用例 | 对应 BDD | 断言要点 |
+|---|---|---|
+| send 传入已撤销 `--reply-to` | S-SEND-22 | `.code(2)`；`error usage:`（未知 flag）；fix/example 引导正文直书 `@#N`；无文件写入 |
+| send 传入已撤销 `--mention` | S-SEND-23 | `.code(2)`；`error usage:`；fix/example 引导正文直书 `@name`；无文件写入 |
+| edit 传入已撤销 flag（写命令外延） | S-EDIT-10 | `.code(2)`；`error usage:`；example 为 edit 完整必填形态；无文件写入 |
+| 正文直书 `@#N` 的 implicit-mention 往返 | S-SEND-04（改写） | exit 0；`implicit-mention` 派生自正文 token（derive 冻结）；`--json` 同名 key |
+| 正文直书 `@#N`/`@name` 与读侧过滤往返 | S-SEND-20（改写） | exit 0；正文逐字含 token；read 过滤器命中（读侧保留声明防线） |
+| add advisory 触发（不存在/不可读/格式非法） | S-CONTACTS-16 | 三形态均 `.code(0)`；条目照常落盘；`advisory` 字段存在且纯 ASCII；`--json` 含 `advisory` key |
+| add advisory 不触发 | S-CONTACTS-16 And 段 | destination 合法时信封**无** `advisory` 字段（反向断言）；S-CONTACTS-02 既有断言原样通过 |
+| update advisory 触发 | S-CONTACTS-17 | `.code(0)`；`updated` 与 `advisory` 两 key 并存；行为面与 S-CONTACTS-14 逐条一致 |
+| 白名单负向清单收窄 | S-SHORT-02（更新） | send 侧 `--reply-to`/`--mention` 探针移除；read 侧两项保留；枚举口径见 bdd 现行文本 |
+| ASCII 契约延伸 | S-OUT-05 延伸 | 撤销 usage 信封与 advisory 字段/提示文案纳入逐字节 ASCII 断言 |
+
+### 9.3 黄金快照重冻预告
+
+- 本批属行为变更（flag 面撤销 + 信封字段新增），凡以下面的既有测试/黄金快照须在任务 #36 行为定稿后**一次性重冻**，重冻 diff 需在 review 中逐处点名：① 涉 send 糖衣注入逻辑的一切断言（正文首行 token 注入形态废止，正文即用户所给原值）；② implicit-mention 触发路径（flag 触发 -> 正文 token 触发）；③ contacts add/update ok 信封快照（新增 `advisory` 字段面）；④ post send/edit after_help 与 usage 信封文案快照（含糖衣 flag 的示例行删除/换向）；⑤ S-SHORT-02 负向清单快照（探针净减两项）。重冻前旧快照不得就地删除，须在提交信息中登记替换关系。
+
+### 9.4 冻结面与零改动防线
+
+- §3 输出协议保留清单中未撤销面（ok/error 信封结构、七类 category、退出码、showing/window、read 侧过滤器、ensure_suffix、别名、三档输出）继续有效；§5 ops_tests.rs 零改动防线延续：本批改动全部位于 CLI 层（糖衣注入本就发生在调用 core 之前，advisory 校验为 CLI 层写后探测），core 公开 API 与文件格式零变更；若盘点发现 core 层确有必要改动，先回报编排层裁定，不得径行。
+- 交付边界：本批不含 bump/tag/publish/CHANGELOG 发布段（spec §7 第 4/6 条）。

@@ -2,7 +2,7 @@
 
 - 日期：2026-08-09
 - 版本：v0.6（本轮不发布：不 bump 版本、不打 tag、不 publish、不写 CHANGELOG 发布段，owner 显式约束）
-- **状态：实现已随 master @ 3829fd9 三方合并生效（2026-08-15 治理刷新；v0.6 具名文法 + contacts CRUD + 六写路径锁统一在 master 在场）；发布待 owner 裁定**（历史轨迹：rework 轮修正完成 2026-08-09 -> 对抗评审闭合确认 -> 基线合并与实现 -> 验证与三维评审完成，任务 #19/#20；发布不在本轮，v0.6_feedbacks §一(3)）
+- **状态：实现已随 master @ 3829fd9 三方合并生效（2026-08-15 治理刷新；v0.6 具名文法 + contacts CRUD + 六写路径锁统一在 master 在场）；2026-08-15 owner 四项裁决 spec 增量修订已落盘（任务 #35），实施归任务 #36（impl_plan O1~O5）；发布待 owner 裁定**（历史轨迹：rework 轮修正完成 2026-08-09 -> 对抗评审闭合确认 -> 基线合并与实现 -> 验证与三维评审完成，任务 #19/#20；发布不在本轮，v0.6_feedbacks §一(3)）
 
 ---
 
@@ -28,7 +28,7 @@
 - 输出协议：ok/error 信封结构、七类 error category、退出码 0/1/2、`--json/--plain/-q` 三档、JSON key 只增不改不删、command 标识、纯 ASCII 输出契约（v0.5 spec §4/§6，本集 spec §5/§7 引用声明）；
 - usage 信封机制：try_parse、静态规范示例、`--help/-V` 穿透、argv 扫描感知 `--json`、顶层失败 command 填 `usage`（仅示例文案换 v0.6）；
 - ensure_suffix 三级解析、隐藏别名 `p/b/c/v/po`、validate `--type`、implicit-mention / showing / window 输出增补、分阶段门禁先例；
-- 遗留项裁决（U-03/U-04/U-09/U-13 延后项、U-02/U-05/R-08/F-09 拒绝项）沿用（design.md §8）。
+- 遗留项裁决（U-03/U-04/U-09/U-13 延后项、U-02/U-05/R-08/F-09 拒绝项）沿用（design.md §8）；**口径刷新（2026-08-15）**：其中 U-04/U-13 两项已经 owner 裁决闭合（U-04 同 B-01 方向消解销账、U-13 钉住结案），见 docs/dev/owner-rulings-2026-08-15.md 与台账第十三节。
 
 **取代范围（本集覆盖 v0.5 对应章节）**：
 
@@ -61,4 +61,6 @@
 - [x] 对抗评审闭合确认（任务 #13，实现流程原则.md 门槛；已于实现前闭合，2026-08-09）
 - [x] 基线合并（cli-ux-v0.5 + format-v2，编排层执行，impl_plan 步骤 (0)；随 cli-grammar-v0.6 分支三方合并入 master @ 3829fd9）
 - [x] 按 impl_plan 步骤 (1) 至 (7) 实现（含 v0.7 轮 R1~R6 增量；实现已合入 master @ 3829fd9，288 测试基线；验证与三维评审完成，任务 #19/#20，2026-08-15 按既成事实勾选）
+- [x] owner 四项裁决落盘与 spec 增量修订（2026-08-15，任务 #35：裁决记录 docs/dev/owner-rulings-2026-08-15.md；spec/bdd/tdd/impl_plan 修订；台账第十三节与 backlog 第九节联动；撤销写侧 --reply-to/--mention + contacts advisory 契约 + 读侧过滤器保留声明）
+- [ ] owner 裁决批实施（任务 #36：impl_plan「2026-08-15 owner 裁决实施批次」O1~O5；含 SKILL.md/README 示例差异同步与黄金快照重冻，tdd §9）
 - [ ] 发布（不在本轮：owner 于功能稳定后另行裁定，owner 裁定延后，v0.6_feedbacks §一(3)）
