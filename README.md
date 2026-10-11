@@ -1,289 +1,95 @@
-# paperwork
+# paperwork (Deprecated)
 
-Stateless, file-based collaboration primitives for AI agents. Identity, messaging, and knowledge briefs — all as plain Markdown files, operated by one CLI.
-
-<p>
-  <a href="https://github.com/RatmmmhSquishyRat/agent-paperwork/actions/workflows/ci.yml"><img src="https://github.com/RatmmmhSquishyRat/agent-paperwork/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://crates.io/crates/paperwork-cli"><img src="https://img.shields.io/crates/v/paperwork-cli.svg?label=paperwork-cli" alt="crates.io paperwork-cli"></a>
-  <a href="https://crates.io/crates/paperwork-core"><img src="https://img.shields.io/crates/v/paperwork-core.svg?label=paperwork-core" alt="crates.io paperwork-core"></a>
-  <a href="https://crates.io/crates/paperwork-cli"><img src="https://img.shields.io/crates/d/paperwork-cli.svg" alt="downloads"></a>
-  <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey" alt="platforms">
-  <a href="./LICENSE"><img src="https://img.shields.io/crates/l/paperwork-cli.svg" alt="license"></a>
-</p>
-
-No server. No database. No daemon. No login. No workspace. Every command takes an explicit file path and works from anywhere — the files are the source of truth.
+> [!WARNING]
+> ### ⛔ Deprecated and Retired in Favor of [agent-coexist](https://github.com/RatmmmhSquishyRat/agent-coexist)
+>
+> **This repository (`agent-paperwork`) has been retired and officially superseded by [`agent-coexist`](https://github.com/RatmmmhSquishyRat/agent-coexist).**
+>
+> All active development, maintenance, bug fixes, and feature improvements have transitioned to the new project.
+>
+> - 🔗 **Successor Repository**: [https://github.com/RatmmmhSquishyRat/agent-coexist](https://github.com/RatmmmhSquishyRat/agent-coexist)
+> - 📦 **Crates.io Crate**: [`agent-coexist`](https://crates.io/crates/agent-coexist)
+> - 🚀 **Prebuilt Binaries**: [agent-coexist Releases](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest)
+> - 📖 **Documentation**: [agent-coexist Usage Guide](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/docs/usage.md)
 
 ---
 
-## Quick start
+## Overview & Background
+
+`agent-paperwork` was an early exploration into stateless, file-based collaboration primitives for AI agents.
+
+**[`agent-coexist`](https://github.com/RatmmmhSquishyRat/agent-coexist)** is the ground-up redesign and successor to `agent-paperwork`. It inherits the core principle — enabling AI agents across heterogeneous harnesses to discover, communicate, and collaborate via shared filesystem records — while addressing fundamental architectural lessons learned from `paperwork`:
+
+- **Unified File Specification (`*.agent-besties.md`)**: Replaces fragmented per-primitive file suffixes (`*.post.md`, `*.profile.md`, `*.brief.md`, `*.contacts.md`) with a unified, standardized file format for seamless discovery and tooling.
+- **Directory Coordination & Declarations (`state`)**: Introduces explicit directory declarations (e.g. `locked`, `observing`) to prevent multi-agent edit conflicts without requiring central coordination daemons.
+- **Change Watching & Notifications**: Adds native change waiting (`agent-coexist wait`) and time-windowed notification inspection (`read-notification`) for reactive multi-agent workflows.
+- **Single-Package Architecture**: Consolidates the previously split `paperwork-core` and `paperwork-cli` into a single standalone, high-performance binary with hardened, atomic UTF-8 file operations.
+- **Built-in Guidance & Agent Skills**: Ships with built-in interactive onboarding (`agent-coexist guide`) and ready-to-use discovery skills (`.agents/skills/agent-coexist/`) so arriving agents can self-orient zero-shot.
+
+---
+
+## Migration Quick Start
+
+To switch from `paperwork` to `agent-coexist`:
+
+### 1. Installation
+
+**Prebuilt Binaries:** Download precompiled binaries for Linux (musl), macOS, or Windows from the [latest release](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest).
+
+**Via Cargo:**
+```bash
+cargo install agent-coexist --locked
+```
+
+### 2. Getting Started
+
+```bash
+# View the built-in offline interactive guide
+agent-coexist guide
+
+# Discover existing collaboration files in the current workspace
+agent-coexist list .
+
+# Post a message or review request
+agent-coexist post review --as alice -m "Refactor complete. Ready for review."
+```
+
+### 3. Transition Mapping
+
+| Legacy `paperwork` (v0.6) | Successor `agent-coexist` | Notes |
+|---|---|---|
+| `paperwork profile` | `agent-coexist profile` | Agent identity stored in `*.agent-besties.md` |
+| `paperwork post` | `agent-coexist post` | Threaded discussions with `@nick` mentions and `@#n` replies |
+| `paperwork brief` | `agent-coexist brief` | Reading lists with robust hash staleness detection |
+| `paperwork contacts` | `agent-coexist list` | Directory-tree discovery replaces manual contact files |
+| _(Not available)_ | `agent-coexist state` | Intent declarations and directory locks |
+| _(Not available)_ | `agent-coexist wait` | Cross-agent change notification waiting |
+| _(Not available)_ | `agent-coexist guide` | Built-in zero-file interactive agent guide |
+
+---
+
+## Archive Status
+
+This repository is retained as an immutable archive for historical context, citation, and reproducibility of the `paperwork-cli 0.6.0` release.
+
+- **No further updates:** No new features, bug fixes, or security patches will be issued for `paperwork-cli` or `paperwork-core`.
+- **Issues & PRs:** Closed in favor of discussions and issues on the [agent-coexist repository](https://github.com/RatmmmhSquishyRat/agent-coexist).
+
+<details>
+<summary><b>Archived Reference: Legacy paperwork (v0.6) Documentation</b></summary>
+
+### Legacy Quick Start (v0.6.0)
 
 ```bash
 cargo install paperwork-cli
 ```
 
-> **Version notice:** this document describes the v0.6 named-flag grammar and
-> the v2 file formats, released as `paperwork-cli 0.6.0`. The previously
-> published 0.5.0 carried the old positional grammar and old formats and is
-> superseded — see [Install](#install).
-
-Then, from any directory:
-
 ```bash
-$ paperwork post send standup --author alice --message "Proposing Rust for the backend."
-ok post.send #1 -> standup.post.md
-seq: 1
-path: standup.post.md
-sender: alice
+paperwork post send standup --author alice --message "Proposing Rust for the backend."
+paperwork post send standup --author bob --message "@#1 Agreed. Ship it."
 ```
 
-That's it. `standup.post.md` is created on first send — the preamble (the H1 title) is written in the same lock as message #1 — and the reply is one line:
-
-```bash
-$ paperwork post send standup --author bob --message "@#1 Agreed. Ship it."
-ok post.send #2 -> standup.post.md
-seq: 2
-path: standup.post.md
-sender: bob
-implicit-mention: alice
-```
-
----
-
-## Why
-
-AI agents that work together need three minimal things: **who they are**, **a way to talk**, and **a way to hand off knowledge**. `paperwork` provides exactly those three as filesystem primitives, so any harness can adopt them with zero infrastructure:
-
-| Primitive | Command | File | Purpose |
-|-----------|---------|------|---------|
-| Identity | `profile` | `*.profile.md` | An agent's name, model, and scope |
-| Communication | `post` | `*.post.md` | Append-only threads with reply + @mention |
-| Knowledge | `brief` | `*.brief.md` | Reading lists with staleness detection |
-| Directory | `contacts` | `*.contacts.md` | A list of agent profiles as Markdown links |
-
-Every output is a **structured envelope** built for machine parsing — the
-envelope structure (status line, category, `fix:`, `example:`) is pure ASCII;
-an agent can detect success/failure from the first line and self-correct from
-the error's `fix:` and `example:` fields without reading docs.
-
----
-
-## Install
-
-**From [crates.io](https://crates.io/crates/paperwork-cli)** — `paperwork-cli 0.6.0` is the release documented here (v0.6 named-flag grammar + v2 file formats); it becomes installable from crates.io as soon as the publication step of the release round lands, and stays the recommended channel afterwards:
-
-```bash
-cargo install paperwork-cli
-```
-
-**From release binaries** — precompiled for Linux, macOS, and Windows on the [Releases page](https://github.com/RatmmmhSquishyRat/agent-paperwork/releases).
-
-**From source:**
-
-```bash
-git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
-cd agent-paperwork
-cargo install --path repos/paperwork-cli
-```
-
-Requires Rust 1.89+.
-
----
-
-## Commands
-
-### `profile` — agent identity
-
-```bash
-paperwork profile create alice --name alice --model gpt-4o --description "Parser owner"
-paperwork profile show alice
-paperwork profile edit alice --scope-read "src/**" --scope-owns "src/parser/**"
-paperwork profile list .
-```
-
-### `post` — append-only threads
-
-```bash
-paperwork post send standup --author alice --title "Daily Standup" --message "Status update"
-paperwork post send standup --author bob --message "@#1 On it, @alice"
-paperwork post send standup --author alice --stdin < report.md  # multi-line via pipe
-paperwork post read standup --mention alice                    # filter by @mention
-paperwork post read standup --reply-to 1                       # filter by reply
-paperwork post summary standup
-paperwork post edit standup --author alice --seq 3 --message "corrected body"
-```
-
-Reply/mention references live only in the body text: write an `@#N` token (reply to seq N) and/or `@name` tokens (mentions) directly in the message; the CLI writes the body verbatim and re-derives the relations on every read. The former write-side sugar flags `--reply-to`/`--mention` were revoked on 2026-08-15 (passing them is a usage error whose `fix:` teaches the body-token form); `post read` keeps its `--mention`/`--reply-to` filters.
-
-### `brief` — knowledge with staleness detection
-
-```bash
-paperwork brief create onboarding --title "Onboarding" --owner alice
-paperwork brief add onboarding --entry src/main.rs --regex "fn main"
-paperwork brief verify onboarding                              # fresh | shifted | stale
-paperwork brief read onboarding --full
-paperwork brief read onboarding --entry-title main.rs          # details of a single entry
-paperwork brief remove onboarding --entry-title main.rs        # remove by stored basename
-```
-
-### `contacts` — registry of profiles
-
-```bash
-paperwork contacts create team --title "Team"
-paperwork contacts add team --profile ./alice.profile.md
-paperwork contacts remove team --profile ./alice.profile.md
-paperwork contacts update team --profile ./alice.profile.md --new-profile ./carol.profile.md
-paperwork contacts read team                                   # shows stored path + name (+ description)
-```
-
-The key for `contacts remove`/`update` is the profile path exactly as stored in the contacts file, not the link label. `contacts update` re-binds an entry's destination path; it is not an `edit` (this group has no `edit` verb: `edit` changes a file's own content, `update` swaps the entry's target profile). Destination problems never block a write (2026-08-15 agent-first ruling): `contacts add`/`update` succeed with exit 0 even when the destination profile is missing, unreadable, or not a valid profile file — the ok envelope then carries a single-line `advisory` field (e.g. `advisory: destination 'ghost.profile.md' does not exist`) in both the default and `--json` output.
-
-### `validate` — structural integrity check
-
-```bash
-paperwork validate standup.post.md
-paperwork validate mystery.md --type post                      # explicit parser selection
-```
-
-Parses by type suffix; for posts it additionally enforces consecutive seq numbers starting at 1 and closed code fences. Warnings (suspected malformed message headers) are reported without failing the check.
-
----
-
-## Output protocol
-
-No color, no ANSI codes. Parseable without JSON.
-
-**Encoding contract:** every byte paperwork writes — stdout and stderr, all
-modes (`default` / `--json` / `--plain`, with or without `-q`) — is valid
-UTF-8, and consumers must decode it as UTF-8. The envelope structure surface
-(status line, category, `fix:`, `example:`) is pure ASCII; `io` error
-`message` fields may embed OS-localized text (e.g. Chinese on zh-CN Windows).
-On Windows PowerShell, set `[Console]::OutputEncoding =
-[System.Text.Encoding]::UTF8` before capturing output (otherwise stderr
-captured in a default cp936 session is mis-decoded — see
-`docs/dev/io-encoding-rootcause-2026-08-15.md`). For structured consumption
-prefer `--json`: error envelopes go to stdout as single-line JSON.
-
-**Grammar (v0.6):** `paperwork [global flags] <group> <verb> <PATH> --required-flag ... [--optional-flag ...]` — PATH is the only positional argument; every required payload is a named flag (`--author` / `--message` or `--stdin` for `post send`/`post edit`, plus `--seq` for `post edit`).
-
-**Success** (stdout, exit 0):
-
-```
-ok post.send #2 -> standup.post.md
-seq: 2
-path: standup.post.md
-sender: bob
-```
-
-**Runtime failure** (stderr, exit 1) — always tells you how to fix it:
-
-```
-error not-found: Thread 'standup.post.md' not found
-fix: send a message first to create the thread
-example: paperwork post send standup --author alice --message "first message"
-```
-
-**Usage failure** (stderr, exit 2) — wrong invocation (missing/unknown arguments), with a canonical copy-paste example:
-
-```
-error usage: the following required arguments were not provided: --author <AUTHOR>
-fix: required values are named flags (--author/--message for post send/edit); see the canonical example below
-example: paperwork post send standup.post.md --author alice --message "Parser module is 80% done."
-```
-
-A body starting with `-` is passed directly via `--message`: `paperwork post send standup.post.md --author alice --message "-fix flag text"`.
-
-**Modes:**
-
-| Flag | Output |
-|------|--------|
-| _(default)_ | Structured envelope above |
-| `--json` | JSON with `"status": "ok" \| "error"` |
-| `--plain` | Raw file content |
-| `-q` | Drop the status line, keep fields |
-
----
-
-## File formats
-
-Managed files are plain Markdown named by type suffix. One shared design language: H1 is the document identity, free prose after the H1 is the description, flat attributes are lowercase `- key: value` bullet lines (omit a line instead of writing a placeholder), references to other managed files are Markdown links, and message bodies sit inside ` ```md ` fences whose length is dynamic — always one backtick longer than the longest backtick run inside, so any Markdown inside them (headings, lists, triple-backtick blocks, `---`) is safe. All structural characters are ASCII.
-
-**`standup.post.md`** — preamble (the H1 title only) followed by H2 messages `## #<seq> <sender> (<RFC3339>)`; no attribute lines — replies and mentions are body-text tokens (`@#N` = reply to message N, `@name` = mention) derived on read:
-
-`````markdown
-# Daily Standup
-
-## #1 alice (2026-08-01T10:00:05Z)
-
-```md
-Proposing Rust for the backend.
-```
-
-## #2 bob (2026-08-01T10:01:00Z)
-
-```md
-@#1 @alice Agreed. Ship it.
-```
-`````
-
-**`alice.profile.md`** — H1 name, prose description, `- model:` attribute, optional `## Scope` section of `- <permission>: <glob>` lines:
-
-```markdown
-# alice
-
-Parser owner
-
-- model: gpt-4o
-
-## Scope
-
-- read: src/**
-- owns: src/parser/**
-```
-
-**`onboarding.brief.md`** — H1 title, prose description, `- owner:` / `- created:` attributes, then entry H2 sections with `path` / `hash` / `regex` attributes and a prose note (complex regexes use a ` ```regex ` fence):
-
-```markdown
-# Onboarding
-
-Reading list for new agents
-
-- owner: alice
-- created: 2026-08-01T10:00:00Z
-
-## main.rs
-
-- path: src/main.rs
-- hash: 42b664743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540
-- regex: fn main
-
-Entry point
-```
-
-**`team.contacts.md`** — H1 title and one Markdown link bullet per profile (paths containing spaces are wrapped in angle brackets):
-
-```markdown
-# Team
-
-- [alice](alice.profile.md)
-- [bob](bob.profile.md)
-```
-
----
-
-## Development
-
-```bash
-git clone https://github.com/RatmmmhSquishyRat/agent-paperwork
-cd agent-paperwork
-
-cargo build                                     # build
-cargo test                                      # full workspace suite
-cargo clippy --all-targets -- -D warnings       # lint
-```
-
-CI runs the full test suite **and** an end-to-end smoke test on Linux, macOS, and Windows on every push.
-
-## Architecture
+### Legacy Architecture
 
 ```
 repos/
@@ -291,7 +97,9 @@ repos/
   paperwork-cli/    Binary: thin CLI (clap -> core -> envelope output)
 ```
 
-[paperwork-core](https://crates.io/crates/paperwork-core) is a standalone library for IDE plugins, agent harnesses, or other tools.
+</details>
+
+---
 
 ## License
 
